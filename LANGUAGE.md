@@ -7,8 +7,9 @@ This project is primarily written in **Go**. All code contributions should adher
 - **gofmt and linting:** Always format code with `gofmt` (or `go fmt`) before committing. The CI will reject code not properly formatted. Also run `golint` or `golangci-lint` as configured.
 - **Idiomatic Go:** Follow guidance from *Effective Go* – e.g., use camelCase for variable and function names, CapitalizedNames for exported symbols, and avoid overly long or obscure names.
 - **Error handling:** Check and handle errors from every call that can fail. Use Go’s multi-value returns for errors. Do not swallow errors; if ignoring is absolutely necessary, add a comment explaining why.
-- **Logging:** Use the project’s logging library (if any) or the standard library `log` responsibly. No excessive logging in hot code paths. Remove or lower the level of debug logs before final commit unless they are permanent.
+- **Logging:** Use the project’s logging library (if any) or the standard library `slog` responsibly. No excessive logging in hot code paths. Remove or lower the level of debug logs before final commit unless they are permanent.
 - **Comments:** For any exported function or public package API, include a clear comment (will be used by GoDoc). Keep comments up-to-date if code changes. Internally, comment complex logic or non-obvious decisions.
+- Avoid excessive argument checking in functions and methods, by moving those checks into a `Validate()` method on a struct, and using a contract that it is called one. 
 
 ## Project Structure and Conventions
 

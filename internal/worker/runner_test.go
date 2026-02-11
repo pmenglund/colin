@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +20,7 @@ type fakeClientState struct {
 	issues                   map[string]linear.Issue
 	stateUpdates             int
 	metadataUpdates          int
+	comments                 map[string][]string
 	conflictOnNextStateWrite bool
 }
 
@@ -81,6 +82,14 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 		return nil
 	})
 
+	fake.CreateIssueCommentCalls(func(_ context.Context, issueID string, body string) error {
+		if state.comments == nil {
+			state.comments = map[string][]string{}
+		}
+		state.comments[issueID] = append(state.comments[issueID], body)
+		return nil
+	})
+
 	return fake
 }
 
@@ -91,6 +100,22 @@ func cloneIssue(issue linear.Issue) linear.Issue {
 		out.Metadata[k] = v
 	}
 	return out
+}
+
+type fakeInProgressExecutor struct {
+	result    InProgressExecutionResult
+	err       error
+	callCnt   int
+	lastIssue linear.Issue
+}
+
+func (f *fakeInProgressExecutor) EvaluateAndExecute(_ context.Context, issue linear.Issue) (InProgressExecutionResult, error) {
+	f.callCnt++
+	f.lastIssue = issue
+	if f.err != nil {
+		return InProgressExecutionResult{}, f.err
+	}
+	return f.result, nil
 }
 
 func TestRunnerRunOnceIsIdempotentForTodoClaim(t *testing.T) {
@@ -114,7 +139,7 @@ func TestRunnerRunOnceIsIdempotentForTodoClaim(t *testing.T) {
 		WorkerID:  "worker-1",
 		LeaseTTL:  5 * time.Minute,
 		Clock:     func() time.Time { return now },
-		Logger:    log.New(io.Discard, "", 0),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PollEvery: time.Second,
 	}
 
@@ -153,7 +178,7 @@ func TestRunnerTodoWithoutSpecMovesToRefine(t *testing.T) {
 		WorkerID: "worker-1",
 		LeaseTTL: 5 * time.Minute,
 		Clock:    time.Now,
-		Logger:   log.New(io.Discard, "", 0),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -189,7 +214,7 @@ func TestRunnerRespectsActiveLeaseFromOtherWorker(t *testing.T) {
 		WorkerID: "worker-1",
 		LeaseTTL: 5 * time.Minute,
 		Clock:    func() time.Time { return now },
-		Logger:   log.New(io.Discard, "", 0),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -221,7 +246,7 @@ func TestRunnerHandlesConflictWithoutFailingCycle(t *testing.T) {
 		WorkerID: "worker-1",
 		LeaseTTL: 5 * time.Minute,
 		Clock:    time.Now,
-		Logger:   log.New(io.Discard, "", 0),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -229,6 +254,156 @@ func TestRunnerHandlesConflictWithoutFailingCycle(t *testing.T) {
 	}
 	if state.stateUpdates != 0 {
 		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+}
+
+func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "incomplete issue",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:   false,
+			NeedsInputSummary: "- acceptance criteria",
+			ThreadID:          "thr_1",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if got := state.issues["1"].StateName; got != workflow.StateRefine {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateRefine)
+	}
+	if executor.callCnt != 1 {
+		t.Fatalf("executor call count = %d, want 1", executor.callCnt)
+	}
+	comments := state.comments["1"]
+	if len(comments) != 1 {
+		t.Fatalf("comment count = %d, want 1", len(comments))
+	}
+	if !strings.Contains(comments[0], "Moved to **Refine**") {
+		t.Fatalf("unexpected comment body: %q", comments[0])
+	}
+}
+
+func TestRunnerInProgressWellSpecifiedMovesToHumanReviewAndComments(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if got := state.issues["1"].StateName; got != workflow.StateHumanReview {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateHumanReview)
+	}
+	comments := state.comments["1"]
+	if len(comments) != 1 {
+		t.Fatalf("comment count = %d, want 1", len(comments))
+	}
+	if !strings.Contains(comments[0], "Moved to **Human Review**") {
+		t.Fatalf("unexpected comment body: %q", comments[0])
+	}
+}
+
+func TestRunnerInProgressRetryAfterConflictDoesNotDuplicateComment(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "incomplete issue",
+				Metadata:    map[string]string{},
+			},
+		},
+		conflictOnNextStateWrite: true,
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:   false,
+			NeedsInputSummary: "- acceptance criteria",
+			ThreadID:          "thr_1",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("first run StateName = %q, want %q", got, workflow.StateInProgress)
+	}
+	if got := len(state.comments["1"]); got != 1 {
+		t.Fatalf("first run comment count = %d, want 1", got)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateRefine {
+		t.Fatalf("second run StateName = %q, want %q", got, workflow.StateRefine)
+	}
+	if got := len(state.comments["1"]); got != 1 {
+		t.Fatalf("second run comment count = %d, want 1", got)
 	}
 }
 
@@ -245,7 +420,7 @@ func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {
 		WorkerID: "worker-1",
 		LeaseTTL: 5 * time.Minute,
 		Clock:    time.Now,
-		Logger:   log.New(&logOutput, "", 0),
+		Logger:   slog.New(slog.NewTextHandler(&logOutput, nil)),
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {

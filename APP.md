@@ -4,7 +4,7 @@ This file captures application-specific context that should stay stable across t
 
 ## Purpose
 
-Colin is an automation tool that executes a deterministic workflow on top of Linear issues. In milestone 1, the tool focuses only on Linear integration and state management so issue state and issue metadata in Linear are the single source of truth.
+Colin is an automation tool that executes a deterministic workflow on top of Linear issues. Milestone 1 established Linear integration and deterministic state management. Milestone 2 adds Codex-thread execution for `In Progress` issues so specification sufficiency is evaluated before work is executed.
 
 ## System Boundaries
 
@@ -16,6 +16,7 @@ Colin is an automation tool that executes a deterministic workflow on top of Lin
 
 - `cmd/` - Cobra command wiring (`root`, `worker run`)
 - `internal/config/` - environment and runtime configuration parsing
+- `internal/codexexec/` - Codex SDK adapter for evaluating/executing `In Progress` issues
 - `internal/linear/` - Linear GraphQL client and metadata persistence helpers
 - `internal/workflow/` - deterministic state transition and lease logic
 - `internal/worker/` - polling loop and orchestration
@@ -25,6 +26,7 @@ Colin is an automation tool that executes a deterministic workflow on top of Lin
 ## Core Components
 
 - `internal/linear`: transport adapter for querying and mutating Linear issues.
+- `internal/codexexec`: side-effect adapter that starts Codex, opens threads, and returns structured execution outcomes.
 - `internal/workflow`: pure transition engine and lease semantics used for deterministic decisions.
 - `internal/worker`: execution loop that reconciles issue snapshots with the workflow engine.
 
@@ -32,6 +34,7 @@ Colin is an automation tool that executes a deterministic workflow on top of Lin
 
 - Keep all transition decisions in `internal/workflow`; this package should remain pure and testable without network calls.
 - Keep Linear API specifics in `internal/linear`; other packages must rely on the `linear.Client` interface.
+- Keep Codex SDK specifics in `internal/codexexec`; other packages should depend on `worker.InProgressExecutor`.
 - Keep orchestration and retries in `internal/worker`; do not embed state-machine logic in Cobra command files.
 - Record significant architecture tradeoffs in the active ExecPlan decision log.
 
@@ -52,6 +55,8 @@ Colin is an automation tool that executes a deterministic workflow on top of Lin
 - CLI precedence: root `--config` flag controls which file is loaded (default `colin.toml`).
 - Performance expectations: polling loop should be lightweight, deterministic, and safe to run repeatedly.
 - Compatibility constraints: workflow state names are currently hard-coded to `Todo`, `Refine`, `In Progress`, `Human Review`, `Merge`, `Done`, and `Cancelled`.
+- Codex runtime constraint: Codex app-server must be able to write session state under `CODEX_HOME` (or default `~/.codex`), and authentication must be available for turn execution.
+- When processing Linear issues, it must happen in a go routine, so that multiple issues can run concurrently, as some operations take multiple hours to complete.
 
 ## Change Checklist for Contributors
 

@@ -27,6 +27,7 @@ type Client interface {
 	GetIssue(ctx context.Context, issueID string) (Issue, error)
 	UpdateIssueState(ctx context.Context, issueID string, toState string) error
 	UpdateIssueMetadata(ctx context.Context, issueID string, metadata MetadataPatch) error
+	CreateIssueComment(ctx context.Context, issueID string, body string) error
 }
 
 // HTTPClient is a GraphQL client for the Linear API.
@@ -263,6 +264,33 @@ func (c *HTTPClient) UpdateIssueMetadata(ctx context.Context, issueID string, pa
 		return fmt.Errorf("update issue metadata: %w", ErrConflict)
 	}
 
+	return nil
+}
+
+func (c *HTTPClient) CreateIssueComment(ctx context.Context, issueID string, body string) error {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil
+	}
+
+	mutation := `mutation CreateIssueComment($issueId: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
+  }
+}`
+
+	var resp struct {
+		CommentCreate struct {
+			Success bool `json:"success"`
+		} `json:"commentCreate"`
+	}
+
+	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "body": body}, &resp); err != nil {
+		return err
+	}
+	if !resp.CommentCreate.Success {
+		return fmt.Errorf("create issue comment: %w", ErrConflict)
+	}
 	return nil
 }
 

@@ -9,6 +9,19 @@ import (
 )
 
 type FakeClient struct {
+	CreateIssueCommentStub        func(context.Context, string, string) error
+	createIssueCommentMutex       sync.RWMutex
+	createIssueCommentArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}
+	createIssueCommentReturns struct {
+		result1 error
+	}
+	createIssueCommentReturnsOnCall map[int]struct {
+		result1 error
+	}
 	GetIssueStub        func(context.Context, string) (linear.Issue, error)
 	getIssueMutex       sync.RWMutex
 	getIssueArgsForCall []struct {
@@ -65,6 +78,69 @@ type FakeClient struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *FakeClient) CreateIssueComment(arg1 context.Context, arg2 string, arg3 string) error {
+	fake.createIssueCommentMutex.Lock()
+	ret, specificReturn := fake.createIssueCommentReturnsOnCall[len(fake.createIssueCommentArgsForCall)]
+	fake.createIssueCommentArgsForCall = append(fake.createIssueCommentArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}{arg1, arg2, arg3})
+	stub := fake.CreateIssueCommentStub
+	fakeReturns := fake.createIssueCommentReturns
+	fake.recordInvocation("CreateIssueComment", []interface{}{arg1, arg2, arg3})
+	fake.createIssueCommentMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeClient) CreateIssueCommentCallCount() int {
+	fake.createIssueCommentMutex.RLock()
+	defer fake.createIssueCommentMutex.RUnlock()
+	return len(fake.createIssueCommentArgsForCall)
+}
+
+func (fake *FakeClient) CreateIssueCommentCalls(stub func(context.Context, string, string) error) {
+	fake.createIssueCommentMutex.Lock()
+	defer fake.createIssueCommentMutex.Unlock()
+	fake.CreateIssueCommentStub = stub
+}
+
+func (fake *FakeClient) CreateIssueCommentArgsForCall(i int) (context.Context, string, string) {
+	fake.createIssueCommentMutex.RLock()
+	defer fake.createIssueCommentMutex.RUnlock()
+	argsForCall := fake.createIssueCommentArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeClient) CreateIssueCommentReturns(result1 error) {
+	fake.createIssueCommentMutex.Lock()
+	defer fake.createIssueCommentMutex.Unlock()
+	fake.CreateIssueCommentStub = nil
+	fake.createIssueCommentReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeClient) CreateIssueCommentReturnsOnCall(i int, result1 error) {
+	fake.createIssueCommentMutex.Lock()
+	defer fake.createIssueCommentMutex.Unlock()
+	fake.CreateIssueCommentStub = nil
+	if fake.createIssueCommentReturnsOnCall == nil {
+		fake.createIssueCommentReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.createIssueCommentReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *FakeClient) GetIssue(arg1 context.Context, arg2 string) (linear.Issue, error) {

@@ -145,3 +145,37 @@ func TestUpdateIssueMetadataDetectsConflict(t *testing.T) {
 		t.Fatal("expected mutation not to be called after conflict detection")
 	}
 }
+
+func TestCreateIssueComment(t *testing.T) {
+	var mutationCalled bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if strings.Contains(req.Query, "mutation CreateIssueComment") {
+			mutationCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"commentCreate": map[string]any{"success": true},
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	if err := client.CreateIssueComment(context.Background(), "1", "hello"); err != nil {
+		t.Fatalf("CreateIssueComment() error = %v", err)
+	}
+	if !mutationCalled {
+		t.Fatal("expected commentCreate mutation")
+	}
+}

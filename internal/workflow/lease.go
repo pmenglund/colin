@@ -16,6 +16,8 @@ const (
 	MetaMergeReady          = "colin.merge_ready"
 	MetaSpecReady           = "colin.spec_ready"
 	MetaLastHeartbeatUTC    = "colin.last_heartbeat"
+	MetaInProgressOutcome   = "colin.in_progress_outcome"
+	MetaInProgressCommentID = "colin.in_progress_comment_id"
 )
 
 // Lease coordinates exclusive work ownership on a Linear issue.

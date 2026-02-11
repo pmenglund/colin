@@ -1,8 +1,10 @@
 package cmd
 
 import (
-	"log"
+	"log/slog"
+	"os"
 
+	"github.com/pmenglund/colin/internal/codexexec"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/worker"
@@ -36,15 +38,27 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				cfg.DryRun = dryRun
 			}
 
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+
 			client := linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+			codexLogger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo}))
+			executor := codexexec.New(codexexec.Options{
+				Cwd:    cwd,
+				Logger: codexLogger,
+			})
+
 			runner := &worker.Runner{
 				Linear:    client,
+				Executor:  executor,
 				TeamID:    cfg.LinearTeamID,
 				WorkerID:  cfg.WorkerID,
 				PollEvery: cfg.PollEvery,
 				LeaseTTL:  cfg.LeaseTTL,
 				DryRun:    cfg.DryRun,
-				Logger:    log.New(cmd.ErrOrStderr(), "", log.LstdFlags),
+				Logger:    slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo})),
 			}
 
 			if once {
