@@ -1,0 +1,10 @@
+# Colin configuration file.
+# Environment variables override file values when both are set.
+
+linear_api_token = ""
+linear_team_id = ""
+linear_base_url = "https://api.linear.app/graphql"
+worker_id = ""
+poll_every = "30s"
+lease_ttl = "5m"
+dry_run = false

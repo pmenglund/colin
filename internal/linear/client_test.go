@@ -1,0 +1,147 @@
+package linear
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestUpsertMetadata(t *testing.T) {
+	description := "Issue details"
+	patched, meta, err := upsertMetadata(description, MetadataPatch{Set: map[string]string{"a": "1", "b": "2"}})
+	if err != nil {
+		t.Fatalf("upsertMetadata() error = %v", err)
+	}
+	if !strings.Contains(patched, "colin:metadata") {
+		t.Fatalf("expected metadata block in %q", patched)
+	}
+	if meta["a"] != "1" || meta["b"] != "2" {
+		t.Fatalf("unexpected metadata map: %#v", meta)
+	}
+
+	patched, meta, err = upsertMetadata(patched, MetadataPatch{Delete: []string{"a"}})
+	if err != nil {
+		t.Fatalf("upsertMetadata() delete error = %v", err)
+	}
+	if _, ok := meta["a"]; ok {
+		t.Fatalf("expected key a to be deleted: %#v", meta)
+	}
+	if meta["b"] != "2" {
+		t.Fatalf("expected key b to stay set: %#v", meta)
+	}
+}
+
+func TestListCandidateIssuesFiltersStates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if strings.Contains(req.Query, "query ListIssues") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{
+							{"id": "1", "identifier": "COL-1", "title": "todo-unblocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
+							{"id": "2", "identifier": "COL-2", "title": "todo-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{{"type": "blocks"}}}},
+							{"id": "3", "identifier": "COL-3", "title": "todo-related", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{{"type": "related"}}}},
+							{"id": "4", "identifier": "COL-4", "title": "inprogress-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "In Progress"}, "inverseRelations": map[string]any{"nodes": []map[string]any{{"type": "blocks"}}}},
+							{"id": "5", "identifier": "COL-5", "title": "done", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Done"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
+						},
+					},
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	issues, err := client.ListCandidateIssues(context.Background(), "team")
+	if err != nil {
+		t.Fatalf("ListCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 3 {
+		t.Fatalf("expected 3 candidate issues, got %d", len(issues))
+	}
+	if issues[0].Identifier != "COL-1" {
+		t.Fatalf("unexpected first issue identifier: %q", issues[0].Identifier)
+	}
+	if issues[1].Identifier != "COL-3" {
+		t.Fatalf("unexpected second issue identifier: %q", issues[1].Identifier)
+	}
+	if issues[2].Identifier != "COL-4" {
+		t.Fatalf("unexpected third issue identifier: %q", issues[2].Identifier)
+	}
+}
+
+func TestUpdateIssueMetadataDetectsConflict(t *testing.T) {
+	var mutationCalled bool
+	getIssueCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(req.Query, "query GetIssue"):
+			getIssueCalls++
+			desc := "A"
+			if getIssueCalls == 2 {
+				desc = "B"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"id":          "1",
+						"identifier":  "COL-1",
+						"title":       "x",
+						"description": desc,
+						"updatedAt":   "2026-02-11T00:00:00Z",
+						"state":       map[string]any{"name": "Todo"},
+					},
+				},
+			})
+			return
+		case strings.Contains(req.Query, "mutation UpdateIssueDescription"):
+			mutationCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueUpdate": map[string]any{"success": true},
+				},
+			})
+			return
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	err := client.UpdateIssueMetadata(context.Background(), "1", MetadataPatch{
+		Set: map[string]string{"k": "v"},
+	})
+
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+	if mutationCalled {
+		t.Fatal("expected mutation not to be called after conflict detection")
+	}
+}

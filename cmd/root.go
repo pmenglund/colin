@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/pmenglund/colin/internal/config"
 	"github.com/spf13/cobra"
 )
 
 // RootOptions stores flags shared across all commands.
 type RootOptions struct {
-	Verbose bool
+	Verbose    bool
+	ConfigPath string
 }
 
 // NewRootCommand constructs the root colin command.
@@ -26,6 +28,8 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	rootCmd.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output")
+	rootCmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath, "Path to config file")
+	rootCmd.AddCommand(newWorkerCommand(opts))
 
 	return rootCmd
 }

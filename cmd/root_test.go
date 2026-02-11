@@ -52,4 +52,10 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	if !strings.Contains(helpOutput, "--verbose") {
 		t.Fatalf("expected help output to contain --verbose, got: %q", helpOutput)
 	}
+	if !strings.Contains(helpOutput, "--config") {
+		t.Fatalf("expected help output to contain --config, got: %q", helpOutput)
+	}
+	if !strings.Contains(helpOutput, "worker") {
+		t.Fatalf("expected help output to contain worker command, got: %q", helpOutput)
+	}
 }
