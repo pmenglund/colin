@@ -5,7 +5,7 @@ This repository uses a modular instruction system to guide AI coding agents. It 
 - **LANGUAGE.md** – Language-specific style, libraries, and testing conventions (for Go).
 - **WORKFLOW.md** – Workflow and project management rules (how to plan, track tasks, commit, and test).
 - **PLANS.md** – ExecPlan specification (how to create and use execution plans for complex tasks).
-- **APP.md** – Application-specific architecture and design info for colin.
+- **APP.md** – Application-specific architecture and design info for Colin.
 
 **Always follow all applicable instructions.** If guidelines appear to conflict, the order of precedence is defined under **Precedence Rules** below.
 
@@ -38,11 +38,11 @@ These are explicit **Do’s and Don’ts** the AI agent must follow at all times
 
 **DO:**
 - **Follow the Plan & Workflow:** Adhere strictly to the ExecPlan steps when one is in use. For smaller tasks without a plan, still break down the work logically and follow project workflow rules.
-- **Track all work in Linear:** Assume that every significant code change corresponds to a tracked issue or task. If you identify work that isn’t tracked, pause and either create a task (if allowed) or alert the user. Untracked work is not allowed.
+- **Track all work in Linear:** Assume that every significant code change corresponds to a tracked issue or task. If you identify work that isn’t tracked, create a task. Untracked work is not allowed.
 - **Write Tests for New Code:** Whenever you implement new functionality or fix a bug, write or update unit tests and integration tests as applicable. Aim for test-driven development: e.g. write failing tests first for new features or bug fixes, then write code to make them pass (especially for complex logic).
 - **Run and Pass Tests:** Run the test suite locally (`go test ./...`) after changes. Ensure all tests pass (and new tests fail before the fix and pass after). Do not consider a task complete until tests are green.
-- **Commit Frequently with References:** Make small, logical commits. Each commit message should be in the imperative mood (for example, "Add X", "Fix Y bug") and, when possible, include the tracker ID (for example, "COLIN-234: Implement feature X") to tie commits to tasks. Commit only code that compiles and passes tests.
-- **Maintain Code Quality:** Follow the style and conventions in applicable files under `languages/` (naming, formatting, idioms). Ensure code is clean, with no leftover TODOs or debug logs before raising a PR.
+- **Commit Frequently with References:** Make small, logical commits. Each commit message should be in the imperative mood (for example, "Add X", "Fix Y bug") and, include the tracker ID (for example, "COLIN-234: Implement feature X") to tie commits to tasks. Commit only code that compiles and passes tests.
+- **Maintain Code Quality:** Follow the style and conventions in applicable files under `LANGUAGE.md` (naming, formatting, idioms). Ensure code is clean, with no leftover TODOs or debug logs before raising a PR.
 - **Document and Explain:** Update docs or comments as needed when you change behavior. Also, use the Decision Log in an ExecPlan to record rationale for significant decisions or changes in approach.
 - **Ask or Plan if Unsure:** If requirements are unclear or the next step is uncertain, prefer to ask a clarifying question or propose an updated plan rather than guessing and making a large mistake. It’s acceptable to create a short plan or checklist (even for smaller tasks) if it helps clarify the approach.
 

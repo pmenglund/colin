@@ -76,3 +76,29 @@ dry_run = true
 		t.Fatalf("unexpected config load failure: %v", err)
 	}
 }
+
+func TestWorkerRunFakeBackendDoesNotRequireLinearEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "colin.toml")
+	content := `linear_backend = "fake"
+worker_id = "test-worker"
+dry_run = true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	t.Setenv("LINEAR_API_TOKEN", "")
+	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("LINEAR_BASE_URL", "http://127.0.0.1:1/graphql")
+
+	rootCmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--config", configPath, "worker", "run", "--once"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Execute() returned error: %v", err)
+	}
+}

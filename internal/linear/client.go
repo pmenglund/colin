@@ -41,6 +41,7 @@ type HTTPClient struct {
 	stateIDMap map[string]string
 }
 
+// NewHTTPClient creates a Linear GraphQL client with sane defaults.
 func NewHTTPClient(endpoint, token, teamID string, httpClient *http.Client) *HTTPClient {
 	if strings.TrimSpace(endpoint) == "" {
 		endpoint = "https://api.linear.app/graphql"

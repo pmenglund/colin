@@ -152,7 +152,11 @@ func buildPrompt(issue linear.Issue) string {
 
 First decide if this issue is specified enough to execute right now without further human input.
 If it is not specified enough, do not execute the task and explain exactly what information is missing.
-If it is specified enough, execute the task in the current workspace and summarize exactly what you changed.
+If it is specified enough, decide whether the task is a small change or a complex change.
+For a small change, implement directly.
+For a complex change, create or update an ExecPlan in the repository under plans/ (for example plans/%s.md) following PLANS.md and WORKFLOW.md, then implement according to that plan.
+Always update tests when needed and run go test ./... before finalizing.
+Summarize exactly what you changed.
 
 Return only JSON that matches the provided schema.
 
@@ -160,7 +164,7 @@ Issue identifier: %s
 Issue title: %s
 Issue description:
 %s
-`, issue.Identifier, strings.TrimSpace(issue.Title), description)
+`, issue.Identifier, issue.Identifier, strings.TrimSpace(issue.Title), description)
 }
 
 type codexClient interface {

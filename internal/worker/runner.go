@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pmenglund/colin/internal/linear"
@@ -18,19 +19,22 @@ import (
 
 // Runner executes deterministic state transitions for Linear issues.
 type Runner struct {
-	Linear    linear.Client
-	Executor  InProgressExecutor
-	TeamID    string
-	WorkerID  string
-	PollEvery time.Duration
-	LeaseTTL  time.Duration
-	DryRun    bool
-	Clock     func() time.Time
-	Logger    *slog.Logger
+	Linear         linear.Client
+	Executor       InProgressExecutor
+	Bootstrapper   TaskBootstrapper
+	TeamID         string
+	WorkerID       string
+	PollEvery      time.Duration
+	LeaseTTL       time.Duration
+	MaxConcurrency int
+	DryRun         bool
+	Clock          func() time.Time
+	Logger         *slog.Logger
 }
 
-// RunOnce processes one polling cycle.
-func (r *Runner) RunOnce(ctx context.Context) error {
+// Validate reports whether the runner has the required dependencies and
+// configuration to execute a polling cycle.
+func (r *Runner) Validate() error {
 	if r.Linear == nil {
 		return errors.New("runner linear client is required")
 	}
@@ -39,6 +43,14 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 	if r.LeaseTTL <= 0 {
 		return errors.New("runner lease ttl must be positive")
+	}
+	return nil
+}
+
+// RunOnce processes one polling cycle.
+func (r *Runner) RunOnce(ctx context.Context) error {
+	if err := r.Validate(); err != nil {
+		return err
 	}
 	if r.Clock == nil {
 		r.Clock = time.Now
@@ -82,24 +94,73 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		"count", len(issues),
 	)
 
-	conflicts := 0
-	for _, issue := range issues {
-		if err := r.processIssue(ctx, issue.ID, executionID, now); err != nil {
-			if errors.Is(err, linear.ErrConflict) {
-				conflicts++
-				r.Logger.Info("worker issue conflict", "issue", issue.ID, "action", "conflict", "detail", err)
-				continue
-			}
-			r.Logger.Error("worker cycle failed",
-				"worker", r.WorkerID,
-				"action", "cycle_error",
-				"execution_id", executionID,
-				"stage", "process_issue",
-				"issue", issue.ID,
-				"detail", err,
-			)
-			return err
+	type issueRunResult struct {
+		issueID string
+		err     error
+	}
+	maxConcurrency := r.MaxConcurrency
+	if maxConcurrency <= 0 {
+		if len(issues) == 0 {
+			maxConcurrency = 1
+		} else {
+			maxConcurrency = len(issues)
 		}
+	}
+
+	issueCtx, cancelIssues := context.WithCancel(ctx)
+	defer cancelIssues()
+
+	results := make(chan issueRunResult, len(issues))
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	for _, issue := range issues {
+		issueID := issue.ID
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			err := r.processIssue(issueCtx, issueID, executionID, now)
+			if err != nil && !errors.Is(err, linear.ErrConflict) {
+				cancelIssues()
+			}
+			results <- issueRunResult{
+				issueID: issueID,
+				err:     err,
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	conflicts := 0
+	var firstErr error
+	firstErrIssue := ""
+	for result := range results {
+		if result.err == nil {
+			continue
+		}
+		if errors.Is(result.err, linear.ErrConflict) {
+			conflicts++
+			r.Logger.Info("worker issue conflict", "issue", result.issueID, "action", "conflict", "detail", result.err)
+			continue
+		}
+		if firstErr == nil {
+			firstErr = result.err
+			firstErrIssue = result.issueID
+		}
+	}
+
+	if firstErr != nil {
+		r.Logger.Error("worker cycle failed",
+			"worker", r.WorkerID,
+			"action", "cycle_error",
+			"execution_id", executionID,
+			"stage", "process_issue",
+			"issue", firstErrIssue,
+			"detail", firstErr,
+		)
+		return firstErr
 	}
 	r.Logger.Info("worker cycle",
 		"worker", r.WorkerID,
@@ -115,6 +176,10 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 
 // Run starts a continuous polling loop until context cancellation.
 func (r *Runner) Run(ctx context.Context) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+
 	pollEvery := r.PollEvery
 	if pollEvery <= 0 {
 		pollEvery = 30 * time.Second
@@ -177,6 +242,21 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		return nil
 	}
 
+	if shouldBootstrapWorkspace(issue.StateName, decision) {
+		if r.Bootstrapper != nil {
+			workspace, err := r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
+			if err != nil {
+				return fmt.Errorf("bootstrap workspace for issue %s: %w", issue.Identifier, err)
+			}
+			r.Logger.Info("worker bootstrap complete",
+				"execution_id", executionID,
+				"issue", issue.Identifier,
+				"worktree", workspace.WorktreePath,
+				"branch", workspace.BranchName,
+			)
+		}
+	}
+
 	patch := toMetadataPatch(decision, now)
 	if patch.HasChanges() {
 		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
@@ -233,8 +313,8 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	if summary == "" {
 		summary = "Codex execution completed; no additional details were provided."
 	}
-	comment := fmt.Sprintf("Moved to **Human Review** after Codex execution.\n\nThread: `%s`\n\nSummary:\n%s", strings.TrimSpace(result.ThreadID), summary)
-	if err := r.applyInProgressOutcome(ctx, issue, workflow.StateHumanReview, comment, now, map[string]string{
+	comment := fmt.Sprintf("Moved to **Review** after Codex execution.\n\nThread: `%s`\n\nSummary:\n%s", strings.TrimSpace(result.ThreadID), summary)
+	if err := r.applyInProgressOutcome(ctx, issue, workflow.StateReview, comment, now, map[string]string{
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
@@ -245,7 +325,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		"execution_id", executionID,
 		"issue", issue.Identifier,
 		"action", "transition",
-		"to", workflow.StateHumanReview,
+		"to", workflow.StateReview,
 		"reason", "issue processed by codex",
 	)
 	return nil
@@ -344,4 +424,10 @@ func copyMetadata(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func shouldBootstrapWorkspace(fromState string, decision workflow.Decision) bool {
+	return fromState == workflow.StateTodo &&
+		decision.Action != workflow.ActionNoop &&
+		decision.ToState == workflow.StateInProgress
 }

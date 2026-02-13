@@ -12,9 +12,12 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
 	t.Setenv("LINEAR_BASE_URL", "")
+	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_HOME", "")
 	t.Setenv("COLIN_WORKER_ID", "")
 	t.Setenv("COLIN_POLL_EVERY", "")
 	t.Setenv("COLIN_LEASE_TTL", "")
+	t.Setenv("COLIN_MAX_CONCURRENCY", "")
 	t.Setenv("COLIN_DRY_RUN", "")
 
 	cfg, err := LoadFromEnv()
@@ -25,11 +28,20 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	if cfg.LinearBaseURL != defaultLinearBaseURL {
 		t.Fatalf("LinearBaseURL = %q, want %q", cfg.LinearBaseURL, defaultLinearBaseURL)
 	}
+	if cfg.LinearBackend != defaultLinearBackend {
+		t.Fatalf("LinearBackend = %q, want %q", cfg.LinearBackend, defaultLinearBackend)
+	}
+	if cfg.ColinHome != defaultColinHome() {
+		t.Fatalf("ColinHome = %q, want %q", cfg.ColinHome, defaultColinHome())
+	}
 	if cfg.PollEvery != defaultPollEvery {
 		t.Fatalf("PollEvery = %s, want %s", cfg.PollEvery, defaultPollEvery)
 	}
 	if cfg.LeaseTTL != defaultLeaseTTL {
 		t.Fatalf("LeaseTTL = %s, want %s", cfg.LeaseTTL, defaultLeaseTTL)
+	}
+	if cfg.MaxConcurrency != defaultMaxConcurrency {
+		t.Fatalf("MaxConcurrency = %d, want %d", cfg.MaxConcurrency, defaultMaxConcurrency)
 	}
 	if cfg.WorkerID == "" {
 		t.Fatal("WorkerID should not be empty")
@@ -43,9 +55,12 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
 	t.Setenv("LINEAR_BASE_URL", "https://linear.invalid/graphql")
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_HOME", "/tmp/colin-home")
 	t.Setenv("COLIN_WORKER_ID", "worker-a")
 	t.Setenv("COLIN_POLL_EVERY", "45s")
 	t.Setenv("COLIN_LEASE_TTL", "10m")
+	t.Setenv("COLIN_MAX_CONCURRENCY", "12")
 	t.Setenv("COLIN_DRY_RUN", "true")
 
 	cfg, err := LoadFromEnv()
@@ -56,6 +71,12 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	if cfg.LinearBaseURL != "https://linear.invalid/graphql" {
 		t.Fatalf("LinearBaseURL = %q", cfg.LinearBaseURL)
 	}
+	if cfg.LinearBackend != LinearBackendFake {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
+	}
+	if cfg.ColinHome != "/tmp/colin-home" {
+		t.Fatalf("ColinHome = %q", cfg.ColinHome)
+	}
 	if cfg.WorkerID != "worker-a" {
 		t.Fatalf("WorkerID = %q", cfg.WorkerID)
 	}
@@ -65,6 +86,9 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	if cfg.LeaseTTL != 10*time.Minute {
 		t.Fatalf("LeaseTTL = %s", cfg.LeaseTTL)
 	}
+	if cfg.MaxConcurrency != 12 {
+		t.Fatalf("MaxConcurrency = %d", cfg.MaxConcurrency)
+	}
 	if !cfg.DryRun {
 		t.Fatal("DryRun = false, want true")
 	}
@@ -73,9 +97,44 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 func TestLoadFromEnvRequiresTokenAndTeam(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_LINEAR_BACKEND", "")
 
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("expected error for missing required env vars")
+	}
+}
+
+func TestLoadFromEnvFakeBackendDoesNotRequireTokenAndTeam(t *testing.T) {
+	t.Setenv("LINEAR_API_TOKEN", "")
+	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.LinearBackend != LinearBackendFake {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidBackend(t *testing.T) {
+	t.Setenv("LINEAR_API_TOKEN", "token")
+	t.Setenv("LINEAR_TEAM_ID", "team")
+	t.Setenv("COLIN_LINEAR_BACKEND", "unknown")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected error for invalid COLIN_LINEAR_BACKEND")
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidMaxConcurrency(t *testing.T) {
+	t.Setenv("LINEAR_API_TOKEN", "token")
+	t.Setenv("LINEAR_TEAM_ID", "team")
+	t.Setenv("COLIN_MAX_CONCURRENCY", "0")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected error for invalid COLIN_MAX_CONCURRENCY")
 	}
 }
 
@@ -86,11 +145,14 @@ func TestLoadFromFile(t *testing.T) {
 linear_api_token = "file-token"
 linear_team_id = "file-team"
 linear_base_url = "https://file.invalid/graphql"
+linear_backend = "http"
+colin_home = "/tmp/file-colin-home"
 worker_id = "file-worker"
 poll_every = "15s"
-lease_ttl = "3m"
-dry_run = true
-`
+	lease_ttl = "3m"
+	max_concurrency = 6
+	dry_run = true
+	`
 	if err := os.WriteFile(configPath, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -99,9 +161,12 @@ dry_run = true
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
 	t.Setenv("LINEAR_BASE_URL", "")
+	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_HOME", "")
 	t.Setenv("COLIN_WORKER_ID", "")
 	t.Setenv("COLIN_POLL_EVERY", "")
 	t.Setenv("COLIN_LEASE_TTL", "")
+	t.Setenv("COLIN_MAX_CONCURRENCY", "")
 	t.Setenv("COLIN_DRY_RUN", "")
 
 	cfg, err := LoadFromPath(configPath)
@@ -118,6 +183,12 @@ dry_run = true
 	if cfg.LinearBaseURL != "https://file.invalid/graphql" {
 		t.Fatalf("LinearBaseURL = %q", cfg.LinearBaseURL)
 	}
+	if cfg.LinearBackend != defaultLinearBackend {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
+	}
+	if cfg.ColinHome != "/tmp/file-colin-home" {
+		t.Fatalf("ColinHome = %q", cfg.ColinHome)
+	}
 	if cfg.WorkerID != "file-worker" {
 		t.Fatalf("WorkerID = %q", cfg.WorkerID)
 	}
@@ -126,6 +197,9 @@ dry_run = true
 	}
 	if cfg.LeaseTTL != 3*time.Minute {
 		t.Fatalf("LeaseTTL = %s", cfg.LeaseTTL)
+	}
+	if cfg.MaxConcurrency != 6 {
+		t.Fatalf("MaxConcurrency = %d", cfg.MaxConcurrency)
 	}
 	if !cfg.DryRun {
 		t.Fatal("DryRun = false, want true")
@@ -141,6 +215,8 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 
 	t.Setenv("LINEAR_API_TOKEN", "env-token")
 	t.Setenv("LINEAR_TEAM_ID", "env-team")
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_HOME", "/tmp/env-colin-home")
 	t.Setenv("COLIN_DRY_RUN", "true")
 
 	cfg, err := LoadFromPath(configPath)
@@ -154,6 +230,12 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	if cfg.LinearTeamID != "env-team" {
 		t.Fatalf("LinearTeamID = %q", cfg.LinearTeamID)
 	}
+	if cfg.LinearBackend != LinearBackendFake {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
+	}
+	if cfg.ColinHome != "/tmp/env-colin-home" {
+		t.Fatalf("ColinHome = %q", cfg.ColinHome)
+	}
 	if !cfg.DryRun {
 		t.Fatal("DryRun = false, want true")
 	}
@@ -165,6 +247,26 @@ func TestLoadWithoutFileFallsBackToEnv(t *testing.T) {
 
 	if _, err := LoadFromPath(filepath.Join(t.TempDir(), "missing.toml")); err != nil {
 		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+}
+
+func TestLoadFromFileFakeBackendWithoutCredentials(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "colin.toml")
+	if err := os.WriteFile(configPath, []byte("linear_backend = \"fake\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	t.Setenv("LINEAR_API_TOKEN", "")
+	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_LINEAR_BACKEND", "")
+
+	cfg, err := LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if cfg.LinearBackend != LinearBackendFake {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
 	}
 }
 

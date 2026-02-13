@@ -96,7 +96,7 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 		if parseBool(snapshot.Metadata[MetaReadyForHumanReview]) {
 			return Decision{
 				Action:  ActionTransition,
-				ToState: StateHumanReview,
+				ToState: StateReview,
 				Reason:  "issue ready for human review",
 				MetadataPatch: map[string]string{
 					MetaReason:            "",

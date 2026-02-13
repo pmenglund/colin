@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -43,22 +45,24 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				return err
 			}
 
-			client := linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
-			codexLogger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-			executor := codexexec.New(codexexec.Options{
-				Cwd:    cwd,
-				Logger: codexLogger,
-			})
+			client, err := newLinearClient(cfg)
+			if err != nil {
+				return err
+			}
+			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
+			bootstrapper := newTaskBootstrapper(cfg, cwd)
 
 			runner := &worker.Runner{
-				Linear:    client,
-				Executor:  executor,
-				TeamID:    cfg.LinearTeamID,
-				WorkerID:  cfg.WorkerID,
-				PollEvery: cfg.PollEvery,
-				LeaseTTL:  cfg.LeaseTTL,
-				DryRun:    cfg.DryRun,
-				Logger:    slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo})),
+				Linear:         client,
+				Executor:       executor,
+				Bootstrapper:   bootstrapper,
+				TeamID:         cfg.LinearTeamID,
+				WorkerID:       cfg.WorkerID,
+				PollEvery:      cfg.PollEvery,
+				LeaseTTL:       cfg.LeaseTTL,
+				MaxConcurrency: cfg.MaxConcurrency,
+				DryRun:         cfg.DryRun,
+				Logger:         slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo})),
 			}
 
 			if once {
@@ -74,4 +78,40 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 
 	workerCmd.AddCommand(runCmd)
 	return workerCmd
+}
+
+func newLinearClient(cfg config.Config) (linear.Client, error) {
+	switch cfg.LinearBackend {
+	case config.LinearBackendHTTP:
+		return linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil), nil
+	case config.LinearBackendFake:
+		return linear.NewDefaultInMemoryClient(), nil
+	default:
+		return nil, fmt.Errorf("unsupported linear backend %q", cfg.LinearBackend)
+	}
+}
+
+func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.InProgressExecutor {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		// Keep fake backend fully local/offline by skipping Codex execution paths.
+		return nil
+	}
+
+	codexLogger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	return codexexec.New(codexexec.Options{
+		Cwd:    cwd,
+		Logger: codexLogger,
+	})
+}
+
+func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		// Keep fake backend fully local/offline by skipping git workspace side effects.
+		return nil
+	}
+
+	return worker.NewGitTaskBootstrapper(worker.GitTaskBootstrapperOptions{
+		RepoRoot:  cwd,
+		ColinHome: cfg.ColinHome,
+	})
 }

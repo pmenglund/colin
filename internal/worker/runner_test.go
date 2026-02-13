@@ -3,12 +3,15 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pmenglund/colin/internal/linear"
@@ -17,6 +20,7 @@ import (
 )
 
 type fakeClientState struct {
+	mu                       sync.Mutex
 	issues                   map[string]linear.Issue
 	stateUpdates             int
 	metadataUpdates          int
@@ -28,6 +32,9 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 	fake := &linearfakes.FakeClient{}
 
 	fake.ListCandidateIssuesCalls(func(_ context.Context, _ string) ([]linear.Issue, error) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
 		out := make([]linear.Issue, 0, len(state.issues))
 		for _, issue := range state.issues {
 			if issue.StateName == workflow.StateTodo || issue.StateName == workflow.StateInProgress || issue.StateName == workflow.StateMerge {
@@ -41,6 +48,9 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 	})
 
 	fake.GetIssueCalls(func(_ context.Context, issueID string) (linear.Issue, error) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
 		issue, ok := state.issues[issueID]
 		if !ok {
 			return linear.Issue{}, fmt.Errorf("issue %s not found", issueID)
@@ -49,6 +59,9 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 	})
 
 	fake.UpdateIssueStateCalls(func(_ context.Context, issueID string, toState string) error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
 		if state.conflictOnNextStateWrite {
 			state.conflictOnNextStateWrite = false
 			return linear.ErrConflict
@@ -64,6 +77,9 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 	})
 
 	fake.UpdateIssueMetadataCalls(func(_ context.Context, issueID string, patch linear.MetadataPatch) error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
 		issue, ok := state.issues[issueID]
 		if !ok {
 			return fmt.Errorf("issue %s not found", issueID)
@@ -83,6 +99,9 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 	})
 
 	fake.CreateIssueCommentCalls(func(_ context.Context, issueID string, body string) error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
 		if state.comments == nil {
 			state.comments = map[string][]string{}
 		}
@@ -116,6 +135,90 @@ func (f *fakeInProgressExecutor) EvaluateAndExecute(_ context.Context, issue lin
 		return InProgressExecutionResult{}, f.err
 	}
 	return f.result, nil
+}
+
+type blockingInProgressExecutor struct {
+	entered chan string
+	release chan struct{}
+	result  InProgressExecutionResult
+}
+
+func (b *blockingInProgressExecutor) EvaluateAndExecute(_ context.Context, issue linear.Issue) (InProgressExecutionResult, error) {
+	b.entered <- issue.ID
+	<-b.release
+	return b.result, nil
+}
+
+type fakeTaskBootstrapper struct {
+	callCnt   int
+	lastIssue string
+	result    TaskBootstrapResult
+	err       error
+}
+
+func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdentifier string) (TaskBootstrapResult, error) {
+	f.callCnt++
+	f.lastIssue = issueIdentifier
+	if f.err != nil {
+		return TaskBootstrapResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestRunnerValidate(t *testing.T) {
+	t.Parallel()
+
+	validRunner := func() Runner {
+		return Runner{
+			Linear:   newFakeLinearClient(&fakeClientState{}),
+			WorkerID: "worker-1",
+			LeaseTTL: time.Minute,
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Runner)
+		want   string
+	}{
+		{
+			name: "missing linear client",
+			mutate: func(r *Runner) {
+				r.Linear = nil
+			},
+			want: "runner linear client is required",
+		},
+		{
+			name: "missing worker id",
+			mutate: func(r *Runner) {
+				r.WorkerID = ""
+			},
+			want: "runner worker id is required",
+		},
+		{
+			name: "non-positive lease ttl",
+			mutate: func(r *Runner) {
+				r.LeaseTTL = 0
+			},
+			want: "runner lease ttl must be positive",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			r := validRunner()
+			tc.mutate(&r)
+
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("Validate() error = nil, want %q", tc.want)
+			}
+			if err.Error() != tc.want {
+				t.Fatalf("Validate() error = %q, want %q", err.Error(), tc.want)
+			}
+		})
+	}
 }
 
 func TestRunnerRunOnceIsIdempotentForTodoClaim(t *testing.T) {
@@ -156,6 +259,96 @@ func TestRunnerRunOnceIsIdempotentForTodoClaim(t *testing.T) {
 	}
 	if state.stateUpdates != 1 {
 		t.Fatalf("stateUpdates = %d, want 1", state.stateUpdates)
+	}
+}
+
+func TestRunnerRunOnceBootstrapsTodoTransition(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	bootstrapper := &fakeTaskBootstrapper{
+		result: TaskBootstrapResult{
+			WorktreePath: "/tmp/colin/worktrees/COL-1",
+			BranchName:   "colin/COL-1",
+		},
+	}
+
+	r := Runner{
+		Linear:       client,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        func() time.Time { return now },
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:    time.Second,
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if bootstrapper.callCnt != 1 {
+		t.Fatalf("bootstrapper call count = %d, want 1", bootstrapper.callCnt)
+	}
+	if bootstrapper.lastIssue != "COL-1" {
+		t.Fatalf("bootstrapper last issue = %q, want %q", bootstrapper.lastIssue, "COL-1")
+	}
+}
+
+func TestRunnerRunOnceBootstrapFailureIsActionableAndRecoverable(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	bootstrapper := &fakeTaskBootstrapper{
+		err: fmt.Errorf("create worktree %q from %q: %w", "/tmp/colin/worktrees/COL-1", "main", errors.New("fatal git error")),
+	}
+
+	r := Runner{
+		Linear:       client,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        func() time.Time { return now },
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:    time.Second,
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want bootstrap error")
+	}
+	if !strings.Contains(err.Error(), "bootstrap workspace for issue COL-1") {
+		t.Fatalf("error = %q, want bootstrap context", err.Error())
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateTodo {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateTodo)
+	}
+	if state.metadataUpdates != 0 {
+		t.Fatalf("metadataUpdates = %d, want 0", state.metadataUpdates)
+	}
+	if state.stateUpdates != 0 {
+		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
 	}
 }
 
@@ -307,7 +500,7 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 	}
 }
 
-func TestRunnerInProgressWellSpecifiedMovesToHumanReviewAndComments(t *testing.T) {
+func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	state := &fakeClientState{
 		issues: map[string]linear.Issue{
 			"1": {
@@ -342,14 +535,14 @@ func TestRunnerInProgressWellSpecifiedMovesToHumanReviewAndComments(t *testing.T
 		t.Fatalf("RunOnce() error = %v", err)
 	}
 
-	if got := state.issues["1"].StateName; got != workflow.StateHumanReview {
-		t.Fatalf("StateName = %q, want %q", got, workflow.StateHumanReview)
+	if got := state.issues["1"].StateName; got != workflow.StateReview {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateReview)
 	}
 	comments := state.comments["1"]
 	if len(comments) != 1 {
 		t.Fatalf("comment count = %d, want 1", len(comments))
 	}
-	if !strings.Contains(comments[0], "Moved to **Human Review**") {
+	if !strings.Contains(comments[0], "Moved to **Review**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
 	}
 }
@@ -405,6 +598,152 @@ func TestRunnerInProgressRetryAfterConflictDoesNotDuplicateComment(t *testing.T)
 	if got := len(state.comments["1"]); got != 1 {
 		t.Fatalf("second run comment count = %d, want 1", got)
 	}
+}
+
+func TestRunnerRunOnceProcessesIssuesConcurrently(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := &fakeClientState{
+			issues: map[string]linear.Issue{
+				"1": {
+					ID:          "1",
+					Identifier:  "COL-1",
+					StateName:   workflow.StateInProgress,
+					Description: "spec one",
+					Metadata:    map[string]string{},
+				},
+				"2": {
+					ID:          "2",
+					Identifier:  "COL-2",
+					StateName:   workflow.StateInProgress,
+					Description: "spec two",
+					Metadata:    map[string]string{},
+				},
+			},
+		}
+		client := newFakeLinearClient(state)
+		executor := &blockingInProgressExecutor{
+			entered: make(chan string, 2),
+			release: make(chan struct{}),
+			result: InProgressExecutionResult{
+				IsWellSpecified:  true,
+				ExecutionSummary: "done",
+				ThreadID:         "thr",
+			},
+		}
+
+		r := Runner{
+			Linear:   client,
+			Executor: executor,
+			TeamID:   "team-1",
+			WorkerID: "worker-1",
+			LeaseTTL: 5 * time.Minute,
+			Clock:    time.Now,
+			Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- r.RunOnce(context.Background())
+		}()
+
+		// Wait until both issue goroutines reached EvaluateAndExecute and blocked on release.
+		synctest.Wait()
+		if got := len(executor.entered); got != 2 {
+			t.Fatalf("entered count = %d, want 2 (all issues started before release)", got)
+		}
+
+		enteredIssues := map[string]struct{}{}
+		enteredIssues[<-executor.entered] = struct{}{}
+		enteredIssues[<-executor.entered] = struct{}{}
+		if _, ok := enteredIssues["1"]; !ok {
+			t.Fatalf("missing issue 1 start, got %#v", enteredIssues)
+		}
+		if _, ok := enteredIssues["2"]; !ok {
+			t.Fatalf("missing issue 2 start, got %#v", enteredIssues)
+		}
+
+		close(executor.release)
+		synctest.Wait()
+
+		if err := <-done; err != nil {
+			t.Fatalf("RunOnce() error = %v", err)
+		}
+
+		if got := state.issues["1"].StateName; got != workflow.StateReview {
+			t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateReview)
+		}
+		if got := state.issues["2"].StateName; got != workflow.StateReview {
+			t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateReview)
+		}
+	})
+}
+
+func TestRunnerRunOnceRespectsMaxConcurrency(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := &fakeClientState{
+			issues: map[string]linear.Issue{
+				"1": {
+					ID:          "1",
+					Identifier:  "COL-1",
+					StateName:   workflow.StateInProgress,
+					Description: "spec one",
+					Metadata:    map[string]string{},
+				},
+				"2": {
+					ID:          "2",
+					Identifier:  "COL-2",
+					StateName:   workflow.StateInProgress,
+					Description: "spec two",
+					Metadata:    map[string]string{},
+				},
+			},
+		}
+		client := newFakeLinearClient(state)
+		executor := &blockingInProgressExecutor{
+			entered: make(chan string, 2),
+			release: make(chan struct{}),
+			result: InProgressExecutionResult{
+				IsWellSpecified:  true,
+				ExecutionSummary: "done",
+				ThreadID:         "thr",
+			},
+		}
+
+		r := Runner{
+			Linear:         client,
+			Executor:       executor,
+			TeamID:         "team-1",
+			WorkerID:       "worker-1",
+			LeaseTTL:       5 * time.Minute,
+			MaxConcurrency: 1,
+			Clock:          time.Now,
+			Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- r.RunOnce(context.Background())
+		}()
+
+		// Only one issue can enter execution while MaxConcurrency is 1.
+		synctest.Wait()
+		if got := len(executor.entered); got != 1 {
+			t.Fatalf("entered count = %d, want 1", got)
+		}
+
+		close(executor.release)
+		synctest.Wait()
+
+		if err := <-done; err != nil {
+			t.Fatalf("RunOnce() error = %v", err)
+		}
+		if got := state.issues["1"].StateName; got != workflow.StateReview {
+			t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateReview)
+		}
+		if got := state.issues["2"].StateName; got != workflow.StateReview {
+			t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateReview)
+		}
+	})
 }
 
 func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {

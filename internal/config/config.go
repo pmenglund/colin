@@ -13,11 +13,20 @@ import (
 )
 
 const (
-	defaultLinearBaseURL = "https://api.linear.app/graphql"
-	defaultPollEvery     = 30 * time.Second
-	defaultLeaseTTL      = 5 * time.Minute
+	defaultLinearBaseURL  = "https://api.linear.app/graphql"
+	defaultLinearBackend  = LinearBackendHTTP
+	defaultPollEvery      = 30 * time.Second
+	defaultLeaseTTL       = 5 * time.Minute
+	defaultMaxConcurrency = 8
 	// DefaultConfigPath is the default config file path for CLI execution.
 	DefaultConfigPath = "colin.toml"
+)
+
+const (
+	// LinearBackendHTTP uses the Linear GraphQL API over HTTP.
+	LinearBackendHTTP = "http"
+	// LinearBackendFake uses an in-memory fake Linear client.
+	LinearBackendFake = "fake"
 )
 
 // Config is runtime configuration for the Linear worker.
@@ -25,9 +34,12 @@ type Config struct {
 	LinearAPIToken string
 	LinearTeamID   string
 	LinearBaseURL  string
+	LinearBackend  string
+	ColinHome      string
 	WorkerID       string
 	PollEvery      time.Duration
 	LeaseTTL       time.Duration
+	MaxConcurrency int
 	DryRun         bool
 }
 
@@ -35,9 +47,12 @@ type fileConfig struct {
 	LinearAPIToken string `toml:"linear_api_token"`
 	LinearTeamID   string `toml:"linear_team_id"`
 	LinearBaseURL  string `toml:"linear_base_url"`
+	LinearBackend  string `toml:"linear_backend"`
+	ColinHome      string `toml:"colin_home"`
 	WorkerID       string `toml:"worker_id"`
 	PollEvery      string `toml:"poll_every"`
 	LeaseTTL       string `toml:"lease_ttl"`
+	MaxConcurrency *int   `toml:"max_concurrency"`
 	DryRun         *bool  `toml:"dry_run"`
 }
 
@@ -52,10 +67,13 @@ func Load() (Config, error) {
 // environment variable overrides. Empty path falls back to DefaultConfigPath.
 func LoadFromPath(configPath string) (Config, error) {
 	cfg := Config{
-		LinearBaseURL: defaultLinearBaseURL,
-		WorkerID:      defaultWorkerID(),
-		PollEvery:     defaultPollEvery,
-		LeaseTTL:      defaultLeaseTTL,
+		LinearBaseURL:  defaultLinearBaseURL,
+		LinearBackend:  defaultLinearBackend,
+		ColinHome:      defaultColinHome(),
+		WorkerID:       defaultWorkerID(),
+		PollEvery:      defaultPollEvery,
+		LeaseTTL:       defaultLeaseTTL,
+		MaxConcurrency: defaultMaxConcurrency,
 	}
 
 	configPath = strings.TrimSpace(configPath)
@@ -69,8 +87,9 @@ func LoadFromPath(configPath string) (Config, error) {
 	if err := applyEnvOverrides(&cfg); err != nil {
 		return Config{}, err
 	}
+	cfg.LinearBackend = normalizeLinearBackend(cfg.LinearBackend)
 
-	if err := validate(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 
@@ -80,16 +99,20 @@ func LoadFromPath(configPath string) (Config, error) {
 // LoadFromEnv reads worker configuration only from environment variables.
 func LoadFromEnv() (Config, error) {
 	cfg := Config{
-		LinearBaseURL: defaultLinearBaseURL,
-		WorkerID:      defaultWorkerID(),
-		PollEvery:     defaultPollEvery,
-		LeaseTTL:      defaultLeaseTTL,
+		LinearBaseURL:  defaultLinearBaseURL,
+		LinearBackend:  defaultLinearBackend,
+		ColinHome:      defaultColinHome(),
+		WorkerID:       defaultWorkerID(),
+		PollEvery:      defaultPollEvery,
+		LeaseTTL:       defaultLeaseTTL,
+		MaxConcurrency: defaultMaxConcurrency,
 	}
 
 	if err := applyEnvOverrides(&cfg); err != nil {
 		return Config{}, err
 	}
-	if err := validate(cfg); err != nil {
+	cfg.LinearBackend = normalizeLinearBackend(cfg.LinearBackend)
+	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 
@@ -120,6 +143,12 @@ func applyFileConfig(cfg *Config, path string) error {
 	if strings.TrimSpace(parsed.LinearBaseURL) != "" {
 		cfg.LinearBaseURL = strings.TrimSpace(parsed.LinearBaseURL)
 	}
+	if strings.TrimSpace(parsed.LinearBackend) != "" {
+		cfg.LinearBackend = strings.TrimSpace(parsed.LinearBackend)
+	}
+	if strings.TrimSpace(parsed.ColinHome) != "" {
+		cfg.ColinHome = strings.TrimSpace(parsed.ColinHome)
+	}
 	if strings.TrimSpace(parsed.WorkerID) != "" {
 		cfg.WorkerID = strings.TrimSpace(parsed.WorkerID)
 	}
@@ -140,6 +169,9 @@ func applyFileConfig(cfg *Config, path string) error {
 	if parsed.DryRun != nil {
 		cfg.DryRun = *parsed.DryRun
 	}
+	if parsed.MaxConcurrency != nil {
+		cfg.MaxConcurrency = *parsed.MaxConcurrency
+	}
 
 	return nil
 }
@@ -153,6 +185,12 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v, ok := readString("LINEAR_BASE_URL"); ok {
 		cfg.LinearBaseURL = v
+	}
+	if v, ok := readString("COLIN_LINEAR_BACKEND"); ok {
+		cfg.LinearBackend = v
+	}
+	if v, ok := readString("COLIN_HOME"); ok {
+		cfg.ColinHome = v
 	}
 	if v, ok := readString("COLIN_WORKER_ID"); ok {
 		cfg.WorkerID = v
@@ -179,27 +217,57 @@ func applyEnvOverrides(cfg *Config) error {
 		}
 		cfg.DryRun = parsed
 	}
+	if raw, ok := readString("COLIN_MAX_CONCURRENCY"); ok {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return fmt.Errorf("parse COLIN_MAX_CONCURRENCY: %w", err)
+		}
+		cfg.MaxConcurrency = parsed
+	}
 
 	return nil
 }
 
-func validate(cfg Config) error {
-	if cfg.LinearAPIToken == "" {
-		return errors.New("LINEAR_API_TOKEN is required")
+// Validate reports whether the configuration contains all required fields and
+// valid runtime values.
+func (c Config) Validate() error {
+	switch c.LinearBackend {
+	case LinearBackendHTTP:
+		if c.LinearAPIToken == "" {
+			return errors.New("LINEAR_API_TOKEN is required")
+		}
+		if c.LinearTeamID == "" {
+			return errors.New("LINEAR_TEAM_ID is required")
+		}
+	case LinearBackendFake:
+		// Fake backend does not require real Linear credentials.
+	default:
+		return fmt.Errorf("COLIN_LINEAR_BACKEND must be one of %q or %q, got %q", LinearBackendHTTP, LinearBackendFake, c.LinearBackend)
 	}
-	if cfg.LinearTeamID == "" {
-		return errors.New("LINEAR_TEAM_ID is required")
+	if c.PollEvery <= 0 {
+		return fmt.Errorf("COLIN_POLL_EVERY must be > 0, got %s", c.PollEvery)
 	}
-	if cfg.PollEvery <= 0 {
-		return fmt.Errorf("COLIN_POLL_EVERY must be > 0, got %s", cfg.PollEvery)
+	if c.LeaseTTL <= 0 {
+		return fmt.Errorf("COLIN_LEASE_TTL must be > 0, got %s", c.LeaseTTL)
 	}
-	if cfg.LeaseTTL <= 0 {
-		return fmt.Errorf("COLIN_LEASE_TTL must be > 0, got %s", cfg.LeaseTTL)
+	if c.MaxConcurrency <= 0 {
+		return fmt.Errorf("COLIN_MAX_CONCURRENCY must be > 0, got %d", c.MaxConcurrency)
 	}
-	if cfg.WorkerID == "" {
+	if strings.TrimSpace(c.ColinHome) == "" {
+		return errors.New("COLIN_HOME must not be empty")
+	}
+	if c.WorkerID == "" {
 		return errors.New("COLIN_WORKER_ID must not be empty")
 	}
 	return nil
+}
+
+func normalizeLinearBackend(raw string) string {
+	backend := strings.ToLower(strings.TrimSpace(raw))
+	if backend == "" {
+		return defaultLinearBackend
+	}
+	return backend
 }
 
 func readString(key string) (string, bool) {
@@ -225,4 +293,12 @@ func defaultWorkerID() string {
 		host = "unknown-host"
 	}
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
+func defaultColinHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ".colin"
+	}
+	return filepath.Join(home, ".colin")
 }

@@ -61,7 +61,7 @@ func TestDecideTodoNoopWhenLeaseOwnedByOther(t *testing.T) {
 	}
 }
 
-func TestDecideInProgressToHumanReview(t *testing.T) {
+func TestDecideInProgressToReview(t *testing.T) {
 	now := time.Now().UTC()
 	d := Decide(IssueSnapshot{
 		State:       StateInProgress,
@@ -76,7 +76,7 @@ func TestDecideInProgressToHumanReview(t *testing.T) {
 		},
 	}, now)
 
-	if d.ToState != StateHumanReview {
+	if d.ToState != StateReview {
 		t.Fatalf("ToState = %q", d.ToState)
 	}
 }

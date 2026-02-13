@@ -25,6 +25,7 @@ This project is primarily written in **Go**. All code contributions should adher
 - **Test style:** Follow table-driven test patterns for readability when testing multiple scenarios. Use descriptive test case names. Keep tests deterministic; avoid external network calls or time-dependent logic in tests (use mocking or interfaces for external interactions).
 - **Running tests:** Use `go test ./...` to run all tests. Ensure tests pass locally before committing. If adding a new package, add it to CI scripts if needed so it’s tested.
 - **Benchmarking (if applicable):** If performance is a concern in a piece of code, include benchmarks (in `_test.go` files) and note any performance expectations.
+- When writing tests for asynchronous or concurrent code, always use `testing/synctest`.
 
 ## Common Patterns and Anti-Patterns
 

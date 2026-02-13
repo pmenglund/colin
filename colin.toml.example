@@ -4,7 +4,10 @@
 linear_api_token = ""
 linear_team_id = ""
 linear_base_url = "https://api.linear.app/graphql"
+linear_backend = "http"
+colin_home = "~/.colin"
 worker_id = ""
 poll_every = "30s"
 lease_ttl = "5m"
+max_concurrency = 8
 dry_run = false

@@ -1,13 +1,12 @@
 package workflow
 
 const (
-	StateTodo        = "Todo"
-	StateRefine      = "Refine"
-	StateInProgress  = "In Progress"
-	StateHumanReview = "Human Review"
-	StateMerge       = "Merge"
-	StateDone        = "Done"
-	StateCancelled   = "Cancelled"
+	StateTodo       = "Todo"
+	StateRefine     = "Refine"
+	StateInProgress = "In Progress"
+	StateReview     = "Review"
+	StateMerge      = "Merge"
+	StateDone       = "Done"
 )
 
 var allowedTransitions = map[string]map[string]struct{}{
@@ -16,10 +15,10 @@ var allowedTransitions = map[string]map[string]struct{}{
 		StateRefine:     {},
 	},
 	StateInProgress: {
-		StateHumanReview: {},
-		StateRefine:      {},
+		StateReview: {},
+		StateRefine: {},
 	},
-	StateHumanReview: {
+	StateReview: {
 		StateTodo:  {},
 		StateMerge: {},
 	},

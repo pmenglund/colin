@@ -4,13 +4,74 @@ This file captures application-specific context that should stay stable across t
 
 ## Purpose
 
-Colin is an automation tool that executes a deterministic workflow on top of Linear issues. Milestone 1 established Linear integration and deterministic state management. Milestone 2 adds Codex-thread execution for `In Progress` issues so specification sufficiency is evaluated before work is executed.
+Colin is an automation tool that executes a deterministic workflow on top of Linear issues, also referred to as **tasks**.
+
+It aims to work tasks automatically and autonomously, so a human only needs to define the task and decide whether Codex implemented it correctly.
+
+Colin can operate on multiple tasks at the same time, each using its own codex thread, which runs in a separate go routine.
+
+Linear issue dependencies determine which tasks Colin can work on. A task is considered blocked when Linear returns an inverse relation with `type = "blocks"` for that task, and blocked tasks are skipped until the blocking issue is in `Done`.
+
+When Colin starts working on a task, it will create a git worktree in `COLIN_HOME/worktrees` for it and a branch named using the Linear issue ID, e.g. `colin/COL-123`.
+
+## State
+
+Colin uses the Linear states to track the tasks.
+
+### Todo
+
+This is the initial state for a task, and Colin will automatically start to work on any task in this state, unless it is blocked by a dependency. This moves the task into the In Progress state.
+
+### In Progress
+
+This is the state used when Colin is working on a task. When it is done, Colin will either move the task to `Refine` if the task needs more specification, or to `Review` if a human needs to review the implementation.
+
+When Colin initially picks up the task, it will determine if this is a small change that can be performed without any additional planning, or if an ExecPlan should be created for it.
+
+### Refine
+
+This state means Colin needs a better specification of the task. Once provided, the human should move the task back to `Todo`.
+
+### Review
+
+This state means the work is complete, and a human should verify that the implementation matches intent. Tasks should ideally produce a screenshot or screen recording of a webpage, or terminal output of a CLI, to show before and after.
+
+If the task is done, a human moves the task to `Merge` so it can be merged into the main branch. If it needs more work, the changes are described in a Linear comment and a human moves the task back to `Todo`.
+
+### Merge
+
+This state is used as a merge queue, and when in this state Colin will pick up the tasks one at a time, and merge the change into the main branch.
+
+Only one task at a time can be merged. Once complete, the task is moved to `Done`.
+
+### Done
+
+The task has been merged into the main branch.
+
+## Starting a Task
+
+The first time a task is being worked on
+
+1. create a git worktree
+2. create a git branch
+3. create a Codex thread
+4. update the Linear issue with the worktree path, branch name, and Codex session ID
+5. add the Codex session ID as git branch metadata
+
+## Merging a Task
+
+Steps to merge a task
+
+1. merge the git branch into main branch
+2. push the main branch upstream
+3. delete the git branch
+4. delete the git worktree
 
 ## System Boundaries
 
 - Primary runtime(s): macOS (CLI process)
 - External services: Linear GraphQL API
-- Data stores: Linear issue state and metadata stored in issue descriptions
+- Data stores: Linear issue state and metadata stored in issue descriptions, plus metadata stored in git branch metadata
 
 ## Repository Layout
 
@@ -42,6 +103,7 @@ Colin is an automation tool that executes a deterministic workflow on top of Lin
 
 - Install dependencies: `go mod download`
 - Optional config template: copy `colin.toml.example` to `colin.toml` and fill values
+- Set `COLIN_HOME` (or `colin_home` in config) to control where task worktrees are created; default is `~/.colin`
 - Override config path with root flag: `go run . --config /path/to/colin.toml worker run --once`
 - Show CLI help: `go run . --help`
 - Run worker once (dry-run): `LINEAR_API_TOKEN=... LINEAR_TEAM_ID=... go run . worker run --once --dry-run`
@@ -54,9 +116,13 @@ Colin is an automation tool that executes a deterministic workflow on top of Lin
 - Configuration precedence: `colin.toml` (or `COLIN_CONFIG`) is loaded first, then environment variables override file values.
 - CLI precedence: root `--config` flag controls which file is loaded (default `colin.toml`).
 - Performance expectations: polling loop should be lightweight, deterministic, and safe to run repeatedly.
-- Compatibility constraints: workflow state names are currently hard-coded to `Todo`, `Refine`, `In Progress`, `Human Review`, `Merge`, `Done`, and `Cancelled`.
+- Compatibility constraints: workflow state names are currently hard-coded to `Todo`, `Refine`, `In Progress`, `Review`, `Merge`, and `Done`.
 - Codex runtime constraint: Codex app-server must be able to write session state under `CODEX_HOME` (or default `~/.codex`), and authentication must be available for turn execution.
-- When processing Linear issues, it must happen in a go routine, so that multiple issues can run concurrently, as some operations take multiple hours to complete.
+- When processing Linear issues, processing happens in goroutines so multiple issues can run concurrently. Concurrency is controlled by the `MaxConcurrency` configuration value.
+
+## Testing
+
+To allow fast iteration, a fake in-memory implementation of Linear is implemented in Go and can be swapped out using configuration. This implementation is thread-safe and generated using `maxbrunsfeld/counterfeiter`.
 
 ## Change Checklist for Contributors
 
