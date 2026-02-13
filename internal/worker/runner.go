@@ -242,9 +242,10 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		return nil
 	}
 
+	var workspace TaskBootstrapResult
 	if shouldBootstrapWorkspace(issue.StateName, decision) {
 		if r.Bootstrapper != nil {
-			workspace, err := r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
+			workspace, err = r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
 			if err != nil {
 				return fmt.Errorf("bootstrap workspace for issue %s: %w", issue.Identifier, err)
 			}
@@ -258,6 +259,12 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	}
 
 	patch := toMetadataPatch(decision, now)
+	if strings.TrimSpace(workspace.WorktreePath) != "" {
+		patch.Set[workflow.MetaTaskWorktreePath] = strings.TrimSpace(workspace.WorktreePath)
+	}
+	if strings.TrimSpace(workspace.BranchName) != "" {
+		patch.Set[workflow.MetaTaskBranchName] = strings.TrimSpace(workspace.BranchName)
+	}
 	if patch.HasChanges() {
 		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
 			return err
@@ -279,6 +286,10 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 }
 
 func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue, executionID string, now time.Time) error {
+	if err := r.ensureInProgressWorkspaceMetadata(ctx, &issue); err != nil {
+		return err
+	}
+
 	result, err := r.Executor.EvaluateAndExecute(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
@@ -296,7 +307,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		if err := r.applyInProgressOutcome(ctx, issue, workflow.StateRefine, comment, now, map[string]string{
 			workflow.MetaNeedsRefine: "true",
 			workflow.MetaReason:      "missing required specification for execution",
-		}, "refine"); err != nil {
+		}, "refine", result); err != nil {
 			return err
 		}
 		r.Logger.Info("worker decision",
@@ -318,7 +329,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
-	}, "human_review"); err != nil {
+	}, "review", result); err != nil {
 		return err
 	}
 	r.Logger.Info("worker decision",
@@ -339,9 +350,15 @@ func (r *Runner) applyInProgressOutcome(
 	now time.Time,
 	set map[string]string,
 	outcome string,
+	result InProgressExecutionResult,
 ) error {
 	comment = strings.TrimSpace(comment)
 	commentID := commentFingerprint(comment)
+	threadID := strings.TrimSpace(result.ThreadID)
+	sessionID := strings.TrimSpace(result.SessionID)
+	if sessionID == "" {
+		sessionID = threadID
+	}
 
 	patch := linear.MetadataPatch{
 		Set: map[string]string{
@@ -354,6 +371,12 @@ func (r *Runner) applyInProgressOutcome(
 			workflow.MetaLeaseExecutionID,
 			workflow.MetaLeaseExpiresAtUTC,
 		},
+	}
+	if threadID != "" {
+		patch.Set[workflow.MetaCodexThreadID] = threadID
+	}
+	if sessionID != "" {
+		patch.Set[workflow.MetaCodexSessionID] = sessionID
 	}
 	for k, v := range set {
 		if strings.TrimSpace(v) == "" {
@@ -389,6 +412,68 @@ func (r *Runner) applyInProgressOutcome(
 func commentFingerprint(comment string) string {
 	sum := sha256.Sum256([]byte(comment))
 	return hex.EncodeToString(sum[:8])
+}
+
+func (r *Runner) ensureInProgressWorkspaceMetadata(ctx context.Context, issue *linear.Issue) error {
+	if r.Bootstrapper == nil {
+		return nil
+	}
+	if issue == nil {
+		return errors.New("issue is required")
+	}
+
+	workspace, err := r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
+	if err != nil {
+		return fmt.Errorf("ensure task workspace for issue %s: %w", issue.Identifier, err)
+	}
+
+	expectedWorktree := strings.TrimSpace(workspace.WorktreePath)
+	expectedBranch := strings.TrimSpace(workspace.BranchName)
+	gotWorktree := strings.TrimSpace(issue.Metadata[workflow.MetaTaskWorktreePath])
+	gotBranch := strings.TrimSpace(issue.Metadata[workflow.MetaTaskBranchName])
+
+	if gotWorktree == "" && gotBranch == "" {
+		patch := linear.MetadataPatch{
+			Set: map[string]string{
+				workflow.MetaTaskWorktreePath: expectedWorktree,
+				workflow.MetaTaskBranchName:   expectedBranch,
+			},
+		}
+		if patch.HasChanges() {
+			if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+				return err
+			}
+		}
+		if issue.Metadata == nil {
+			issue.Metadata = map[string]string{}
+		}
+		issue.Metadata[workflow.MetaTaskWorktreePath] = expectedWorktree
+		issue.Metadata[workflow.MetaTaskBranchName] = expectedBranch
+		return nil
+	}
+
+	if gotWorktree == "" || gotBranch == "" {
+		return fmt.Errorf(
+			"inconsistent workspace metadata for issue %s (%s=%q, %s=%q): set both keys to expected values (%q, %q) or clear both keys and retry",
+			issue.Identifier,
+			workflow.MetaTaskWorktreePath, gotWorktree,
+			workflow.MetaTaskBranchName, gotBranch,
+			expectedWorktree, expectedBranch,
+		)
+	}
+
+	if gotWorktree != expectedWorktree || gotBranch != expectedBranch {
+		return fmt.Errorf(
+			"workspace metadata mismatch for issue %s: expected %s=%q and %s=%q, got %s=%q and %s=%q; update metadata to match local workspace or fix local workspace and retry",
+			issue.Identifier,
+			workflow.MetaTaskWorktreePath, expectedWorktree,
+			workflow.MetaTaskBranchName, expectedBranch,
+			workflow.MetaTaskWorktreePath, gotWorktree,
+			workflow.MetaTaskBranchName, gotBranch,
+		)
+	}
+
+	return nil
 }
 
 func toMetadataPatch(decision workflow.Decision, now time.Time) linear.MetadataPatch {

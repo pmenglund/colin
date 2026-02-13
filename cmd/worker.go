@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/pmenglund/colin/internal/codexexec"
+	codexexec "github.com/pmenglund/colin/internal/codexexec"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/worker"

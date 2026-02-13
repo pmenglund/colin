@@ -498,6 +498,12 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 	if !strings.Contains(comments[0], "Moved to **Refine**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
 	}
+	if got := state.issues["1"].Metadata[workflow.MetaCodexThreadID]; got != "thr_1" {
+		t.Fatalf("MetaCodexThreadID = %q, want %q", got, "thr_1")
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaCodexSessionID]; got != "thr_1" {
+		t.Fatalf("MetaCodexSessionID = %q, want %q", got, "thr_1")
+	}
 }
 
 func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
@@ -544,6 +550,171 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	}
 	if !strings.Contains(comments[0], "Moved to **Review**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaCodexThreadID]; got != "thr_2" {
+		t.Fatalf("MetaCodexThreadID = %q, want %q", got, "thr_2")
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaCodexSessionID]; got != "thr_2" {
+		t.Fatalf("MetaCodexSessionID = %q, want %q", got, "thr_2")
+	}
+}
+
+func TestRunnerInProgressInitializesMissingWorkspaceMetadata(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented",
+			ThreadID:         "thr_2",
+		},
+	}
+	bootstrapper := &fakeTaskBootstrapper{
+		result: TaskBootstrapResult{
+			WorktreePath: "/tmp/colin/worktrees/COL-1",
+			BranchName:   "colin/COL-1",
+		},
+	}
+
+	r := Runner{
+		Linear:       client,
+		Executor:     executor,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        time.Now,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	issue := state.issues["1"]
+	if got := issue.Metadata[workflow.MetaTaskWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("MetaTaskWorktreePath = %q, want %q", got, "/tmp/colin/worktrees/COL-1")
+	}
+	if got := issue.Metadata[workflow.MetaTaskBranchName]; got != "colin/COL-1" {
+		t.Fatalf("MetaTaskBranchName = %q, want %q", got, "colin/COL-1")
+	}
+	if executor.callCnt != 1 {
+		t.Fatalf("executor call count = %d, want 1", executor.callCnt)
+	}
+}
+
+func TestRunnerInProgressPartialWorkspaceMetadataReturnsActionableError(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaTaskWorktreePath: "/tmp/colin/worktrees/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented",
+			ThreadID:         "thr_2",
+		},
+	}
+	bootstrapper := &fakeTaskBootstrapper{
+		result: TaskBootstrapResult{
+			WorktreePath: "/tmp/colin/worktrees/COL-1",
+			BranchName:   "colin/COL-1",
+		},
+	}
+
+	r := Runner{
+		Linear:       client,
+		Executor:     executor,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        time.Now,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want actionable metadata error")
+	}
+	if !strings.Contains(err.Error(), "inconsistent workspace metadata") {
+		t.Fatalf("error = %q, want inconsistent metadata context", err.Error())
+	}
+	if executor.callCnt != 0 {
+		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
+	}
+}
+
+func TestRunnerInProgressMismatchedWorkspaceMetadataReturnsActionableError(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaTaskWorktreePath: "/unexpected/worktree",
+					workflow.MetaTaskBranchName:   "colin/OTHER",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented",
+			ThreadID:         "thr_2",
+		},
+	}
+	bootstrapper := &fakeTaskBootstrapper{
+		result: TaskBootstrapResult{
+			WorktreePath: "/tmp/colin/worktrees/COL-1",
+			BranchName:   "colin/COL-1",
+		},
+	}
+
+	r := Runner{
+		Linear:       client,
+		Executor:     executor,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        time.Now,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want workspace mismatch error")
+	}
+	if !strings.Contains(err.Error(), "workspace metadata mismatch") {
+		t.Fatalf("error = %q, want mismatch context", err.Error())
+	}
+	if executor.callCnt != 0 {
+		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
 	}
 }
 
