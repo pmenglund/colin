@@ -22,6 +22,7 @@ type Runner struct {
 	Linear         linear.Client
 	Executor       InProgressExecutor
 	Bootstrapper   TaskBootstrapper
+	BranchMetadata BranchMetadataStore
 	TeamID         string
 	WorkerID       string
 	PollEvery      time.Duration
@@ -242,9 +243,12 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		return nil
 	}
 
+	patch := toMetadataPatch(decision, now)
+
 	if shouldBootstrapWorkspace(issue.StateName, decision) {
+		var workspace TaskBootstrapResult
 		if r.Bootstrapper != nil {
-			workspace, err := r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
+			workspace, err = r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
 			if err != nil {
 				return fmt.Errorf("bootstrap workspace for issue %s: %w", issue.Identifier, err)
 			}
@@ -255,9 +259,34 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 				"branch", workspace.BranchName,
 			)
 		}
-	}
 
-	patch := toMetadataPatch(decision, now)
+		if strings.TrimSpace(workspace.WorktreePath) != "" {
+			patch.Set[workflow.MetaWorktreePath] = strings.TrimSpace(workspace.WorktreePath)
+		}
+		if strings.TrimSpace(workspace.BranchName) != "" {
+			patch.Set[workflow.MetaBranchName] = strings.TrimSpace(workspace.BranchName)
+		}
+
+		sessionID := firstNonEmpty(
+			issue.Metadata[workflow.MetaCodexSessionID],
+			issue.Metadata[workflow.MetaCodexThreadID],
+		)
+		if strings.TrimSpace(sessionID) == "" && r.BranchMetadata != nil && strings.TrimSpace(workspace.BranchName) != "" {
+			sessionID, err = r.BranchMetadata.GetBranchSessionID(ctx, workspace.BranchName)
+			if err != nil {
+				return fmt.Errorf("read git branch metadata for issue %s: %w", issue.Identifier, err)
+			}
+		}
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID != "" {
+			patch.Set[workflow.MetaCodexSessionID] = sessionID
+			if r.BranchMetadata != nil && strings.TrimSpace(workspace.BranchName) != "" {
+				if err := r.BranchMetadata.SetBranchSessionID(ctx, workspace.BranchName, sessionID); err != nil {
+					return fmt.Errorf("persist git branch metadata for issue %s: %w", issue.Identifier, err)
+				}
+			}
+		}
+	}
 	if patch.HasChanges() {
 		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
 			return err
@@ -283,6 +312,14 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
 	}
+	threadID := strings.TrimSpace(result.ThreadID)
+	sessionID := firstNonEmpty(result.SessionID, threadID)
+	branchName := strings.TrimSpace(issue.Metadata[workflow.MetaBranchName])
+	if r.BranchMetadata != nil && branchName != "" && sessionID != "" {
+		if err := r.BranchMetadata.SetBranchSessionID(ctx, branchName, sessionID); err != nil {
+			return fmt.Errorf("persist git branch metadata for issue %s: %w", issue.Identifier, err)
+		}
+	}
 
 	if !result.IsWellSpecified {
 		needsInput := strings.TrimSpace(result.NeedsInputSummary)
@@ -294,8 +331,10 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 			needsInput,
 		)
 		if err := r.applyInProgressOutcome(ctx, issue, workflow.StateRefine, comment, now, map[string]string{
-			workflow.MetaNeedsRefine: "true",
-			workflow.MetaReason:      "missing required specification for execution",
+			workflow.MetaNeedsRefine:    "true",
+			workflow.MetaReason:         "missing required specification for execution",
+			workflow.MetaCodexThreadID:  threadID,
+			workflow.MetaCodexSessionID: sessionID,
 		}, "refine"); err != nil {
 			return err
 		}
@@ -318,6 +357,8 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
+		workflow.MetaCodexThreadID:       threadID,
+		workflow.MetaCodexSessionID:      sessionID,
 	}, "human_review"); err != nil {
 		return err
 	}
@@ -424,6 +465,15 @@ func copyMetadata(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func shouldBootstrapWorkspace(fromState string, decision workflow.Decision) bool {

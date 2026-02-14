@@ -111,6 +111,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		NeedsInputSummary: strings.TrimSpace(payload.NeedsInputSummary),
 		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
 		ThreadID:          strings.TrimSpace(thread.ID()),
+		SessionID:         strings.TrimSpace(thread.ID()),
 	}, nil
 }
 

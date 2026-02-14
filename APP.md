@@ -58,6 +58,16 @@ The first time a task is being worked on
 4. update the Linear issue with the worktree path, branch name, and Codex session ID
 5. add the Codex session ID as git branch metadata
 
+### Canonical Metadata Keys
+
+Colin stores startup execution metadata using these canonical keys:
+
+- Linear metadata key `colin.worktree_path`: absolute path to the task worktree
+- Linear metadata key `colin.branch_name`: git branch used for the task
+- Linear metadata key `colin.codex_thread_id`: Codex thread identifier for the task execution
+- Linear metadata key `colin.codex_session_id`: Codex session identifier used to resume execution context
+- Git branch metadata key `branch.<branch>.colinSessionId`: local git config entry storing `colin.codex_session_id` per branch
+
 ## Merging a Task
 
 Steps to merge a task

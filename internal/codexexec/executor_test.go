@@ -83,6 +83,9 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 	if result.ThreadID != "thr_1" {
 		t.Fatalf("ThreadID = %q", result.ThreadID)
 	}
+	if result.SessionID != "thr_1" {
+		t.Fatalf("SessionID = %q", result.SessionID)
+	}
 	if !client.closed {
 		t.Fatal("expected client.Close() to be called")
 	}
@@ -118,6 +121,9 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	}
 	if result.ExecutionSummary != "Implemented tests" {
 		t.Fatalf("ExecutionSummary = %q", result.ExecutionSummary)
+	}
+	if result.SessionID != "thr_2" {
+		t.Fatalf("SessionID = %q", result.SessionID)
 	}
 }
 

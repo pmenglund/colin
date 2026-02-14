@@ -51,11 +51,13 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 			}
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
+			branchMetadata := newBranchMetadataStore(cfg, cwd)
 
 			runner := &worker.Runner{
 				Linear:         client,
 				Executor:       executor,
 				Bootstrapper:   bootstrapper,
+				BranchMetadata: branchMetadata,
 				TeamID:         cfg.LinearTeamID,
 				WorkerID:       cfg.WorkerID,
 				PollEvery:      cfg.PollEvery,
@@ -113,5 +115,16 @@ func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper 
 	return worker.NewGitTaskBootstrapper(worker.GitTaskBootstrapperOptions{
 		RepoRoot:  cwd,
 		ColinHome: cfg.ColinHome,
+	})
+}
+
+func newBranchMetadataStore(cfg config.Config, cwd string) worker.BranchMetadataStore {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		// Keep fake backend fully local/offline by skipping git side effects.
+		return nil
+	}
+
+	return worker.NewGitBranchMetadataStore(worker.GitBranchMetadataStoreOptions{
+		RepoRoot: cwd,
 	})
 }
