@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/linear"
-	"github.com/pmenglund/colin/internal/linear/linearfakes"
+	"github.com/pmenglund/colin/internal/linear/fakes"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -29,8 +29,8 @@ type fakeClientState struct {
 	conflictOnNextMetaWrite  bool
 }
 
-func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
-	fake := &linearfakes.FakeClient{}
+func newFakeLinearClient(state *fakeClientState) *fakes.FakeClient {
+	fake := &fakes.FakeClient{}
 
 	fake.ListCandidateIssuesCalls(func(_ context.Context, _ string) ([]linear.Issue, error) {
 		state.mu.Lock()
@@ -156,10 +156,15 @@ func (b *blockingInProgressExecutor) EvaluateAndExecute(_ context.Context, issue
 }
 
 type fakeTaskBootstrapper struct {
-	callCnt   int
-	lastIssue string
-	result    TaskBootstrapResult
-	err       error
+	callCnt          int
+	lastIssue        string
+	result           TaskBootstrapResult
+	err              error
+	recordCallCnt    int
+	recordWorktree   string
+	recordBranch     string
+	recordSessionID  string
+	recordSessionErr error
 }
 
 func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdentifier string) (TaskBootstrapResult, error) {
@@ -169,6 +174,17 @@ func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdent
 		return TaskBootstrapResult{}, f.err
 	}
 	return f.result, nil
+}
+
+func (f *fakeTaskBootstrapper) RecordBranchSession(_ context.Context, worktreePath string, branchName string, sessionID string) error {
+	f.recordCallCnt++
+	f.recordWorktree = worktreePath
+	f.recordBranch = branchName
+	f.recordSessionID = sessionID
+	if f.recordSessionErr != nil {
+		return f.recordSessionErr
+	}
+	return nil
 }
 
 func TestRunnerValidate(t *testing.T) {
@@ -691,11 +707,15 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 				Identifier:  "COL-1",
 				StateName:   workflow.StateInProgress,
 				Description: "complete issue",
-				Metadata:    map[string]string{},
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
 			},
 		},
 	}
 	client := newFakeLinearClient(state)
+	bootstrapper := &fakeTaskBootstrapper{}
 	executor := &fakeInProgressExecutor{
 		result: InProgressExecutionResult{
 			IsWellSpecified:  true,
@@ -705,13 +725,14 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	}
 
 	r := Runner{
-		Linear:   client,
-		Executor: executor,
-		TeamID:   "team-1",
-		WorkerID: "worker-1",
-		LeaseTTL: 5 * time.Minute,
-		Clock:    time.Now,
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Linear:       client,
+		Executor:     executor,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        time.Now,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -730,6 +751,18 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	}
 	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_2" {
 		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_2")
+	}
+	if bootstrapper.recordCallCnt != 1 {
+		t.Fatalf("recordCallCnt = %d, want 1", bootstrapper.recordCallCnt)
+	}
+	if bootstrapper.recordWorktree != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("recordWorktree = %q, want %q", bootstrapper.recordWorktree, "/tmp/colin/worktrees/COL-1")
+	}
+	if bootstrapper.recordBranch != "colin/COL-1" {
+		t.Fatalf("recordBranch = %q, want %q", bootstrapper.recordBranch, "colin/COL-1")
+	}
+	if bootstrapper.recordSessionID != "thr_2" {
+		t.Fatalf("recordSessionID = %q, want %q", bootstrapper.recordSessionID, "thr_2")
 	}
 }
 

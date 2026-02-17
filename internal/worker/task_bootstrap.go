@@ -28,6 +28,11 @@ type TaskBootstrapper interface {
 	EnsureTaskWorkspace(ctx context.Context, issueIdentifier string) (TaskBootstrapResult, error)
 }
 
+// TaskSessionMetadataWriter persists codex session metadata for issue branches.
+type TaskSessionMetadataWriter interface {
+	RecordBranchSession(ctx context.Context, worktreePath string, branchName string, sessionID string) error
+}
+
 // GitTaskBootstrapperOptions configures a git-backed TaskBootstrapper.
 type GitTaskBootstrapperOptions struct {
 	RepoRoot   string
@@ -100,6 +105,31 @@ func (b *GitTaskBootstrapper) EnsureTaskWorkspace(ctx context.Context, issueIden
 	}
 
 	return result, nil
+}
+
+// RecordBranchSession stores codex session metadata on the issue branch.
+func (b *GitTaskBootstrapper) RecordBranchSession(ctx context.Context, worktreePath string, branchName string, sessionID string) error {
+	if b == nil {
+		return errors.New("git task bootstrapper is nil")
+	}
+	normalizedWorktreePath := filepath.Clean(strings.TrimSpace(worktreePath))
+	normalizedBranch := strings.TrimSpace(branchName)
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedWorktreePath == "." || normalizedWorktreePath == "" {
+		return errors.New("worktree path is required")
+	}
+	if normalizedBranch == "" {
+		return errors.New("branch name is required")
+	}
+	if normalizedSessionID == "" {
+		return errors.New("session id is required")
+	}
+
+	configKey := fmt.Sprintf("branch.%s.colinSessionID", normalizedBranch)
+	if err := b.gitRun(ctx, "-C", normalizedWorktreePath, "config", configKey, normalizedSessionID); err != nil {
+		return fmt.Errorf("record codex session metadata for branch %q in %q: %w", normalizedBranch, normalizedWorktreePath, err)
+	}
+	return nil
 }
 
 func (b *GitTaskBootstrapper) ensureBaseBranchExists(ctx context.Context) error {

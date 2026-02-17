@@ -57,12 +57,13 @@ func (c *InMemoryClient) ListCandidateIssues(ctx context.Context, _ string) ([]I
 
 	out := make([]Issue, 0, len(c.issues))
 	for _, issue := range c.issues {
-		if isCandidateState(issue.StateName) {
-			if issue.StateName == "Todo" && issueHasBlockingDependency(issue, c.issues) {
-				continue
-			}
-			out = append(out, cloneInMemoryIssue(issue))
+		if !isCandidateState(issue.StateName) {
+			continue
 		}
+		if issueHasBlockingDependency(issue, c.issues) {
+			continue
+		}
+		out = append(out, cloneInMemoryIssue(issue))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Identifier < out[j].Identifier
