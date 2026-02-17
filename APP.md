@@ -40,9 +40,9 @@ If the task is done, a human moves the task to `Merge` so it can be merged into 
 
 ### Merge
 
-This state is used as a merge queue, and when in this state Colin will pick up the tasks one at a time, and merge the change into the main branch.
+This state is used as a merge queue. In the current implementation, Colin transitions issues from `Merge` to `Done` when issue metadata contains `colin.merge_ready = "true"`.
 
-Only one task at a time can be merged. Once complete, the task is moved to `Done`.
+To preserve one-at-a-time merge queue semantics operationally, only set `colin.merge_ready` for one issue at a time.
 
 ### Done
 
@@ -62,10 +62,11 @@ The first time a task is being worked on
 
 Steps to merge a task
 
-1. merge the git branch into main branch
-2. push the main branch upstream
-3. delete the git branch
-4. delete the git worktree
+1. ensure the change has passed human review and is ready to merge
+2. merge the git branch into main branch
+3. push the main branch upstream
+4. set issue metadata `colin.merge_ready = "true"` so Colin can transition `Merge -> Done`
+5. delete the git branch and git worktree once merge is confirmed
 
 ## System Boundaries
 
@@ -81,7 +82,7 @@ Steps to merge a task
 - `internal/linear/` - Linear GraphQL client and metadata persistence helpers
 - `internal/workflow/` - deterministic state transition and lease logic
 - `internal/worker/` - polling loop and orchestration
-- `docs/` - operator runbooks and milestone docs
+- `docs/` - operator runbooks (`operator-runbook.md`, `troubleshooting.md`) and supporting notes
 - `plans/` - living ExecPlans for tracked milestones
 
 ## Core Components
@@ -106,15 +107,18 @@ Steps to merge a task
 - Set `COLIN_HOME` (or `colin_home` in config) to control where task worktrees are created; default is `~/.colin`
 - Override config path with root flag: `go run . --config /path/to/colin.toml worker run --once`
 - Show CLI help: `go run . --help`
-- Run worker once (dry-run): `LINEAR_API_TOKEN=... LINEAR_TEAM_ID=... go run . worker run --once --dry-run`
+- Run worker once (dry-run): `go run . --config ./colin.toml worker run --once --dry-run`
+- Run worker once with fake backend (offline): set `linear_backend = "fake"` and run `go run . --config ./colin.toml worker run --once`
 - Run tests locally: `go test ./...`
 - Lint/format checks: `go vet ./...` and `gofmt -w .`
+- Operator docs: `docs/operator-runbook.md` and `docs/troubleshooting.md`
 
 ## Operational Constraints
 
 - Security and privacy requirements: Linear API token must be provided via `colin.toml` or environment variables and must not be logged.
 - Configuration precedence: `colin.toml` (or `COLIN_CONFIG`) is loaded first, then environment variables override file values.
 - CLI precedence: root `--config` flag controls which file is loaded (default `colin.toml`).
+- Backend constraint: `COLIN_LINEAR_BACKEND`/`linear_backend` must be either `http` or `fake`.
 - Performance expectations: polling loop should be lightweight, deterministic, and safe to run repeatedly.
 - Compatibility constraints: workflow state names are currently hard-coded to `Todo`, `Refine`, `In Progress`, `Review`, `Merge`, and `Done`.
 - Codex runtime constraint: Codex app-server must be able to write session state under `CODEX_HOME` (or default `~/.codex`), and authentication must be available for turn execution.
