@@ -50,11 +50,13 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				return err
 			}
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
+			mergeExecutor := newMergeExecutor(cfg, cwd)
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
 
 			runner := &worker.Runner{
 				Linear:         client,
 				Executor:       executor,
+				MergeExecutor:  mergeExecutor,
 				Bootstrapper:   bootstrapper,
 				TeamID:         cfg.LinearTeamID,
 				WorkerID:       cfg.WorkerID,
@@ -113,5 +115,16 @@ func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper 
 	return worker.NewGitTaskBootstrapper(worker.GitTaskBootstrapperOptions{
 		RepoRoot:  cwd,
 		ColinHome: cfg.ColinHome,
+	})
+}
+
+func newMergeExecutor(cfg config.Config, cwd string) worker.MergeExecutor {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		// Keep fake backend fully local/offline by skipping git merge side effects.
+		return nil
+	}
+
+	return worker.NewGitMergeExecutor(worker.GitMergeExecutorOptions{
+		RepoRoot: cwd,
 	})
 }

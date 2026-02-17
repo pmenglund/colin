@@ -165,6 +165,24 @@ func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdent
 	return f.result, nil
 }
 
+type fakeMergeExecutor struct {
+	callCnt   int
+	lastIssue linear.Issue
+	errs      []error
+}
+
+func (f *fakeMergeExecutor) ExecuteMerge(_ context.Context, issue linear.Issue) error {
+	f.callCnt++
+	f.lastIssue = issue
+	if len(f.errs) == 0 {
+		return nil
+	}
+
+	err := f.errs[0]
+	f.errs = f.errs[1:]
+	return err
+}
+
 func TestRunnerValidate(t *testing.T) {
 	t.Parallel()
 
@@ -447,6 +465,139 @@ func TestRunnerHandlesConflictWithoutFailingCycle(t *testing.T) {
 	}
 	if state.stateUpdates != 0 {
 		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+}
+
+func TestRunnerMergeSuccessMovesIssueToDone(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge",
+				Metadata: map[string]string{
+					workflow.MetaMergeReady: "true",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if mergeExecutor.callCnt != 1 {
+		t.Fatalf("merge executor call count = %d, want 1", mergeExecutor.callCnt)
+	}
+	if mergeExecutor.lastIssue.ID != "1" {
+		t.Fatalf("merge executor issue id = %q, want %q", mergeExecutor.lastIssue.ID, "1")
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateDone)
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaMergeReady]; got != "false" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaMergeReady, got, "false")
+	}
+}
+
+func TestRunnerMergeFailureLeavesIssueInMerge(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{
+		errs: []error{errors.New("push failed")},
+	}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         time.Now,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want merge execution error")
+	}
+	if !strings.Contains(err.Error(), "execute merge for issue COL-1") {
+		t.Fatalf("error = %q, want merge context", err.Error())
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateMerge {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateMerge)
+	}
+	if state.stateUpdates != 0 {
+		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+}
+
+func TestRunnerMergeRetryAfterFailureIsRecoverable(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{
+		errs: []error{errors.New("push failed")},
+	}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         time.Now,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err == nil {
+		t.Fatal("first RunOnce() error = nil, want merge error")
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateMerge {
+		t.Fatalf("first run state = %q, want %q", got, workflow.StateMerge)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("second run state = %q, want %q", got, workflow.StateDone)
+	}
+	if mergeExecutor.callCnt != 2 {
+		t.Fatalf("merge executor call count = %d, want 2", mergeExecutor.callCnt)
 	}
 }
 

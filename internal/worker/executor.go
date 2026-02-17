@@ -18,3 +18,8 @@ type InProgressExecutionResult struct {
 type InProgressExecutor interface {
 	EvaluateAndExecute(ctx context.Context, issue linear.Issue) (InProgressExecutionResult, error)
 }
+
+// MergeExecutor performs merge queue execution for issues in the Merge state.
+type MergeExecutor interface {
+	ExecuteMerge(ctx context.Context, issue linear.Issue) error
+}

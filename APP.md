@@ -44,6 +44,8 @@ This state is used as a merge queue, and when in this state Colin will pick up t
 
 Only one task at a time can be merged. Once complete, the task is moved to `Done`.
 
+Transition to `Done` now happens only after merge execution succeeds end-to-end (merge branch, push main, delete branch, delete worktree). If any step fails, the issue stays in `Merge` and is retried on the next worker cycle.
+
 ### Done
 
 The task has been merged into the main branch.
@@ -66,6 +68,8 @@ Steps to merge a task
 2. push the main branch upstream
 3. delete the git branch
 4. delete the git worktree
+
+Merge coordinates are read from issue metadata keys `colin.branch_name` and `colin.worktree_path` when available. If branch metadata is missing, Colin falls back to `colin/<issue-identifier>`.
 
 ## System Boundaries
 
