@@ -3,6 +3,7 @@ package codexexec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -131,5 +132,91 @@ func TestExecutorEvaluateAndExecuteStartThreadError(t *testing.T) {
 	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{Identifier: "COLIN-1"})
 	if err == nil || !strings.Contains(err.Error(), "start thread") {
 		t.Fatalf("error = %v, want start thread failure", err)
+	}
+}
+
+func TestExecutorEvaluateAndExecuteUsesPromptTemplateFromMarkdown(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_3",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented"}`},
+	}
+
+	executor := &Executor{
+		cwd:            "/workspace",
+		model:          "gpt-5",
+		workPromptPath: "overrides/work.md",
+		newClient: func(context.Context) (codexClient, error) {
+			return &fakeClient{thread: thread}, nil
+		},
+		readFile: func(path string) ([]byte, error) {
+			if path != "/workspace/overrides/work.md" {
+				return nil, fmt.Errorf("unexpected prompt path %q", path)
+			}
+			return []byte("Issue {{ LINEAR_ID }}\nTitle {{ LINEAR_TITLE }}\nDesc {{ LINEAR_DESCRIPTION }}"), nil
+		},
+	}
+
+	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
+		Identifier:  "COLIN-77",
+		Title:       "Prompt path test",
+		Description: "<!-- colin:metadata {\"k\":\"v\"} -->\nActual description",
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
+	}
+
+	if len(thread.lastInputs) != 1 {
+		t.Fatalf("expected one input, got %d", len(thread.lastInputs))
+	}
+	prompt := thread.lastInputs[0].Text
+	if !strings.Contains(prompt, "Issue COLIN-77") {
+		t.Fatalf("prompt missing identifier substitution: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Title Prompt path test") {
+		t.Fatalf("prompt missing title substitution: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Desc Actual description") {
+		t.Fatalf("prompt missing description substitution: %q", prompt)
+	}
+	if strings.Contains(prompt, "colin:metadata") {
+		t.Fatalf("prompt should strip metadata block, got %q", prompt)
+	}
+}
+
+func TestLoadPromptTemplateUsesEmbeddedTemplateWhenNoOverride(t *testing.T) {
+	executor := &Executor{
+		readFile: func(string) ([]byte, error) {
+			t.Fatal("readFile should not be called when no override is configured")
+			return nil, nil
+		},
+	}
+
+	template, err := executor.loadPromptTemplate()
+	if err != nil {
+		t.Fatalf("loadPromptTemplate() error = %v", err)
+	}
+	if template == "" {
+		t.Fatal("template should not be empty")
+	}
+	if !strings.Contains(template, "{{ LINEAR_ID }}") {
+		t.Fatalf("template missing expected placeholders: %q", template)
+	}
+}
+
+func TestLoadPromptTemplateErrorsWhenOverrideFileMissing(t *testing.T) {
+	executor := &Executor{
+		cwd:            "/workspace",
+		workPromptPath: "missing.md",
+		readFile: func(string) ([]byte, error) {
+			return nil, errors.New("missing")
+		},
+	}
+
+	_, err := executor.loadPromptTemplate()
+	if err == nil {
+		t.Fatal("loadPromptTemplate() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "read prompt override") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

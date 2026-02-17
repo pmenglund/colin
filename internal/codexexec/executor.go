@@ -3,14 +3,19 @@ package codexexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/pmenglund/codex-sdk-go"
+
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/worker"
+	"github.com/pmenglund/colin/prompts"
 )
 
 var metadataCommentRegexp = regexp.MustCompile(`(?s)<!--\s*colin:metadata\s+\{.*?\}\s*-->`)
@@ -23,20 +28,24 @@ type Options struct {
 	ConfigOverrides []string
 	Model           string
 	Logger          *slog.Logger
+	WorkPromptPath  string
 }
 
 // Executor runs in-progress issue work through a Codex thread.
 type Executor struct {
-	cwd       string
-	model     string
-	newClient func(ctx context.Context) (codexClient, error)
+	cwd            string
+	model          string
+	workPromptPath string
+	newClient      func(ctx context.Context) (codexClient, error)
+	readFile       func(path string) ([]byte, error)
 }
 
 // New builds an executor backed by github.com/pmenglund/codex-sdk-go.
 func New(opts Options) *Executor {
 	return &Executor{
-		cwd:   strings.TrimSpace(opts.Cwd),
-		model: strings.TrimSpace(opts.Model),
+		cwd:            strings.TrimSpace(opts.Cwd),
+		model:          strings.TrimSpace(opts.Model),
+		workPromptPath: strings.TrimSpace(opts.WorkPromptPath),
 		newClient: func(ctx context.Context) (codexClient, error) {
 			client, err := codex.New(ctx, codex.Options{
 				Logger: opts.Logger,
@@ -50,6 +59,7 @@ func New(opts Options) *Executor {
 			}
 			return realCodexClient{client: client}, nil
 		},
+		readFile: os.ReadFile,
 	}
 }
 
@@ -86,7 +96,12 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		"additionalProperties": false,
 	})
 
-	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(buildPrompt(issue))}, &codex.TurnOptions{
+	prompt, err := e.buildPrompt(issue)
+	if err != nil {
+		return worker.InProgressExecutionResult{}, fmt.Errorf("build work prompt: %w", err)
+	}
+
+	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(prompt)}, &codex.TurnOptions{
 		Cwd:          e.cwd,
 		Model:        e.model,
 		OutputSchema: responseSchema,
@@ -142,29 +157,54 @@ func parseResponse(raw string) (codexResponse, error) {
 	return out, nil
 }
 
-func buildPrompt(issue linear.Issue) string {
+func (e *Executor) buildPrompt(issue linear.Issue) (string, error) {
+	template, err := e.loadPromptTemplate()
+	if err != nil {
+		return "", err
+	}
+	description := issuePromptDescription(issue)
+	replacements := strings.NewReplacer(
+		"{{ LINEAR_ID }}", strings.TrimSpace(issue.Identifier),
+		"{{ LINEAR_TITLE }}", strings.TrimSpace(issue.Title),
+		"{{ LINEAR_DESCRIPTION }}", description,
+	)
+	return replacements.Replace(template), nil
+}
+
+func issuePromptDescription(issue linear.Issue) string {
 	description := strings.TrimSpace(metadataCommentRegexp.ReplaceAllString(issue.Description, ""))
 	if description == "" {
 		description = "(empty description)"
 	}
+	return description
+}
 
-	return fmt.Sprintf(`You are processing one Linear issue in an automated workflow.
+func (e *Executor) loadPromptTemplate() (string, error) {
+	if strings.TrimSpace(e.workPromptPath) == "" {
+		return embeddedWorkPromptTemplate(), nil
+	}
+	if e.readFile == nil {
+		return "", errors.New("prompt override is configured but file reader is unavailable")
+	}
 
-First decide if this issue is specified enough to execute right now without further human input.
-If it is not specified enough, do not execute the task and explain exactly what information is missing.
-If it is specified enough, decide whether the task is a small change or a complex change.
-For a small change, implement directly.
-For a complex change, create or update an ExecPlan in the repository under plans/ (for example plans/%s.md) following PLANS.md and WORKFLOW.md, then implement according to that plan.
-Always update tests when needed and run go test ./... before finalizing.
-Summarize exactly what you changed.
+	path := strings.TrimSpace(e.workPromptPath)
+	if !filepath.IsAbs(path) && strings.TrimSpace(e.cwd) != "" {
+		path = filepath.Join(e.cwd, path)
+	}
+	content, err := e.readFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read prompt override %q: %w", path, err)
+	}
 
-Return only JSON that matches the provided schema.
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		return "", fmt.Errorf("prompt override %q is empty", path)
+	}
+	return trimmed, nil
+}
 
-Issue identifier: %s
-Issue title: %s
-Issue description:
-%s
-`, issue.Identifier, issue.Identifier, strings.TrimSpace(issue.Title), description)
+func embeddedWorkPromptTemplate() string {
+	return strings.TrimSpace(prompts.WorkMarkdown)
 }
 
 type codexClient interface {
