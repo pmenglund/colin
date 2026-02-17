@@ -369,16 +369,23 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		return nil
 	}
 
-	summary := strings.TrimSpace(result.ExecutionSummary)
-	if summary == "" {
-		summary = "Codex execution completed; no additional details were provided."
+	threadID := strings.TrimSpace(result.ThreadID)
+	if threadID == "" {
+		threadID = strings.TrimSpace(issue.Metadata[workflow.MetaThreadID])
 	}
-	comment := fmt.Sprintf("Moved to **Review** after Codex execution.\n\nThread: `%s`\n\nSummary:\n%s", strings.TrimSpace(result.ThreadID), summary)
+	comment := buildReviewComment(reviewCommentInput{
+		ExecutionSummary: result.ExecutionSummary,
+		ThreadID:         threadID,
+		BranchName:       issue.Metadata[workflow.MetaBranchName],
+		WorktreePath:     issue.Metadata[workflow.MetaWorktreePath],
+		TranscriptRef:    result.TranscriptRef,
+		ScreenshotRef:    result.ScreenshotRef,
+	})
 	if err := r.applyInProgressOutcome(ctx, issue, workflow.StateReview, comment, now, map[string]string{
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
-	}, "human_review", result.ThreadID); err != nil {
+	}, "human_review", threadID); err != nil {
 		return err
 	}
 	r.Logger.Info("worker decision",

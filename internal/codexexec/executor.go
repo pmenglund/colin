@@ -91,6 +91,8 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 			"is_well_specified":   map[string]any{"type": "boolean"},
 			"needs_input_summary": map[string]any{"type": "string"},
 			"execution_summary":   map[string]any{"type": "string"},
+			"transcript_ref":      map[string]any{"type": "string"},
+			"screenshot_ref":      map[string]any{"type": "string"},
 		},
 		"required":             []string{"is_well_specified", "needs_input_summary", "execution_summary"},
 		"additionalProperties": false,
@@ -126,6 +128,8 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		NeedsInputSummary: strings.TrimSpace(payload.NeedsInputSummary),
 		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
 		ThreadID:          strings.TrimSpace(thread.ID()),
+		TranscriptRef:     strings.TrimSpace(payload.TranscriptRef),
+		ScreenshotRef:     strings.TrimSpace(payload.ScreenshotRef),
 	}, nil
 }
 
@@ -133,6 +137,8 @@ type codexResponse struct {
 	IsWellSpecified   bool   `json:"is_well_specified"`
 	NeedsInputSummary string `json:"needs_input_summary"`
 	ExecutionSummary  string `json:"execution_summary"`
+	TranscriptRef     string `json:"transcript_ref"`
+	ScreenshotRef     string `json:"screenshot_ref"`
 }
 
 func parseResponse(raw string) (codexResponse, error) {
