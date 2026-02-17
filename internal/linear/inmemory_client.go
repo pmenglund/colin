@@ -58,6 +58,9 @@ func (c *InMemoryClient) ListCandidateIssues(ctx context.Context, _ string) ([]I
 	out := make([]Issue, 0, len(c.issues))
 	for _, issue := range c.issues {
 		if isCandidateState(issue.StateName) {
+			if issue.StateName == "Todo" && issueHasBlockingDependency(issue, c.issues) {
+				continue
+			}
 			out = append(out, cloneInMemoryIssue(issue))
 		}
 	}
@@ -154,5 +157,23 @@ func cloneInMemoryIssue(issue Issue) Issue {
 	for k, v := range issue.Metadata {
 		out.Metadata[k] = v
 	}
+	out.BlockedBy = append([]string(nil), issue.BlockedBy...)
 	return out
+}
+
+func issueHasBlockingDependency(issue Issue, issues map[string]Issue) bool {
+	for _, blockedByID := range issue.BlockedBy {
+		dependencyID := strings.TrimSpace(blockedByID)
+		if dependencyID == "" {
+			continue
+		}
+		dependency, ok := issues[dependencyID]
+		if !ok {
+			return true
+		}
+		if strings.TrimSpace(dependency.StateName) != "Done" {
+			return true
+		}
+	}
+	return false
 }

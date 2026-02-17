@@ -25,6 +25,7 @@ type Issue struct {
 	StateName   string
 	UpdatedAt   time.Time
 	Metadata    map[string]string
+	BlockedBy   []string
 }
 
 // MetadataPatch describes updates to colin metadata persisted in Linear.

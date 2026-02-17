@@ -18,6 +18,9 @@ const (
 	MetaLastHeartbeatUTC    = "colin.last_heartbeat"
 	MetaInProgressOutcome   = "colin.in_progress_outcome"
 	MetaInProgressCommentID = "colin.in_progress_comment_id"
+	MetaWorktreePath        = "colin.worktree_path"
+	MetaBranchName          = "colin.branch_name"
+	MetaThreadID            = "colin.thread_id"
 )
 
 // Lease coordinates exclusive work ownership on a Linear issue.

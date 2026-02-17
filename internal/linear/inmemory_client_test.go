@@ -33,6 +33,40 @@ func TestInMemoryClientListCandidateIssuesFiltersStates(t *testing.T) {
 	}
 }
 
+func TestInMemoryClientListCandidateIssuesSkipsBlockedUntilDependencyDone(t *testing.T) {
+	client := NewInMemoryClient([]Issue{
+		{ID: "dep", Identifier: "COL-DEP", StateName: "Todo", Description: "dep"},
+		{ID: "blocked", Identifier: "COL-BLOCKED", StateName: "Todo", Description: "blocked", BlockedBy: []string{"dep"}},
+	})
+
+	issues, err := client.ListCandidateIssues(context.Background(), "team")
+	if err != nil {
+		t.Fatalf("ListCandidateIssues() error = %v", err)
+	}
+
+	if len(issues) != 1 {
+		t.Fatalf("candidate issue count = %d, want 1", len(issues))
+	}
+	if issues[0].Identifier != "COL-DEP" {
+		t.Fatalf("first issue = %q, want COL-DEP", issues[0].Identifier)
+	}
+
+	if err := client.UpdateIssueState(context.Background(), "dep", "Done"); err != nil {
+		t.Fatalf("UpdateIssueState() error = %v", err)
+	}
+
+	issues, err = client.ListCandidateIssues(context.Background(), "team")
+	if err != nil {
+		t.Fatalf("ListCandidateIssues() after unblocking error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("candidate issue count after unblocking = %d, want 1", len(issues))
+	}
+	if issues[0].Identifier != "COL-BLOCKED" {
+		t.Fatalf("first issue after unblocking = %q, want COL-BLOCKED", issues[0].Identifier)
+	}
+}
+
 func TestInMemoryClientUpdates(t *testing.T) {
 	client := NewInMemoryClient([]Issue{
 		{

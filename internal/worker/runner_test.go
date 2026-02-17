@@ -123,6 +123,7 @@ func cloneIssue(issue linear.Issue) linear.Issue {
 	for k, v := range issue.Metadata {
 		out.Metadata[k] = v
 	}
+	out.BlockedBy = append([]string(nil), issue.BlockedBy...)
 	return out
 }
 
@@ -307,6 +308,27 @@ func TestRunnerRunOnceBootstrapsTodoTransition(t *testing.T) {
 	}
 	if bootstrapper.lastIssue != "COL-1" {
 		t.Fatalf("bootstrapper last issue = %q, want %q", bootstrapper.lastIssue, "COL-1")
+	}
+	issue := state.issues["1"]
+	if got := issue.Metadata[workflow.MetaWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaWorktreePath, got, "/tmp/colin/worktrees/COL-1")
+	}
+	if got := issue.Metadata[workflow.MetaBranchName]; got != "colin/COL-1" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaBranchName, got, "colin/COL-1")
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if bootstrapper.callCnt != 1 {
+		t.Fatalf("bootstrapper call count after rerun = %d, want 1", bootstrapper.callCnt)
+	}
+	issue = state.issues["1"]
+	if got := issue.Metadata[workflow.MetaWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("Metadata[%s] after rerun = %q, want %q", workflow.MetaWorktreePath, got, "/tmp/colin/worktrees/COL-1")
+	}
+	if got := issue.Metadata[workflow.MetaBranchName]; got != "colin/COL-1" {
+		t.Fatalf("Metadata[%s] after rerun = %q, want %q", workflow.MetaBranchName, got, "colin/COL-1")
 	}
 }
 
@@ -656,6 +678,9 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 	if !strings.Contains(comments[0], "Moved to **Refine**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
 	}
+	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_1" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_1")
+	}
 }
 
 func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
@@ -702,6 +727,9 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	}
 	if !strings.Contains(comments[0], "Moved to **Review**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_2" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_2")
 	}
 }
 
@@ -902,6 +930,60 @@ func TestRunnerRunOnceRespectsMaxConcurrency(t *testing.T) {
 			t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateReview)
 		}
 	})
+}
+
+func TestRunnerRunOnceSerializesMergeQueue(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaMergeReady: "true",
+				},
+			},
+			"2": {
+				ID:          "2",
+				Identifier:  "COL-2",
+				StateName:   workflow.StateMerge,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaMergeReady: "true",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	r := Runner{
+		Linear:         client,
+		TeamID:         "team-1",
+		WorkerID:       "worker-1",
+		LeaseTTL:       5 * time.Minute,
+		MaxConcurrency: 4,
+		Clock:          func() time.Time { return now },
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("issue 1 state after first cycle = %q, want %q", got, workflow.StateDone)
+	}
+	if got := state.issues["2"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue 2 state after first cycle = %q, want %q", got, workflow.StateMerge)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if got := state.issues["2"].StateName; got != workflow.StateDone {
+		t.Fatalf("issue 2 state after second cycle = %q, want %q", got, workflow.StateDone)
+	}
 }
 
 func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {

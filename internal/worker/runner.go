@@ -98,6 +98,13 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		issueID string
 		err     error
 	}
+	mergeIssueToProcess := ""
+	for _, issue := range issues {
+		if issue.StateName == workflow.StateMerge {
+			mergeIssueToProcess = issue.ID
+			break
+		}
+	}
 	maxConcurrency := r.MaxConcurrency
 	if maxConcurrency <= 0 {
 		if len(issues) == 0 {
@@ -114,6 +121,17 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	for _, issue := range issues {
+		if issue.StateName == workflow.StateMerge && mergeIssueToProcess != "" && issue.ID != mergeIssueToProcess {
+			r.Logger.Info("worker decision",
+				"execution_id", executionID,
+				"issue", issue.Identifier,
+				"state", issue.StateName,
+				"action", "noop",
+				"reason", "merge queue serialized; deferred to next cycle",
+			)
+			results <- issueRunResult{issueID: issue.ID, err: nil}
+			continue
+		}
 		issueID := issue.ID
 		sem <- struct{}{}
 		wg.Add(1)
@@ -254,6 +272,11 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 				"worktree", workspace.WorktreePath,
 				"branch", workspace.BranchName,
 			)
+			if decision.MetadataPatch == nil {
+				decision.MetadataPatch = map[string]string{}
+			}
+			decision.MetadataPatch[workflow.MetaWorktreePath] = workspace.WorktreePath
+			decision.MetadataPatch[workflow.MetaBranchName] = workspace.BranchName
 		}
 	}
 
@@ -333,7 +356,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		if err := r.applyInProgressOutcome(ctx, issue, workflow.StateRefine, comment, now, map[string]string{
 			workflow.MetaNeedsRefine: "true",
 			workflow.MetaReason:      "missing required specification for execution",
-		}, "refine"); err != nil {
+		}, "refine", result.ThreadID); err != nil {
 			return err
 		}
 		r.Logger.Info("worker decision",
@@ -355,7 +378,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
-	}, "human_review"); err != nil {
+	}, "human_review", result.ThreadID); err != nil {
 		return err
 	}
 	r.Logger.Info("worker decision",
@@ -376,6 +399,7 @@ func (r *Runner) applyInProgressOutcome(
 	now time.Time,
 	set map[string]string,
 	outcome string,
+	threadID string,
 ) error {
 	comment = strings.TrimSpace(comment)
 	commentID := commentFingerprint(comment)
@@ -398,6 +422,10 @@ func (r *Runner) applyInProgressOutcome(
 			continue
 		}
 		patch.Set[k] = v
+	}
+	trimmedThreadID := strings.TrimSpace(threadID)
+	if trimmedThreadID != "" {
+		patch.Set[workflow.MetaThreadID] = trimmedThreadID
 	}
 
 	if patch.HasChanges() {
