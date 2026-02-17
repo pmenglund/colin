@@ -279,6 +279,43 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 }
 
 func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue, executionID string, now time.Time) error {
+	lease, err := workflow.LeaseFromMetadata(issue.Metadata)
+	if err != nil {
+		r.Logger.Info("worker decision",
+			"execution_id", executionID,
+			"issue", issue.Identifier,
+			"state", issue.StateName,
+			"action", "recover_invalid_lease",
+			"reason", "lease metadata invalid; claiming new lease for execution",
+		)
+		lease = workflow.Lease{}
+	}
+
+	if workflow.IsLeaseActive(lease, now) && lease.Owner != r.WorkerID {
+		r.Logger.Info("worker decision",
+			"execution_id", executionID,
+			"issue", issue.Identifier,
+			"state", issue.StateName,
+			"action", "noop",
+			"reason", "active lease owned by another worker",
+		)
+		return nil
+	}
+
+	if !r.DryRun {
+		leasePatch := linear.MetadataPatch{
+			Set: map[string]string{
+				workflow.MetaLastHeartbeatUTC: now.UTC().Format(time.RFC3339),
+			},
+		}
+		for k, v := range workflow.LeaseMetadataMap(workflow.BuildLease(r.WorkerID, executionID, now, r.LeaseTTL)) {
+			leasePatch.Set[k] = v
+		}
+		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, leasePatch); err != nil {
+			return err
+		}
+	}
+
 	result, err := r.Executor.EvaluateAndExecute(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)

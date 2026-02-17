@@ -61,6 +61,34 @@ func TestDecideTodoNoopWhenLeaseOwnedByOther(t *testing.T) {
 	}
 }
 
+func TestDecideTodoRecoversFromInvalidLeaseMetadata(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	d := Decide(IssueSnapshot{
+		State:       StateTodo,
+		Description: "spec",
+		WorkerID:    "worker-1",
+		ExecutionID: "exec-1",
+		LeaseTTL:    time.Minute,
+		Metadata: map[string]string{
+			MetaLeaseOwner:        "worker-2",
+			MetaLeaseExpiresAtUTC: "not-a-timestamp",
+		},
+	}, now)
+
+	if d.Action != ActionClaimAndTransition {
+		t.Fatalf("Action = %q", d.Action)
+	}
+	if d.ToState != StateInProgress {
+		t.Fatalf("ToState = %q", d.ToState)
+	}
+	if d.LeasePatch == nil {
+		t.Fatal("expected lease patch")
+	}
+	if d.Reason != "claimed todo issue after invalid lease metadata recovery" {
+		t.Fatalf("Reason = %q", d.Reason)
+	}
+}
+
 func TestDecideInProgressToReview(t *testing.T) {
 	now := time.Now().UTC()
 	d := Decide(IssueSnapshot{
