@@ -166,14 +166,16 @@ func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdent
 }
 
 type fakeMergeExecutor struct {
-	callCnt   int
-	lastIssue linear.Issue
-	errs      []error
+	callCnt        int
+	lastIssue      linear.Issue
+	calledIssueIDs []string
+	errs           []error
 }
 
 func (f *fakeMergeExecutor) ExecuteMerge(_ context.Context, issue linear.Issue) error {
 	f.callCnt++
 	f.lastIssue = issue
+	f.calledIssueIDs = append(f.calledIssueIDs, issue.ID)
 	if len(f.errs) == 0 {
 		return nil
 	}
@@ -601,6 +603,81 @@ func TestRunnerMergeRetryAfterFailureIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestRunnerMergeQueueProcessesOneIssuePerCycleDeterministically(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-2",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge second",
+				Metadata:    map[string]string{},
+			},
+			"2": {
+				ID:          "2",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge first",
+				Metadata:    map[string]string{},
+			},
+			"3": {
+				ID:          "3",
+				Identifier:  "COL-3",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge third",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         time.Now,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if mergeExecutor.callCnt != 1 {
+		t.Fatalf("first run merge executor call count = %d, want 1", mergeExecutor.callCnt)
+	}
+	if got := mergeExecutor.calledIssueIDs[0]; got != "2" {
+		t.Fatalf("first run merged issue id = %q, want %q", got, "2")
+	}
+	if got := state.issues["2"].StateName; got != workflow.StateDone {
+		t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateDone)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateMerge)
+	}
+	if got := state.issues["3"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue 3 state = %q, want %q", got, workflow.StateMerge)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if mergeExecutor.callCnt != 2 {
+		t.Fatalf("second run merge executor call count = %d, want 2", mergeExecutor.callCnt)
+	}
+	if got := mergeExecutor.calledIssueIDs[1]; got != "1" {
+		t.Fatalf("second run merged issue id = %q, want %q", got, "1")
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateDone)
+	}
+	if got := state.issues["3"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue 3 state = %q, want %q", got, workflow.StateMerge)
+	}
+}
+
 func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) {
 	state := &fakeClientState{
 		issues: map[string]linear.Issue{
@@ -926,5 +1003,56 @@ func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {
 	}
 	if !strings.Contains(text, "action=cycle_complete") || !strings.Contains(text, "processed=0") {
 		t.Fatalf("expected cycle_complete processed=0 log entry, got %q", text)
+	}
+}
+
+func TestRunnerRunOnceLogsMergeQueueSelectionAndDeferredIssues(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-2",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge second",
+				Metadata:    map[string]string{},
+			},
+			"2": {
+				ID:          "2",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready to merge first",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	var logOutput bytes.Buffer
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: &fakeMergeExecutor{},
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         time.Now,
+		Logger:        slog.New(slog.NewTextHandler(&logOutput, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	text := logOutput.String()
+	if !strings.Contains(text, "action=merge_queue_select") {
+		t.Fatalf("expected merge_queue_select log entry, got %q", text)
+	}
+	if !strings.Contains(text, "queue_length=2") {
+		t.Fatalf("expected queue_length=2 in logs, got %q", text)
+	}
+	if !strings.Contains(text, "selected_issue=COL-1") {
+		t.Fatalf("expected selected_issue=COL-1 in logs, got %q", text)
+	}
+	if !strings.Contains(text, "deferred_issues=COL-2") {
+		t.Fatalf("expected deferred_issues=COL-2 in logs, got %q", text)
 	}
 }
