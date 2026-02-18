@@ -12,6 +12,8 @@ type InProgressExecutionResult struct {
 	NeedsInputSummary string
 	ExecutionSummary  string
 	ThreadID          string
+	SessionID         string
+	ThreadResumed     bool
 }
 
 // InProgressExecutor evaluates and executes work for in-progress issues.
