@@ -96,49 +96,49 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		"count", len(issues),
 	)
 
-	type issueRunResult struct {
-		issueID string
-		err     error
-	}
-	maxConcurrency := r.MaxConcurrency
-	if maxConcurrency <= 0 {
-		if len(issues) == 0 {
-			maxConcurrency = 1
-		} else {
-			maxConcurrency = len(issues)
-		}
-	}
-
-	issueCtx, cancelIssues := context.WithCancel(ctx)
-	defer cancelIssues()
-
-	results := make(chan issueRunResult, len(issues))
-	sem := make(chan struct{}, maxConcurrency)
-	var wg sync.WaitGroup
+	nonMergeIssueIDs := make([]string, 0, len(issues))
+	mergeIssues := make([]linear.Issue, 0, len(issues))
 	for _, issue := range issues {
-		issueID := issue.ID
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			err := r.processIssue(issueCtx, issueID, executionID, now)
-			if err != nil && !errors.Is(err, linear.ErrConflict) {
-				cancelIssues()
-			}
-			results <- issueRunResult{
-				issueID: issueID,
-				err:     err,
-			}
-		}()
+		if issue.StateName == workflow.StateMerge && r.MergeExecutor != nil {
+			mergeIssues = append(mergeIssues, issue)
+			continue
+		}
+		nonMergeIssueIDs = append(nonMergeIssueIDs, issue.ID)
 	}
-	wg.Wait()
-	close(results)
+
+	selectedMergeIssueID := ""
+	if len(mergeIssues) > 0 {
+		selectedMergeIssueID = mergeIssues[0].ID
+		deferredMergeIdentifiers := make([]string, 0, len(mergeIssues)-1)
+		for _, mergeIssue := range mergeIssues[1:] {
+			deferredMergeIdentifiers = append(deferredMergeIdentifiers, mergeIssue.Identifier)
+		}
+		r.Logger.Info("worker merge queue",
+			"worker", r.WorkerID,
+			"action", "merge_queue_select",
+			"execution_id", executionID,
+			"queue_length", len(mergeIssues),
+			"selected_issue", mergeIssues[0].Identifier,
+			"selected_issue_id", selectedMergeIssueID,
+			"deferred_issues", strings.Join(deferredMergeIdentifiers, ","),
+		)
+	}
+
+	results := make([]issueRunResult, 0, len(nonMergeIssueIDs)+1)
+	results = append(results, r.processIssueIDsConcurrently(ctx, nonMergeIssueIDs, executionID, now)...)
+
+	if selectedMergeIssueID != "" {
+		err := r.processIssue(ctx, selectedMergeIssueID, executionID, now)
+		results = append(results, issueRunResult{
+			issueID: selectedMergeIssueID,
+			err:     err,
+		})
+	}
 
 	conflicts := 0
 	var firstErr error
 	firstErrIssue := ""
-	for result := range results {
+	for _, result := range results {
 		if result.err == nil {
 			continue
 		}
@@ -168,12 +168,65 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		"worker", r.WorkerID,
 		"action", "cycle_complete",
 		"execution_id", executionID,
-		"processed", len(issues),
+		"processed", len(results),
 		"conflicts", conflicts,
 		"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
 	)
 
 	return nil
+}
+
+type issueRunResult struct {
+	issueID string
+	err     error
+}
+
+func (r *Runner) processIssueIDsConcurrently(
+	ctx context.Context,
+	issueIDs []string,
+	executionID string,
+	now time.Time,
+) []issueRunResult {
+	maxConcurrency := r.MaxConcurrency
+	if maxConcurrency <= 0 {
+		if len(issueIDs) == 0 {
+			maxConcurrency = 1
+		} else {
+			maxConcurrency = len(issueIDs)
+		}
+	}
+
+	issueCtx, cancelIssues := context.WithCancel(ctx)
+	defer cancelIssues()
+
+	results := make(chan issueRunResult, len(issueIDs))
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	for _, issueID := range issueIDs {
+		issueID := issueID
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			err := r.processIssue(issueCtx, issueID, executionID, now)
+			if err != nil && !errors.Is(err, linear.ErrConflict) {
+				cancelIssues()
+			}
+			results <- issueRunResult{
+				issueID: issueID,
+				err:     err,
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	out := make([]issueRunResult, 0, len(issueIDs))
+	for result := range results {
+		out = append(out, result)
+	}
+	return out
 }
 
 // Run starts a continuous polling loop until context cancellation.
