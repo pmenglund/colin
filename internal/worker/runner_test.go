@@ -26,6 +26,7 @@ type fakeClientState struct {
 	metadataUpdates          int
 	comments                 map[string][]string
 	conflictOnNextStateWrite bool
+	conflictOnNextMetaWrite  bool
 }
 
 func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
@@ -79,6 +80,10 @@ func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
 	fake.UpdateIssueMetadataCalls(func(_ context.Context, issueID string, patch linear.MetadataPatch) error {
 		state.mu.Lock()
 		defer state.mu.Unlock()
+		if state.conflictOnNextMetaWrite {
+			state.conflictOnNextMetaWrite = false
+			return linear.ErrConflict
+		}
 
 		issue, ok := state.issues[issueID]
 		if !ok {
@@ -503,6 +508,159 @@ func TestRunnerRespectsActiveLeaseFromOtherWorker(t *testing.T) {
 	}
 	if state.stateUpdates != 0 {
 		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+}
+
+func TestRunnerInProgressSkipsExecutionWhenLeaseOwnedByOtherWorker(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "spec present",
+				Metadata: map[string]string{
+					workflow.MetaLeaseOwner:        "worker-2",
+					workflow.MetaLeaseExecutionID:  "exec-2",
+					workflow.MetaLeaseExpiresAtUTC: now.Add(time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "done",
+			ThreadID:         "thr_1",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    func() time.Time { return now },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if executor.callCnt != 0 {
+		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateInProgress)
+	}
+	if got := len(state.comments["1"]); got != 0 {
+		t.Fatalf("comment count = %d, want 0", got)
+	}
+}
+
+func TestRunnerInProgressExecutionErrorClaimsLeaseForRecovery(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		err: errors.New("codex transient failure"),
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    func() time.Time { return now },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want in-progress execution error")
+	}
+	if !strings.Contains(err.Error(), "evaluate and execute in-progress issue COL-1") {
+		t.Fatalf("error = %q", err.Error())
+	}
+
+	issue := state.issues["1"]
+	if got := issue.Metadata[workflow.MetaLeaseOwner]; got != "worker-1" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaLeaseOwner, got, "worker-1")
+	}
+	if got := issue.Metadata[workflow.MetaLeaseExecutionID]; got == "" {
+		t.Fatalf("Metadata[%s] = empty, want execution id", workflow.MetaLeaseExecutionID)
+	}
+	expiresRaw := issue.Metadata[workflow.MetaLeaseExpiresAtUTC]
+	if expiresRaw == "" {
+		t.Fatalf("Metadata[%s] = empty", workflow.MetaLeaseExpiresAtUTC)
+	}
+	expiresAt, parseErr := time.Parse(time.RFC3339, expiresRaw)
+	if parseErr != nil {
+		t.Fatalf("parse lease expiry: %v", parseErr)
+	}
+	if !expiresAt.After(now) {
+		t.Fatalf("lease expiry = %s, want after %s", expiresAt, now)
+	}
+}
+
+func TestRunnerInProgressMetadataConflictSkipsExecution(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+		conflictOnNextMetaWrite: true,
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "done",
+			ThreadID:         "thr_1",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    func() time.Time { return now },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if executor.callCnt != 0 {
+		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateInProgress)
+	}
+	if got := len(state.comments["1"]); got != 0 {
+		t.Fatalf("comment count = %d, want 0", got)
 	}
 }
 

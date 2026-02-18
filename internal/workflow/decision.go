@@ -38,11 +38,9 @@ type Decision struct {
 // Decide evaluates one issue snapshot and emits the next action.
 func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 	lease, err := LeaseFromMetadata(snapshot.Metadata)
-	if err != nil {
-		return Decision{Action: ActionNoop, Reason: "invalid lease metadata"}
-	}
+	leaseMetadataInvalid := err != nil
 
-	activeLeaseByOther := IsLeaseActive(lease, now) && lease.Owner != snapshot.WorkerID
+	activeLeaseByOther := !leaseMetadataInvalid && IsLeaseActive(lease, now) && lease.Owner != snapshot.WorkerID
 	specReady := hasRequiredSpec(snapshot)
 
 	switch snapshot.State {
@@ -63,10 +61,14 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 		}
 
 		newLease := BuildLease(snapshot.WorkerID, snapshot.ExecutionID, now, snapshot.LeaseTTL)
+		reason := "claimed todo issue"
+		if leaseMetadataInvalid {
+			reason = "claimed todo issue after invalid lease metadata recovery"
+		}
 		return Decision{
 			Action:     ActionClaimAndTransition,
 			ToState:    StateInProgress,
-			Reason:     "claimed todo issue",
+			Reason:     reason,
 			LeasePatch: &newLease,
 			MetadataPatch: map[string]string{
 				MetaReason:      "",
