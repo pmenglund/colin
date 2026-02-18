@@ -314,6 +314,11 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 				"worktree", workspace.WorktreePath,
 				"branch", workspace.BranchName,
 			)
+			if decision.MetadataPatch == nil {
+				decision.MetadataPatch = map[string]string{}
+			}
+			decision.MetadataPatch[workflow.MetaWorktreePath] = workspace.WorktreePath
+			decision.MetadataPatch[workflow.MetaBranchName] = workspace.BranchName
 		}
 
 	patch := toMetadataPatch(decision, now)
@@ -491,9 +496,18 @@ func (r *Runner) applyInProgressOutcome(
 		}
 		patch.Set[k] = v
 	}
+	trimmedThreadID := strings.TrimSpace(threadID)
+	if trimmedThreadID != "" {
+		patch.Set[workflow.MetaThreadID] = trimmedThreadID
+	}
 
 	if patch.HasChanges() {
 		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+			return err
+		}
+	}
+	if !r.DryRun && trimmedThreadID != "" {
+		if err := r.recordBranchSessionMetadata(ctx, issue, trimmedThreadID); err != nil {
 			return err
 		}
 	}
@@ -630,4 +644,22 @@ func shouldBootstrapWorkspace(fromState string, decision workflow.Decision) bool
 	return fromState == workflow.StateTodo &&
 		decision.Action != workflow.ActionNoop &&
 		decision.ToState == workflow.StateInProgress
+}
+
+func (r *Runner) recordBranchSessionMetadata(ctx context.Context, issue linear.Issue, sessionID string) error {
+	sessionWriter, ok := r.Bootstrapper.(TaskSessionMetadataWriter)
+	if !ok || sessionWriter == nil {
+		return nil
+	}
+
+	worktreePath := strings.TrimSpace(issue.Metadata[workflow.MetaWorktreePath])
+	branchName := strings.TrimSpace(issue.Metadata[workflow.MetaBranchName])
+	if worktreePath == "" || branchName == "" {
+		return nil
+	}
+
+	if err := sessionWriter.RecordBranchSession(ctx, worktreePath, branchName, sessionID); err != nil {
+		return fmt.Errorf("record codex session metadata for issue %s: %w", issue.Identifier, err)
+	}
+	return nil
 }

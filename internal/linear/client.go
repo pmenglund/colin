@@ -19,7 +19,7 @@ var (
 )
 
 //go:generate go run github.com/maxbrunsfeld/counterfeiter/v6@v6.12.1 -generate
-//counterfeiter:generate -o linearfakes/fake_client.go . Client
+//counterfeiter:generate -o fakes/fake_client.go . Client
 
 // Client describes Linear operations used by the worker.
 type Client interface {
@@ -69,7 +69,19 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
       description
       updatedAt
       state { name }
-      inverseRelations(first: 5) { nodes { type } }
+      inverseRelations(first: 20) {
+        nodes {
+          type
+          issue {
+            id
+            state { name }
+          }
+          relatedIssue {
+            id
+            state { name }
+          }
+        }
+      }
     }
   }
 }`
@@ -90,9 +102,7 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 					Name string `json:"name"`
 				} `json:"state"`
 				InverseRelations struct {
-					Nodes []struct {
-						Type string `json:"type"`
-					} `json:"nodes"`
+					Nodes []inverseRelation `json:"nodes"`
 				} `json:"inverseRelations"`
 			} `json:"nodes"`
 		} `json:"issues"`
@@ -106,7 +116,7 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 		if !isCandidateState(n.State.Name) {
 			continue
 		}
-		if n.State.Name == "Todo" && hasBlockingInverseRelation(n.InverseRelations.Nodes) {
+		if hasActiveBlockingInverseRelation(n.ID, n.InverseRelations.Nodes) {
 			continue
 		}
 
@@ -405,14 +415,61 @@ func isCandidateState(stateName string) bool {
 	}
 }
 
-func hasBlockingInverseRelation(relations []struct {
-	Type string `json:"type"`
-}) bool {
+type inverseRelation struct {
+	Type         string                `json:"type"`
+	Issue        *inverseRelationIssue `json:"issue"`
+	RelatedIssue *inverseRelationIssue `json:"relatedIssue"`
+}
+
+type inverseRelationIssue struct {
+	ID    string `json:"id"`
+	State struct {
+		Name string `json:"name"`
+	} `json:"state"`
+}
+
+func hasActiveBlockingInverseRelation(issueID string, relations []inverseRelation) bool {
+	normalizedIssueID := strings.TrimSpace(issueID)
 	for _, relation := range relations {
-		relationType := strings.ToLower(strings.TrimSpace(relation.Type))
-		if strings.Contains(relationType, "block") || strings.Contains(relationType, "depend") {
+		if !strings.EqualFold(strings.TrimSpace(relation.Type), "blocks") {
+			continue
+		}
+		blocker := relationBlockerIssue(normalizedIssueID, relation)
+		if blocker == nil {
+			// Treat unknown relation shape as blocked for safety.
+			return true
+		}
+		if !strings.EqualFold(strings.TrimSpace(blocker.State.Name), "Done") {
 			return true
 		}
 	}
 	return false
+}
+
+func relationBlockerIssue(issueID string, relation inverseRelation) *inverseRelationIssue {
+	candidates := make([]*inverseRelationIssue, 0, 2)
+	if relation.Issue != nil {
+		issueRef := strings.TrimSpace(relation.Issue.ID)
+		if issueRef != "" && issueRef != issueID {
+			candidates = append(candidates, relation.Issue)
+		}
+	}
+	if relation.RelatedIssue != nil {
+		issueRef := strings.TrimSpace(relation.RelatedIssue.ID)
+		if issueRef != "" && issueRef != issueID {
+			candidates = append(candidates, relation.RelatedIssue)
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	if issueID == "" {
+		if relation.Issue != nil && relation.RelatedIssue == nil {
+			return relation.Issue
+		}
+		if relation.RelatedIssue != nil && relation.Issue == nil {
+			return relation.RelatedIssue
+		}
+	}
+	return nil
 }

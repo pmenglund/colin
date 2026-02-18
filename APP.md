@@ -98,6 +98,7 @@ Merge coordinates are read from issue metadata keys `colin.branch_name` and `col
 - `internal/worker/` - polling loop and orchestration
 - `docs/` - operator runbooks (`operator-runbook.md`, `troubleshooting.md`) and supporting notes
 - `plans/` - living ExecPlans for tracked milestones
+- `prompts/` - prompts in markdown format
 
 ## Core Components
 
@@ -137,10 +138,13 @@ Merge coordinates are read from issue metadata keys `colin.branch_name` and `col
 - Compatibility constraints: workflow state names are currently hard-coded to `Todo`, `Refine`, `In Progress`, `Review`, `Merge`, and `Done`.
 - Codex runtime constraint: Codex app-server must be able to write session state under `CODEX_HOME` (or default `~/.codex`), and authentication must be available for turn execution.
 - When processing Linear issues, processing happens in goroutines so multiple issues can run concurrently. Concurrency is controlled by the `MaxConcurrency` configuration value.
+- Prompt should be embedded, but have a config option to read an alternative from a file.
 
 ## Testing
 
-To allow fast iteration, a fake in-memory implementation of Linear is implemented in Go and can be swapped out using configuration. This implementation is thread-safe and generated using `maxbrunsfeld/counterfeiter`.
+To allow fast iteration, a fake in-memory implementation of Linear is implemented in Go and can be swapped out using configuration.
+- The implementation must be concurrency-safe and generated using the go module `maxbrunsfeld/counterfeiter`.
+- The generated fakes should be saved in a directory called `fakes`.
 
 ## Change Checklist for Contributors
 

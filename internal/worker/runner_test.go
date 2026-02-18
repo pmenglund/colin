@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/linear"
-	"github.com/pmenglund/colin/internal/linear/linearfakes"
+	"github.com/pmenglund/colin/internal/linear/fakes"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -29,8 +29,8 @@ type fakeClientState struct {
 	conflictOnNextMetaWrite  bool
 }
 
-func newFakeLinearClient(state *fakeClientState) *linearfakes.FakeClient {
-	fake := &linearfakes.FakeClient{}
+func newFakeLinearClient(state *fakeClientState) *fakes.FakeClient {
+	fake := &fakes.FakeClient{}
 
 	fake.ListCandidateIssuesCalls(func(_ context.Context, _ string) ([]linear.Issue, error) {
 		state.mu.Lock()
@@ -123,6 +123,7 @@ func cloneIssue(issue linear.Issue) linear.Issue {
 	for k, v := range issue.Metadata {
 		out.Metadata[k] = v
 	}
+	out.BlockedBy = append([]string(nil), issue.BlockedBy...)
 	return out
 }
 
@@ -155,10 +156,15 @@ func (b *blockingInProgressExecutor) EvaluateAndExecute(_ context.Context, issue
 }
 
 type fakeTaskBootstrapper struct {
-	callCnt   int
-	lastIssue string
-	result    TaskBootstrapResult
-	err       error
+	callCnt          int
+	lastIssue        string
+	result           TaskBootstrapResult
+	err              error
+	recordCallCnt    int
+	recordWorktree   string
+	recordBranch     string
+	recordSessionID  string
+	recordSessionErr error
 }
 
 func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdentifier string) (TaskBootstrapResult, error) {
@@ -968,11 +974,15 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 				Identifier:  "COL-1",
 				StateName:   workflow.StateInProgress,
 				Description: "complete issue",
-				Metadata:    map[string]string{},
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
 			},
 		},
 	}
 	client := newFakeLinearClient(state)
+	bootstrapper := &fakeTaskBootstrapper{}
 	executor := &fakeInProgressExecutor{
 		result: InProgressExecutionResult{
 			IsWellSpecified:  true,
@@ -982,13 +992,14 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	}
 
 	r := Runner{
-		Linear:   client,
-		Executor: executor,
-		TeamID:   "team-1",
-		WorkerID: "worker-1",
-		LeaseTTL: 5 * time.Minute,
-		Clock:    time.Now,
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Linear:       client,
+		Executor:     executor,
+		Bootstrapper: bootstrapper,
+		TeamID:       "team-1",
+		WorkerID:     "worker-1",
+		LeaseTTL:     5 * time.Minute,
+		Clock:        time.Now,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -1369,6 +1380,60 @@ func TestRunnerRunOnceRespectsMaxConcurrency(t *testing.T) {
 			t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateReview)
 		}
 	})
+}
+
+func TestRunnerRunOnceSerializesMergeQueue(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaMergeReady: "true",
+				},
+			},
+			"2": {
+				ID:          "2",
+				Identifier:  "COL-2",
+				StateName:   workflow.StateMerge,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaMergeReady: "true",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	r := Runner{
+		Linear:         client,
+		TeamID:         "team-1",
+		WorkerID:       "worker-1",
+		LeaseTTL:       5 * time.Minute,
+		MaxConcurrency: 4,
+		Clock:          func() time.Time { return now },
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("issue 1 state after first cycle = %q, want %q", got, workflow.StateDone)
+	}
+	if got := state.issues["2"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue 2 state after first cycle = %q, want %q", got, workflow.StateMerge)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if got := state.issues["2"].StateName; got != workflow.StateDone {
+		t.Fatalf("issue 2 state after second cycle = %q, want %q", got, workflow.StateDone)
+	}
 }
 
 func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {

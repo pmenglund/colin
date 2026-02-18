@@ -35,6 +35,7 @@ type Config struct {
 	LinearTeamID   string
 	LinearBaseURL  string
 	LinearBackend  string
+	WorkPromptPath string
 	ColinHome      string
 	WorkerID       string
 	PollEvery      time.Duration
@@ -48,6 +49,7 @@ type fileConfig struct {
 	LinearTeamID   string `toml:"linear_team_id"`
 	LinearBaseURL  string `toml:"linear_base_url"`
 	LinearBackend  string `toml:"linear_backend"`
+	WorkPromptPath string `toml:"work_prompt_path"`
 	ColinHome      string `toml:"colin_home"`
 	WorkerID       string `toml:"worker_id"`
 	PollEvery      string `toml:"poll_every"`
@@ -146,6 +148,9 @@ func applyFileConfig(cfg *Config, path string) error {
 	if strings.TrimSpace(parsed.LinearBackend) != "" {
 		cfg.LinearBackend = strings.TrimSpace(parsed.LinearBackend)
 	}
+	if strings.TrimSpace(parsed.WorkPromptPath) != "" {
+		cfg.WorkPromptPath = strings.TrimSpace(parsed.WorkPromptPath)
+	}
 	if strings.TrimSpace(parsed.ColinHome) != "" {
 		cfg.ColinHome = strings.TrimSpace(parsed.ColinHome)
 	}
@@ -188,6 +193,9 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v, ok := readString("COLIN_LINEAR_BACKEND"); ok {
 		cfg.LinearBackend = v
+	}
+	if v, ok := readString("COLIN_WORK_PROMPT_PATH"); ok {
+		cfg.WorkPromptPath = v
 	}
 	if v, ok := readString("COLIN_HOME"); ok {
 		cfg.ColinHome = v

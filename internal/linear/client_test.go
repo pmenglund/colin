@@ -50,9 +50,15 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 					"issues": map[string]any{
 						"nodes": []map[string]any{
 							{"id": "1", "identifier": "COL-1", "title": "todo-unblocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
-							{"id": "2", "identifier": "COL-2", "title": "todo-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{{"type": "blocks"}}}},
-							{"id": "3", "identifier": "COL-3", "title": "todo-related", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{{"type": "related"}}}},
-							{"id": "4", "identifier": "COL-4", "title": "inprogress-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "In Progress"}, "inverseRelations": map[string]any{"nodes": []map[string]any{{"type": "blocks"}}}},
+							{"id": "2", "identifier": "COL-2", "title": "todo-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{
+								{"type": "blocks", "issue": map[string]any{"id": "dep-2", "state": map[string]any{"name": "In Progress"}}, "relatedIssue": map[string]any{"id": "2", "state": map[string]any{"name": "Todo"}}},
+							}}},
+							{"id": "3", "identifier": "COL-3", "title": "todo-unblocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{
+								{"type": "blocks", "issue": map[string]any{"id": "dep-3", "state": map[string]any{"name": "Done"}}, "relatedIssue": map[string]any{"id": "3", "state": map[string]any{"name": "Todo"}}},
+							}}},
+							{"id": "4", "identifier": "COL-4", "title": "inprogress-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "In Progress"}, "inverseRelations": map[string]any{"nodes": []map[string]any{
+								{"type": "blocks", "issue": map[string]any{"id": "dep-4", "state": map[string]any{"name": "Todo"}}, "relatedIssue": map[string]any{"id": "4", "state": map[string]any{"name": "In Progress"}}},
+							}}},
 							{"id": "5", "identifier": "COL-5", "title": "done", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Done"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
 						},
 					},
@@ -70,17 +76,14 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
-	if len(issues) != 3 {
-		t.Fatalf("expected 3 candidate issues, got %d", len(issues))
+	if len(issues) != 2 {
+		t.Fatalf("expected 2 candidate issues, got %d", len(issues))
 	}
 	if issues[0].Identifier != "COL-1" {
 		t.Fatalf("unexpected first issue identifier: %q", issues[0].Identifier)
 	}
 	if issues[1].Identifier != "COL-3" {
 		t.Fatalf("unexpected second issue identifier: %q", issues[1].Identifier)
-	}
-	if issues[2].Identifier != "COL-4" {
-		t.Fatalf("unexpected third issue identifier: %q", issues[2].Identifier)
 	}
 }
 

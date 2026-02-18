@@ -103,8 +103,9 @@ func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) work
 
 	codexLogger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	return codexexec.New(codexexec.Options{
-		Cwd:    cwd,
-		Logger: codexLogger,
+		Cwd:            cwd,
+		Logger:         codexLogger,
+		WorkPromptPath: cfg.WorkPromptPath,
 	})
 }
 

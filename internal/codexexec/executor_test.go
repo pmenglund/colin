@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 

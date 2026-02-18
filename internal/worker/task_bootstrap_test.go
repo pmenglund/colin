@@ -72,6 +72,29 @@ func TestGitTaskBootstrapperEnsureTaskWorkspaceReturnsActionableError(t *testing
 	}
 }
 
+func TestGitTaskBootstrapperRecordBranchSessionPersistsMetadata(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	colinHome := filepath.Join(t.TempDir(), "colin-home")
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:  repoRoot,
+		ColinHome: colinHome,
+	})
+
+	workspace, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-3")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	if err := bootstrapper.RecordBranchSession(context.Background(), workspace.WorktreePath, workspace.BranchName, "thr_123"); err != nil {
+		t.Fatalf("RecordBranchSession() error = %v", err)
+	}
+
+	got := runGit(t, "-C", repoRoot, "config", "--get", "branch."+workspace.BranchName+".colinSessionID")
+	if got != "thr_123" {
+		t.Fatalf("branch session metadata = %q, want %q", got, "thr_123")
+	}
+}
+
 func initTestGitRepo(t *testing.T) string {
 	t.Helper()
 
