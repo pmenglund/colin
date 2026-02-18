@@ -22,6 +22,7 @@ type Runner struct {
 	Linear         linear.Client
 	Executor       InProgressExecutor
 	Bootstrapper   TaskBootstrapper
+	BranchMetadata BranchMetadataStore
 	TeamID         string
 	WorkerID       string
 	PollEvery      time.Duration
@@ -244,6 +245,7 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 
 	var workspace TaskBootstrapResult
 	if shouldBootstrapWorkspace(issue.StateName, decision) {
+		var workspace TaskBootstrapResult
 		if r.Bootstrapper != nil {
 			workspace, err = r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
 			if err != nil {
@@ -256,7 +258,6 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 				"branch", workspace.BranchName,
 			)
 		}
-	}
 
 	patch := toMetadataPatch(decision, now)
 	if strings.TrimSpace(workspace.WorktreePath) != "" {
@@ -293,6 +294,14 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	result, err := r.Executor.EvaluateAndExecute(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
+	}
+	threadID := strings.TrimSpace(result.ThreadID)
+	sessionID := firstNonEmpty(result.SessionID, threadID)
+	branchName := strings.TrimSpace(issue.Metadata[workflow.MetaBranchName])
+	if r.BranchMetadata != nil && branchName != "" && sessionID != "" {
+		if err := r.BranchMetadata.SetBranchSessionID(ctx, branchName, sessionID); err != nil {
+			return fmt.Errorf("persist git branch metadata for issue %s: %w", issue.Identifier, err)
+		}
 	}
 
 	if !result.IsWellSpecified {
@@ -509,6 +518,15 @@ func copyMetadata(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func shouldBootstrapWorkspace(fromState string, decision workflow.Decision) bool {

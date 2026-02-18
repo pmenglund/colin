@@ -165,6 +165,32 @@ func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdent
 	return f.result, nil
 }
 
+type fakeBranchMetadataStore struct {
+	getSessionID string
+	getErr       error
+	setErr       error
+	setCalls     int
+	lastBranch   string
+	lastSession  string
+}
+
+func (f *fakeBranchMetadataStore) GetBranchSessionID(_ context.Context, _ string) (string, error) {
+	if f.getErr != nil {
+		return "", f.getErr
+	}
+	return strings.TrimSpace(f.getSessionID), nil
+}
+
+func (f *fakeBranchMetadataStore) SetBranchSessionID(_ context.Context, branchName string, sessionID string) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.setCalls++
+	f.lastBranch = strings.TrimSpace(branchName)
+	f.lastSession = strings.TrimSpace(sessionID)
+	return nil
+}
+
 func TestRunnerValidate(t *testing.T) {
 	t.Parallel()
 
@@ -303,6 +329,13 @@ func TestRunnerRunOnceBootstrapsTodoTransition(t *testing.T) {
 	if bootstrapper.lastIssue != "COL-1" {
 		t.Fatalf("bootstrapper last issue = %q, want %q", bootstrapper.lastIssue, "COL-1")
 	}
+	issue := state.issues["1"]
+	if got := issue.Metadata[workflow.MetaWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("Metadata[%s] = %q", workflow.MetaWorktreePath, got)
+	}
+	if got := issue.Metadata[workflow.MetaBranchName]; got != "colin/COL-1" {
+		t.Fatalf("Metadata[%s] = %q", workflow.MetaBranchName, got)
+	}
 }
 
 func TestRunnerRunOnceBootstrapFailureIsActionableAndRecoverable(t *testing.T) {
@@ -349,6 +382,61 @@ func TestRunnerRunOnceBootstrapFailureIsActionableAndRecoverable(t *testing.T) {
 	}
 	if state.stateUpdates != 0 {
 		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+}
+
+func TestRunnerRunOnceBootstrapsTodoTransitionBackfillsSessionFromBranchMetadata(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	bootstrapper := &fakeTaskBootstrapper{
+		result: TaskBootstrapResult{
+			WorktreePath: "/tmp/colin/worktrees/COL-1",
+			BranchName:   "colin/COL-1",
+		},
+	}
+	branchMetadata := &fakeBranchMetadataStore{
+		getSessionID: "sess-from-git",
+	}
+
+	r := Runner{
+		Linear:         client,
+		Bootstrapper:   bootstrapper,
+		BranchMetadata: branchMetadata,
+		TeamID:         "team-1",
+		WorkerID:       "worker-1",
+		LeaseTTL:       5 * time.Minute,
+		Clock:          func() time.Time { return now },
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:      time.Second,
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	issue := state.issues["1"]
+	if got := issue.Metadata[workflow.MetaCodexSessionID]; got != "sess-from-git" {
+		t.Fatalf("Metadata[%s] = %q", workflow.MetaCodexSessionID, got)
+	}
+	if branchMetadata.setCalls != 1 {
+		t.Fatalf("branch metadata set calls = %d, want 1", branchMetadata.setCalls)
+	}
+	if branchMetadata.lastBranch != "colin/COL-1" {
+		t.Fatalf("branch metadata branch = %q, want %q", branchMetadata.lastBranch, "colin/COL-1")
+	}
+	if branchMetadata.lastSession != "sess-from-git" {
+		t.Fatalf("branch metadata session = %q, want %q", branchMetadata.lastSession, "sess-from-git")
 	}
 }
 
