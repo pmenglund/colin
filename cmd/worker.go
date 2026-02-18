@@ -50,12 +50,14 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				return err
 			}
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
+			mergeExecutor := newMergeExecutor(cfg, cwd)
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
 			branchMetadata := newBranchMetadataStore(cfg, cwd)
 
 			runner := &worker.Runner{
 				Linear:         client,
 				Executor:       executor,
+				MergeExecutor:  mergeExecutor,
 				Bootstrapper:   bootstrapper,
 				BranchMetadata: branchMetadata,
 				TeamID:         cfg.LinearTeamID,

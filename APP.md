@@ -44,6 +44,8 @@ This state is used as a merge queue. In the current implementation, Colin transi
 
 To preserve one-at-a-time merge queue semantics operationally, only set `colin.merge_ready` for one issue at a time.
 
+Transition to `Done` now happens only after merge execution succeeds end-to-end (merge branch, push main, delete branch, delete worktree). If any step fails, the issue stays in `Merge` and is retried on the next worker cycle.
+
 ### Done
 
 The task has been merged into the main branch.
@@ -77,6 +79,8 @@ Steps to merge a task
 3. push the main branch upstream
 4. set issue metadata `colin.merge_ready = "true"` so Colin can transition `Merge -> Done`
 5. delete the git branch and git worktree once merge is confirmed
+
+Merge coordinates are read from issue metadata keys `colin.branch_name` and `colin.worktree_path` when available. If branch metadata is missing, Colin falls back to `colin/<issue-identifier>`.
 
 ## System Boundaries
 

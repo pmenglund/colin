@@ -21,6 +21,7 @@ import (
 type Runner struct {
 	Linear         linear.Client
 	Executor       InProgressExecutor
+	MergeExecutor  MergeExecutor
 	Bootstrapper   TaskBootstrapper
 	BranchMetadata BranchMetadataStore
 	TeamID         string
@@ -217,6 +218,9 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	if issue.StateName == workflow.StateInProgress && r.Executor != nil {
 		return r.processInProgressIssue(ctx, issue, executionID, now)
 	}
+	if issue.StateName == workflow.StateMerge && r.MergeExecutor != nil {
+		return r.processMergeIssue(ctx, issue, executionID, now)
+	}
 
 	snapshot := workflow.IssueSnapshot{
 		IssueID:     issue.ID,
@@ -284,6 +288,46 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	}
 
 	return nil
+}
+
+func (r *Runner) processMergeIssue(ctx context.Context, issue linear.Issue, executionID string, now time.Time) error {
+	r.Logger.Info("worker decision",
+		"execution_id", executionID,
+		"issue", issue.Identifier,
+		"state", issue.StateName,
+		"action", "execute_merge",
+		"to", workflow.StateDone,
+		"reason", "issue in merge queue",
+	)
+
+	if r.DryRun {
+		return nil
+	}
+
+	if err := r.MergeExecutor.ExecuteMerge(ctx, issue); err != nil {
+		return fmt.Errorf("execute merge for issue %s: %w", issue.Identifier, err)
+	}
+
+	patch := linear.MetadataPatch{
+		Set: map[string]string{
+			workflow.MetaLastHeartbeatUTC: now.UTC().Format(time.RFC3339),
+			workflow.MetaMergeReady:       "false",
+			workflow.MetaReason:           "",
+		},
+	}
+	if patch.HasChanges() {
+		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+			return err
+		}
+	}
+
+	if !workflow.CanTransition(issue.StateName, workflow.StateDone) {
+		return fmt.Errorf("invalid transition %q -> %q", issue.StateName, workflow.StateDone)
+	}
+	if issue.StateName == workflow.StateDone {
+		return nil
+	}
+	return r.Linear.UpdateIssueState(ctx, issue.ID, workflow.StateDone)
 }
 
 func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue, executionID string, now time.Time) error {
