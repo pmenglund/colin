@@ -1013,8 +1013,9 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	if len(comments) != 1 {
 		t.Fatalf("comment count = %d, want 1", len(comments))
 	}
-	if !strings.Contains(comments[0], "Moved to **Review**") {
-		t.Fatalf("unexpected comment body: %q", comments[0])
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
+	if comments[0] != wantComment {
+		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
 	}
 	if got := state.issues["1"].Metadata[workflow.MetaCodexThreadID]; got != "thr_2" {
 		t.Fatalf("MetaCodexThreadID = %q, want %q", got, "thr_2")
@@ -1183,6 +1184,56 @@ func TestRunnerInProgressMismatchedWorkspaceMetadataReturnsActionableError(t *te
 	}
 }
 
+func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+			TranscriptRef:    "terminal://logs/COL-1.txt",
+			ScreenshotRef:    "https://example.invalid/screenshot.png",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	comments := state.comments["1"]
+	if len(comments) != 1 {
+		t.Fatalf("comment count = %d, want 1", len(comments))
+	}
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
+	if comments[0] != wantComment {
+		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
+	}
+}
+
 func TestRunnerInProgressRetryAfterConflictDoesNotDuplicateComment(t *testing.T) {
 	state := &fakeClientState{
 		issues: map[string]linear.Issue{
@@ -1230,6 +1281,62 @@ func TestRunnerInProgressRetryAfterConflictDoesNotDuplicateComment(t *testing.T)
 	}
 	if got := state.issues["1"].StateName; got != workflow.StateRefine {
 		t.Fatalf("second run StateName = %q, want %q", got, workflow.StateRefine)
+	}
+	if got := len(state.comments["1"]); got != 1 {
+		t.Fatalf("second run comment count = %d, want 1", got)
+	}
+}
+
+func TestRunnerInProgressReviewRetryAfterConflictDoesNotDuplicateComment(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+		conflictOnNextStateWrite: true,
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("first run StateName = %q, want %q", got, workflow.StateInProgress)
+	}
+	if got := len(state.comments["1"]); got != 1 {
+		t.Fatalf("first run comment count = %d, want 1", got)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateReview {
+		t.Fatalf("second run StateName = %q, want %q", got, workflow.StateReview)
 	}
 	if got := len(state.comments["1"]); got != 1 {
 		t.Fatalf("second run comment count = %d, want 1", got)

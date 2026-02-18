@@ -20,6 +20,10 @@ Return only JSON that matches this schema:
 {
   "is_well_specified": boolean,
   "needs_input_summary": string,
-  "execution_summary": string
+  "execution_summary": string,
+  "transcript_ref": string,
+  "screenshot_ref": string
 }
 ```
+
+If no transcript or screenshot pointer is available, set those fields to an empty string.
