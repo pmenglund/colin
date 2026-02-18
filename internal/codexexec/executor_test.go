@@ -1,4 +1,4 @@
-package codex
+package codexexec
 
 import (
 	"context"
@@ -8,23 +8,23 @@ import (
 	"strings"
 	"testing"
 
-	codexsdk "github.com/pmenglund/codex-sdk-go"
+	"github.com/pmenglund/codex-sdk-go"
 	"github.com/pmenglund/colin/internal/linear"
 )
 
 type fakeThread struct {
 	id             string
-	turnResult     *codexsdk.TurnResult
+	turnResult     *codex.TurnResult
 	runErr         error
-	lastInputs     []codexsdk.Input
-	lastTurnOpts   *codexsdk.TurnOptions
+	lastInputs     []codex.Input
+	lastTurnOpts   *codex.TurnOptions
 	startThreadErr error
 }
 
 func (f *fakeThread) ID() string { return f.id }
 
-func (f *fakeThread) RunInputs(_ context.Context, inputs []codexsdk.Input, opts *codexsdk.TurnOptions) (*codexsdk.TurnResult, error) {
-	f.lastInputs = append([]codexsdk.Input(nil), inputs...)
+func (f *fakeThread) RunInputs(_ context.Context, inputs []codex.Input, opts *codex.TurnOptions) (*codex.TurnResult, error) {
+	f.lastInputs = append([]codex.Input(nil), inputs...)
 	f.lastTurnOpts = opts
 	if f.runErr != nil {
 		return nil, f.runErr
@@ -33,28 +33,14 @@ func (f *fakeThread) RunInputs(_ context.Context, inputs []codexsdk.Input, opts 
 }
 
 type fakeClient struct {
-	thread      *fakeThread
-	closed      bool
-	startErr    error
-	resumeErr   error
-	startCalls  int
-	resumeCalls int
-	lastResume  codexsdk.ThreadResumeOptions
+	thread   *fakeThread
+	closed   bool
+	startErr error
 }
 
-func (f *fakeClient) StartThread(_ context.Context, _ codexsdk.ThreadStartOptions) (codexThread, error) {
-	f.startCalls++
+func (f *fakeClient) StartThread(_ context.Context, _ codex.ThreadStartOptions) (codexThread, error) {
 	if f.startErr != nil {
 		return nil, f.startErr
-	}
-	return f.thread, nil
-}
-
-func (f *fakeClient) ResumeThread(_ context.Context, opts codexsdk.ThreadResumeOptions) (codexThread, error) {
-	f.resumeCalls++
-	f.lastResume = opts
-	if f.resumeErr != nil {
-		return nil, f.resumeErr
 	}
 	return f.thread, nil
 }
@@ -67,7 +53,7 @@ func (f *fakeClient) Close() error {
 func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_1",
-		turnResult: &codexsdk.TurnResult{FinalResponse: `{"is_well_specified":false,"needs_input_summary":"Need acceptance criteria","execution_summary":""}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":false,"needs_input_summary":"Need acceptance criteria","execution_summary":""}`},
 	}
 	client := &fakeClient{thread: thread}
 
@@ -99,18 +85,6 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 	if result.ThreadID != "thr_1" {
 		t.Fatalf("ThreadID = %q", result.ThreadID)
 	}
-	if result.SessionID != "thr_1" {
-		t.Fatalf("SessionID = %q, want thread-derived session id", result.SessionID)
-	}
-	if result.ThreadResumed {
-		t.Fatalf("ThreadResumed = %t, want false", result.ThreadResumed)
-	}
-	if client.startCalls != 1 {
-		t.Fatalf("startCalls = %d, want 1", client.startCalls)
-	}
-	if client.resumeCalls != 0 {
-		t.Fatalf("resumeCalls = %d, want 0", client.resumeCalls)
-	}
 	if !client.closed {
 		t.Fatal("expected client.Close() to be called")
 	}
@@ -126,7 +100,7 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_2",
-		turnResult: &codexsdk.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented tests"}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented tests","transcript_ref":"terminal://logs/COLIN-1.txt","screenshot_ref":"https://example.invalid/result.png"}`},
 	}
 
 	executor := &Executor{
@@ -147,11 +121,25 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	if result.ExecutionSummary != "Implemented tests" {
 		t.Fatalf("ExecutionSummary = %q", result.ExecutionSummary)
 	}
-	if result.SessionID != "thr_2" {
-		t.Fatalf("SessionID = %q, want %q", result.SessionID, "thr_2")
+	if result.TranscriptRef != "terminal://logs/COLIN-1.txt" {
+		t.Fatalf("TranscriptRef = %q", result.TranscriptRef)
 	}
-	if result.ThreadResumed {
-		t.Fatalf("ThreadResumed = %t, want false", result.ThreadResumed)
+	if result.ScreenshotRef != "https://example.invalid/result.png" {
+		t.Fatalf("ScreenshotRef = %q", result.ScreenshotRef)
+	}
+	if thread.lastTurnOpts == nil {
+		t.Fatal("expected turn options to be set")
+	}
+	outputSchemaBytes, err := json.Marshal(thread.lastTurnOpts.OutputSchema)
+	if err != nil {
+		t.Fatalf("marshal output schema: %v", err)
+	}
+	outputSchema := string(outputSchemaBytes)
+	if !strings.Contains(outputSchema, "\"transcript_ref\"") {
+		t.Fatalf("output schema missing transcript_ref: %s", outputSchema)
+	}
+	if !strings.Contains(outputSchema, "\"screenshot_ref\"") {
+		t.Fatalf("output schema missing screenshot_ref: %s", outputSchema)
 	}
 }
 
@@ -168,70 +156,88 @@ func TestExecutorEvaluateAndExecuteStartThreadError(t *testing.T) {
 	}
 }
 
-func TestExecutorEvaluateAndExecuteResumesThreadFromMetadata(t *testing.T) {
+func TestExecutorEvaluateAndExecuteUsesPromptTemplateFromMarkdown(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_3",
-		turnResult: &codexsdk.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"done"}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented"}`},
 	}
-	client := &fakeClient{thread: thread}
 
 	executor := &Executor{
-		cwd:   "/tmp",
-		model: "gpt-5",
+		cwd:            "/workspace",
+		model:          "gpt-5",
+		workPromptPath: "overrides/work.md",
 		newClient: func(context.Context) (codexClient, error) {
-			return client, nil
+			return &fakeClient{thread: thread}, nil
 		},
-	}
-
-	result, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
-		Identifier:  "COLIN-1",
-		Title:       "Title",
-		Description: "Spec",
-		Metadata: map[string]string{
-			"colin.codex_thread_id":  "thr_3",
-			"colin.codex_session_id": "ses_3",
-		},
-	})
-	if err != nil {
-		t.Fatalf("EvaluateAndExecute() error = %v", err)
-	}
-	if !result.ThreadResumed {
-		t.Fatalf("ThreadResumed = %t, want true", result.ThreadResumed)
-	}
-	if result.ThreadID != "thr_3" {
-		t.Fatalf("ThreadID = %q, want %q", result.ThreadID, "thr_3")
-	}
-	if result.SessionID != "ses_3" {
-		t.Fatalf("SessionID = %q, want %q", result.SessionID, "ses_3")
-	}
-	if client.startCalls != 0 {
-		t.Fatalf("startCalls = %d, want 0", client.startCalls)
-	}
-	if client.resumeCalls != 1 {
-		t.Fatalf("resumeCalls = %d, want 1", client.resumeCalls)
-	}
-	if client.lastResume.ThreadID != "thr_3" {
-		t.Fatalf("lastResume.ThreadID = %q, want %q", client.lastResume.ThreadID, "thr_3")
-	}
-}
-
-func TestExecutorEvaluateAndExecuteResumeMetadataMismatchIsActionable(t *testing.T) {
-	executor := &Executor{
-		newClient: func(context.Context) (codexClient, error) {
-			return &fakeClient{}, nil
+		readFile: func(path string) ([]byte, error) {
+			if path != "/workspace/overrides/work.md" {
+				return nil, fmt.Errorf("unexpected prompt path %q", path)
+			}
+			return []byte("Issue {{ LINEAR_ID }}\nTitle {{ LINEAR_TITLE }}\nDesc {{ LINEAR_DESCRIPTION }}"), nil
 		},
 	}
 
 	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
-		Identifier: "COLIN-1",
-		Metadata: map[string]string{
-			"colin.codex_thread_id": "thr_9",
-		},
+		Identifier:  "COLIN-77",
+		Title:       "Prompt path test",
+		Description: "<!-- colin:metadata {\"k\":\"v\"} -->\nActual description",
 	})
-	if err == nil {
-		t.Fatal("EvaluateAndExecute() error = nil, want metadata validation error")
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "incomplete codex metadata") {
-		t.Fatalf("error = %q, want actionable metadata error", err.Error())
+
+	if len(thread.lastInputs) != 1 {
+		t.Fatalf("expected one input, got %d", len(thread.lastInputs))
+	}
+	prompt := thread.lastInputs[0].Text
+	if !strings.Contains(prompt, "Issue COLIN-77") {
+		t.Fatalf("prompt missing identifier substitution: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Title Prompt path test") {
+		t.Fatalf("prompt missing title substitution: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Desc Actual description") {
+		t.Fatalf("prompt missing description substitution: %q", prompt)
+	}
+	if strings.Contains(prompt, "colin:metadata") {
+		t.Fatalf("prompt should strip metadata block, got %q", prompt)
+	}
+}
+
+func TestLoadPromptTemplateUsesEmbeddedTemplateWhenNoOverride(t *testing.T) {
+	executor := &Executor{
+		readFile: func(string) ([]byte, error) {
+			t.Fatal("readFile should not be called when no override is configured")
+			return nil, nil
+		},
+	}
+
+	template, err := executor.loadPromptTemplate()
+	if err != nil {
+		t.Fatalf("loadPromptTemplate() error = %v", err)
+	}
+	if template == "" {
+		t.Fatal("template should not be empty")
+	}
+	if !strings.Contains(template, "{{ LINEAR_ID }}") {
+		t.Fatalf("template missing expected placeholders: %q", template)
+	}
+}
+
+func TestLoadPromptTemplateErrorsWhenOverrideFileMissing(t *testing.T) {
+	executor := &Executor{
+		cwd:            "/workspace",
+		workPromptPath: "missing.md",
+		readFile: func(string) ([]byte, error) {
+			return nil, errors.New("missing")
+		},
+	}
+
+	_, err := executor.loadPromptTemplate()
+	if err == nil {
+		t.Fatal("loadPromptTemplate() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "read prompt override") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

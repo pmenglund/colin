@@ -126,19 +126,16 @@ func TestDecideInProgressToRefine(t *testing.T) {
 	}
 }
 
-func TestDecideMergeIsHandledByRunner(t *testing.T) {
+func TestDecideMergeToDone(t *testing.T) {
 	d := Decide(IssueSnapshot{
 		State: StateMerge,
+		Metadata: map[string]string{
+			MetaMergeReady: "true",
+		},
 	}, time.Now())
 
-	if d.Action != ActionNoop {
-		t.Fatalf("Action = %q", d.Action)
-	}
-	if d.ToState != "" {
-		t.Fatalf("ToState = %q, want empty", d.ToState)
-	}
-	if d.Reason != "merge execution handled by runner" {
-		t.Fatalf("Reason = %q", d.Reason)
+	if d.ToState != StateDone {
+		t.Fatalf("ToState = %q", d.ToState)
 	}
 }
 

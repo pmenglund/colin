@@ -176,29 +176,14 @@ func (f *fakeTaskBootstrapper) EnsureTaskWorkspace(_ context.Context, issueIdent
 	return f.result, nil
 }
 
-type fakeBranchMetadataStore struct {
-	getSessionID string
-	getErr       error
-	setErr       error
-	setCalls     int
-	lastBranch   string
-	lastSession  string
-}
-
-func (f *fakeBranchMetadataStore) GetBranchSessionID(_ context.Context, _ string) (string, error) {
-	if f.getErr != nil {
-		return "", f.getErr
+func (f *fakeTaskBootstrapper) RecordBranchSession(_ context.Context, worktreePath string, branchName string, sessionID string) error {
+	f.recordCallCnt++
+	f.recordWorktree = worktreePath
+	f.recordBranch = branchName
+	f.recordSessionID = sessionID
+	if f.recordSessionErr != nil {
+		return f.recordSessionErr
 	}
-	return strings.TrimSpace(f.getSessionID), nil
-}
-
-func (f *fakeBranchMetadataStore) SetBranchSessionID(_ context.Context, branchName string, sessionID string) error {
-	if f.setErr != nil {
-		return f.setErr
-	}
-	f.setCalls++
-	f.lastBranch = strings.TrimSpace(branchName)
-	f.lastSession = strings.TrimSpace(sessionID)
 	return nil
 }
 
@@ -342,10 +327,24 @@ func TestRunnerRunOnceBootstrapsTodoTransition(t *testing.T) {
 	}
 	issue := state.issues["1"]
 	if got := issue.Metadata[workflow.MetaWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
-		t.Fatalf("Metadata[%s] = %q", workflow.MetaWorktreePath, got)
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaWorktreePath, got, "/tmp/colin/worktrees/COL-1")
 	}
 	if got := issue.Metadata[workflow.MetaBranchName]; got != "colin/COL-1" {
-		t.Fatalf("Metadata[%s] = %q", workflow.MetaBranchName, got)
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaBranchName, got, "colin/COL-1")
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if bootstrapper.callCnt != 1 {
+		t.Fatalf("bootstrapper call count after rerun = %d, want 1", bootstrapper.callCnt)
+	}
+	issue = state.issues["1"]
+	if got := issue.Metadata[workflow.MetaWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("Metadata[%s] after rerun = %q, want %q", workflow.MetaWorktreePath, got, "/tmp/colin/worktrees/COL-1")
+	}
+	if got := issue.Metadata[workflow.MetaBranchName]; got != "colin/COL-1" {
+		t.Fatalf("Metadata[%s] after rerun = %q, want %q", workflow.MetaBranchName, got, "colin/COL-1")
 	}
 }
 
@@ -393,61 +392,6 @@ func TestRunnerRunOnceBootstrapFailureIsActionableAndRecoverable(t *testing.T) {
 	}
 	if state.stateUpdates != 0 {
 		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
-	}
-}
-
-func TestRunnerRunOnceBootstrapsTodoTransitionBackfillsSessionFromBranchMetadata(t *testing.T) {
-	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateTodo,
-				Description: "spec present",
-				Metadata:    map[string]string{},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	bootstrapper := &fakeTaskBootstrapper{
-		result: TaskBootstrapResult{
-			WorktreePath: "/tmp/colin/worktrees/COL-1",
-			BranchName:   "colin/COL-1",
-		},
-	}
-	branchMetadata := &fakeBranchMetadataStore{
-		getSessionID: "sess-from-git",
-	}
-
-	r := Runner{
-		Linear:         client,
-		Bootstrapper:   bootstrapper,
-		BranchMetadata: branchMetadata,
-		TeamID:         "team-1",
-		WorkerID:       "worker-1",
-		LeaseTTL:       5 * time.Minute,
-		Clock:          func() time.Time { return now },
-		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PollEvery:      time.Second,
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce() error = %v", err)
-	}
-
-	issue := state.issues["1"]
-	if got := issue.Metadata[workflow.MetaCodexSessionID]; got != "sess-from-git" {
-		t.Fatalf("Metadata[%s] = %q", workflow.MetaCodexSessionID, got)
-	}
-	if branchMetadata.setCalls != 1 {
-		t.Fatalf("branch metadata set calls = %d, want 1", branchMetadata.setCalls)
-	}
-	if branchMetadata.lastBranch != "colin/COL-1" {
-		t.Fatalf("branch metadata branch = %q, want %q", branchMetadata.lastBranch, "colin/COL-1")
-	}
-	if branchMetadata.lastSession != "sess-from-git" {
-		t.Fatalf("branch metadata session = %q, want %q", branchMetadata.lastSession, "sess-from-git")
 	}
 }
 
@@ -702,214 +646,6 @@ func TestRunnerHandlesConflictWithoutFailingCycle(t *testing.T) {
 	}
 }
 
-func TestRunnerMergeSuccessMovesIssueToDone(t *testing.T) {
-	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge",
-				Metadata: map[string]string{
-					workflow.MetaMergeReady: "true",
-				},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	mergeExecutor := &fakeMergeExecutor{}
-
-	r := Runner{
-		Linear:        client,
-		MergeExecutor: mergeExecutor,
-		TeamID:        "team-1",
-		WorkerID:      "worker-1",
-		LeaseTTL:      5 * time.Minute,
-		Clock:         func() time.Time { return now },
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce() error = %v", err)
-	}
-
-	if mergeExecutor.callCnt != 1 {
-		t.Fatalf("merge executor call count = %d, want 1", mergeExecutor.callCnt)
-	}
-	if mergeExecutor.lastIssue.ID != "1" {
-		t.Fatalf("merge executor issue id = %q, want %q", mergeExecutor.lastIssue.ID, "1")
-	}
-	if got := state.issues["1"].StateName; got != workflow.StateDone {
-		t.Fatalf("StateName = %q, want %q", got, workflow.StateDone)
-	}
-	if got := state.issues["1"].Metadata[workflow.MetaMergeReady]; got != "false" {
-		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaMergeReady, got, "false")
-	}
-}
-
-func TestRunnerMergeFailureLeavesIssueInMerge(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge",
-				Metadata:    map[string]string{},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	mergeExecutor := &fakeMergeExecutor{
-		errs: []error{errors.New("push failed")},
-	}
-
-	r := Runner{
-		Linear:        client,
-		MergeExecutor: mergeExecutor,
-		TeamID:        "team-1",
-		WorkerID:      "worker-1",
-		LeaseTTL:      5 * time.Minute,
-		Clock:         time.Now,
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	err := r.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("RunOnce() error = nil, want merge execution error")
-	}
-	if !strings.Contains(err.Error(), "execute merge for issue COL-1") {
-		t.Fatalf("error = %q, want merge context", err.Error())
-	}
-	if got := state.issues["1"].StateName; got != workflow.StateMerge {
-		t.Fatalf("StateName = %q, want %q", got, workflow.StateMerge)
-	}
-	if state.stateUpdates != 0 {
-		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
-	}
-}
-
-func TestRunnerMergeRetryAfterFailureIsRecoverable(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge",
-				Metadata:    map[string]string{},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	mergeExecutor := &fakeMergeExecutor{
-		errs: []error{errors.New("push failed")},
-	}
-
-	r := Runner{
-		Linear:        client,
-		MergeExecutor: mergeExecutor,
-		TeamID:        "team-1",
-		WorkerID:      "worker-1",
-		LeaseTTL:      5 * time.Minute,
-		Clock:         time.Now,
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	if err := r.RunOnce(context.Background()); err == nil {
-		t.Fatal("first RunOnce() error = nil, want merge error")
-	}
-	if got := state.issues["1"].StateName; got != workflow.StateMerge {
-		t.Fatalf("first run state = %q, want %q", got, workflow.StateMerge)
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("second RunOnce() error = %v", err)
-	}
-	if got := state.issues["1"].StateName; got != workflow.StateDone {
-		t.Fatalf("second run state = %q, want %q", got, workflow.StateDone)
-	}
-	if mergeExecutor.callCnt != 2 {
-		t.Fatalf("merge executor call count = %d, want 2", mergeExecutor.callCnt)
-	}
-}
-
-func TestRunnerMergeQueueProcessesOneIssuePerCycleDeterministically(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-2",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge second",
-				Metadata:    map[string]string{},
-			},
-			"2": {
-				ID:          "2",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge first",
-				Metadata:    map[string]string{},
-			},
-			"3": {
-				ID:          "3",
-				Identifier:  "COL-3",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge third",
-				Metadata:    map[string]string{},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	mergeExecutor := &fakeMergeExecutor{}
-
-	r := Runner{
-		Linear:        client,
-		MergeExecutor: mergeExecutor,
-		TeamID:        "team-1",
-		WorkerID:      "worker-1",
-		LeaseTTL:      5 * time.Minute,
-		Clock:         time.Now,
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("first RunOnce() error = %v", err)
-	}
-	if mergeExecutor.callCnt != 1 {
-		t.Fatalf("first run merge executor call count = %d, want 1", mergeExecutor.callCnt)
-	}
-	if got := mergeExecutor.calledIssueIDs[0]; got != "2" {
-		t.Fatalf("first run merged issue id = %q, want %q", got, "2")
-	}
-	if got := state.issues["2"].StateName; got != workflow.StateDone {
-		t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateDone)
-	}
-	if got := state.issues["1"].StateName; got != workflow.StateMerge {
-		t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateMerge)
-	}
-	if got := state.issues["3"].StateName; got != workflow.StateMerge {
-		t.Fatalf("issue 3 state = %q, want %q", got, workflow.StateMerge)
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("second RunOnce() error = %v", err)
-	}
-	if mergeExecutor.callCnt != 2 {
-		t.Fatalf("second run merge executor call count = %d, want 2", mergeExecutor.callCnt)
-	}
-	if got := mergeExecutor.calledIssueIDs[1]; got != "1" {
-		t.Fatalf("second run merged issue id = %q, want %q", got, "1")
-	}
-	if got := state.issues["1"].StateName; got != workflow.StateDone {
-		t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateDone)
-	}
-	if got := state.issues["3"].StateName; got != workflow.StateMerge {
-		t.Fatalf("issue 3 state = %q, want %q", got, workflow.StateMerge)
-	}
-}
-
 func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) {
 	state := &fakeClientState{
 		issues: map[string]linear.Issue{
@@ -958,11 +694,8 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 	if !strings.Contains(comments[0], "Moved to **Refine**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
 	}
-	if got := state.issues["1"].Metadata[workflow.MetaCodexThreadID]; got != "thr_1" {
-		t.Fatalf("MetaCodexThreadID = %q, want %q", got, "thr_1")
-	}
-	if got := state.issues["1"].Metadata[workflow.MetaCodexSessionID]; got != "thr_1" {
-		t.Fatalf("MetaCodexSessionID = %q, want %q", got, "thr_1")
+	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_1" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_1")
 	}
 }
 
@@ -1017,170 +750,20 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	if comments[0] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
 	}
-	if got := state.issues["1"].Metadata[workflow.MetaCodexThreadID]; got != "thr_2" {
-		t.Fatalf("MetaCodexThreadID = %q, want %q", got, "thr_2")
+	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_2" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_2")
 	}
-	if got := state.issues["1"].Metadata[workflow.MetaCodexSessionID]; got != "thr_2" {
-		t.Fatalf("MetaCodexSessionID = %q, want %q", got, "thr_2")
+	if bootstrapper.recordCallCnt != 1 {
+		t.Fatalf("recordCallCnt = %d, want 1", bootstrapper.recordCallCnt)
 	}
-}
-
-func TestRunnerInProgressInitializesMissingWorkspaceMetadata(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateInProgress,
-				Description: "complete issue",
-				Metadata:    map[string]string{},
-			},
-		},
+	if bootstrapper.recordWorktree != "/tmp/colin/worktrees/COL-1" {
+		t.Fatalf("recordWorktree = %q, want %q", bootstrapper.recordWorktree, "/tmp/colin/worktrees/COL-1")
 	}
-	client := newFakeLinearClient(state)
-	executor := &fakeInProgressExecutor{
-		result: InProgressExecutionResult{
-			IsWellSpecified:  true,
-			ExecutionSummary: "implemented",
-			ThreadID:         "thr_2",
-		},
+	if bootstrapper.recordBranch != "colin/COL-1" {
+		t.Fatalf("recordBranch = %q, want %q", bootstrapper.recordBranch, "colin/COL-1")
 	}
-	bootstrapper := &fakeTaskBootstrapper{
-		result: TaskBootstrapResult{
-			WorktreePath: "/tmp/colin/worktrees/COL-1",
-			BranchName:   "colin/COL-1",
-		},
-	}
-
-	r := Runner{
-		Linear:       client,
-		Executor:     executor,
-		Bootstrapper: bootstrapper,
-		TeamID:       "team-1",
-		WorkerID:     "worker-1",
-		LeaseTTL:     5 * time.Minute,
-		Clock:        time.Now,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce() error = %v", err)
-	}
-
-	issue := state.issues["1"]
-	if got := issue.Metadata[workflow.MetaTaskWorktreePath]; got != "/tmp/colin/worktrees/COL-1" {
-		t.Fatalf("MetaTaskWorktreePath = %q, want %q", got, "/tmp/colin/worktrees/COL-1")
-	}
-	if got := issue.Metadata[workflow.MetaTaskBranchName]; got != "colin/COL-1" {
-		t.Fatalf("MetaTaskBranchName = %q, want %q", got, "colin/COL-1")
-	}
-	if executor.callCnt != 1 {
-		t.Fatalf("executor call count = %d, want 1", executor.callCnt)
-	}
-}
-
-func TestRunnerInProgressPartialWorkspaceMetadataReturnsActionableError(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateInProgress,
-				Description: "complete issue",
-				Metadata: map[string]string{
-					workflow.MetaTaskWorktreePath: "/tmp/colin/worktrees/COL-1",
-				},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	executor := &fakeInProgressExecutor{
-		result: InProgressExecutionResult{
-			IsWellSpecified:  true,
-			ExecutionSummary: "implemented",
-			ThreadID:         "thr_2",
-		},
-	}
-	bootstrapper := &fakeTaskBootstrapper{
-		result: TaskBootstrapResult{
-			WorktreePath: "/tmp/colin/worktrees/COL-1",
-			BranchName:   "colin/COL-1",
-		},
-	}
-
-	r := Runner{
-		Linear:       client,
-		Executor:     executor,
-		Bootstrapper: bootstrapper,
-		TeamID:       "team-1",
-		WorkerID:     "worker-1",
-		LeaseTTL:     5 * time.Minute,
-		Clock:        time.Now,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	err := r.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("RunOnce() error = nil, want actionable metadata error")
-	}
-	if !strings.Contains(err.Error(), "inconsistent workspace metadata") {
-		t.Fatalf("error = %q, want inconsistent metadata context", err.Error())
-	}
-	if executor.callCnt != 0 {
-		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
-	}
-}
-
-func TestRunnerInProgressMismatchedWorkspaceMetadataReturnsActionableError(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateInProgress,
-				Description: "complete issue",
-				Metadata: map[string]string{
-					workflow.MetaTaskWorktreePath: "/unexpected/worktree",
-					workflow.MetaTaskBranchName:   "colin/OTHER",
-				},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-	executor := &fakeInProgressExecutor{
-		result: InProgressExecutionResult{
-			IsWellSpecified:  true,
-			ExecutionSummary: "implemented",
-			ThreadID:         "thr_2",
-		},
-	}
-	bootstrapper := &fakeTaskBootstrapper{
-		result: TaskBootstrapResult{
-			WorktreePath: "/tmp/colin/worktrees/COL-1",
-			BranchName:   "colin/COL-1",
-		},
-	}
-
-	r := Runner{
-		Linear:       client,
-		Executor:     executor,
-		Bootstrapper: bootstrapper,
-		TeamID:       "team-1",
-		WorkerID:     "worker-1",
-		LeaseTTL:     5 * time.Minute,
-		Clock:        time.Now,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-
-	err := r.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("RunOnce() error = nil, want workspace mismatch error")
-	}
-	if !strings.Contains(err.Error(), "workspace metadata mismatch") {
-		t.Fatalf("error = %q, want mismatch context", err.Error())
-	}
-	if executor.callCnt != 0 {
-		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
+	if bootstrapper.recordSessionID != "thr_2" {
+		t.Fatalf("recordSessionID = %q, want %q", bootstrapper.recordSessionID, "thr_2")
 	}
 }
 
@@ -1572,56 +1155,5 @@ func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {
 	}
 	if !strings.Contains(text, "action=cycle_complete") || !strings.Contains(text, "processed=0") {
 		t.Fatalf("expected cycle_complete processed=0 log entry, got %q", text)
-	}
-}
-
-func TestRunnerRunOnceLogsMergeQueueSelectionAndDeferredIssues(t *testing.T) {
-	state := &fakeClientState{
-		issues: map[string]linear.Issue{
-			"1": {
-				ID:          "1",
-				Identifier:  "COL-2",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge second",
-				Metadata:    map[string]string{},
-			},
-			"2": {
-				ID:          "2",
-				Identifier:  "COL-1",
-				StateName:   workflow.StateMerge,
-				Description: "ready to merge first",
-				Metadata:    map[string]string{},
-			},
-		},
-	}
-	client := newFakeLinearClient(state)
-
-	var logOutput bytes.Buffer
-	r := Runner{
-		Linear:        client,
-		MergeExecutor: &fakeMergeExecutor{},
-		TeamID:        "team-1",
-		WorkerID:      "worker-1",
-		LeaseTTL:      5 * time.Minute,
-		Clock:         time.Now,
-		Logger:        slog.New(slog.NewTextHandler(&logOutput, nil)),
-	}
-
-	if err := r.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce() error = %v", err)
-	}
-
-	text := logOutput.String()
-	if !strings.Contains(text, "action=merge_queue_select") {
-		t.Fatalf("expected merge_queue_select log entry, got %q", text)
-	}
-	if !strings.Contains(text, "queue_length=2") {
-		t.Fatalf("expected queue_length=2 in logs, got %q", text)
-	}
-	if !strings.Contains(text, "selected_issue=COL-1") {
-		t.Fatalf("expected selected_issue=COL-1 in logs, got %q", text)
-	}
-	if !strings.Contains(text, "deferred_issues=COL-2") {
-		t.Fatalf("expected deferred_issues=COL-2 in logs, got %q", text)
 	}
 }

@@ -1,4 +1,4 @@
-package codex
+package codexexec
 
 import (
 	"context"
@@ -11,10 +11,11 @@ import (
 	"regexp"
 	"strings"
 
-	codexsdk "github.com/pmenglund/codex-sdk-go"
+	"github.com/pmenglund/codex-sdk-go"
+
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/worker"
-	"github.com/pmenglund/colin/internal/workflow"
+	"github.com/pmenglund/colin/prompts"
 )
 
 var metadataCommentRegexp = regexp.MustCompile(`(?s)<!--\s*colin:metadata\s+\{.*?\}\s*-->`)
@@ -46,9 +47,9 @@ func New(opts Options) *Executor {
 		model:          strings.TrimSpace(opts.Model),
 		workPromptPath: strings.TrimSpace(opts.WorkPromptPath),
 		newClient: func(ctx context.Context) (codexClient, error) {
-			client, err := codexsdk.New(ctx, codexsdk.Options{
+			client, err := codex.New(ctx, codex.Options{
 				Logger: opts.Logger,
-				Spawn: codexsdk.SpawnOptions{
+				Spawn: codex.SpawnOptions{
 					CodexPath:       strings.TrimSpace(opts.CodexPath),
 					ConfigOverrides: append([]string(nil), opts.ConfigOverrides...),
 				},
@@ -74,38 +75,17 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 	}
 	defer client.Close()
 
-	threadID, sessionID, err := codexIdentityFromMetadata(issue.Metadata)
+	thread, err := client.StartThread(ctx, codex.ThreadStartOptions{
+		Model:          e.model,
+		Cwd:            e.cwd,
+		ApprovalPolicy: codex.ApprovalPolicyNever,
+		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
+	})
 	if err != nil {
-		return worker.InProgressExecutionResult{}, err
+		return worker.InProgressExecutionResult{}, fmt.Errorf("start thread: %w", err)
 	}
 
-	var thread codexThread
-	threadResumed := false
-	if threadID != "" {
-		thread, err = client.ResumeThread(ctx, codexsdk.ThreadResumeOptions{
-			ThreadID:       threadID,
-			Model:          e.model,
-			Cwd:            e.cwd,
-			ApprovalPolicy: codexsdk.ApprovalPolicyNever,
-			Sandbox:        codexsdk.SandboxModeWorkspaceWrite,
-		})
-		if err != nil {
-			return worker.InProgressExecutionResult{}, fmt.Errorf("resume thread %q: %w", threadID, err)
-		}
-		threadResumed = true
-	} else {
-		thread, err = client.StartThread(ctx, codexsdk.ThreadStartOptions{
-			Model:          e.model,
-			Cwd:            e.cwd,
-			ApprovalPolicy: codexsdk.ApprovalPolicyNever,
-			SandboxPolicy:  codexsdk.SandboxModeWorkspaceWrite,
-		})
-		if err != nil {
-			return worker.InProgressExecutionResult{}, fmt.Errorf("start thread: %w", err)
-		}
-	}
-
-	responseSchema := codexsdk.MustJSON(map[string]any{
+	responseSchema := codex.MustJSON(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"is_well_specified":   map[string]any{"type": "boolean"},
@@ -118,7 +98,12 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		"additionalProperties": false,
 	})
 
-	turn, err := thread.RunInputs(ctx, []codexsdk.Input{codexsdk.TextInput(buildPrompt(issue))}, &codexsdk.TurnOptions{
+	prompt, err := e.buildPrompt(issue)
+	if err != nil {
+		return worker.InProgressExecutionResult{}, fmt.Errorf("build work prompt: %w", err)
+	}
+
+	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(prompt)}, &codex.TurnOptions{
 		Cwd:          e.cwd,
 		Model:        e.model,
 		OutputSchema: responseSchema,
@@ -138,19 +123,13 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		payload.ExecutionSummary = "Execution completed without a summary from Codex."
 	}
 
-	activeThreadID := strings.TrimSpace(thread.ID())
-	if sessionID == "" {
-		// The SDK currently does not expose a separate session id, so we persist the thread id.
-		sessionID = activeThreadID
-	}
-
 	return worker.InProgressExecutionResult{
 		IsWellSpecified:   payload.IsWellSpecified,
 		NeedsInputSummary: strings.TrimSpace(payload.NeedsInputSummary),
 		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
-		ThreadID:          activeThreadID,
-		SessionID:         strings.TrimSpace(sessionID),
-		ThreadResumed:     threadResumed,
+		ThreadID:          strings.TrimSpace(thread.ID()),
+		TranscriptRef:     strings.TrimSpace(payload.TranscriptRef),
+		ScreenshotRef:     strings.TrimSpace(payload.ScreenshotRef),
 	}, nil
 }
 
@@ -235,30 +214,21 @@ func embeddedWorkPromptTemplate() string {
 }
 
 type codexClient interface {
-	StartThread(ctx context.Context, options codexsdk.ThreadStartOptions) (codexThread, error)
-	ResumeThread(ctx context.Context, options codexsdk.ThreadResumeOptions) (codexThread, error)
+	StartThread(ctx context.Context, options codex.ThreadStartOptions) (codexThread, error)
 	Close() error
 }
 
 type codexThread interface {
 	ID() string
-	RunInputs(ctx context.Context, inputs []codexsdk.Input, opts *codexsdk.TurnOptions) (*codexsdk.TurnResult, error)
+	RunInputs(ctx context.Context, inputs []codex.Input, opts *codex.TurnOptions) (*codex.TurnResult, error)
 }
 
 type realCodexClient struct {
-	client *codexsdk.Codex
+	client *codex.Codex
 }
 
-func (c realCodexClient) StartThread(ctx context.Context, options codexsdk.ThreadStartOptions) (codexThread, error) {
+func (c realCodexClient) StartThread(ctx context.Context, options codex.ThreadStartOptions) (codexThread, error) {
 	thread, err := c.client.StartThread(ctx, options)
-	if err != nil {
-		return nil, err
-	}
-	return realCodexThread{thread: thread}, nil
-}
-
-func (c realCodexClient) ResumeThread(ctx context.Context, options codexsdk.ThreadResumeOptions) (codexThread, error) {
-	thread, err := c.client.ResumeThread(ctx, options)
 	if err != nil {
 		return nil, err
 	}
@@ -270,31 +240,13 @@ func (c realCodexClient) Close() error {
 }
 
 type realCodexThread struct {
-	thread *codexsdk.Thread
+	thread *codex.Thread
 }
 
 func (t realCodexThread) ID() string {
 	return t.thread.ID()
 }
 
-func (t realCodexThread) RunInputs(ctx context.Context, inputs []codexsdk.Input, opts *codexsdk.TurnOptions) (*codexsdk.TurnResult, error) {
+func (t realCodexThread) RunInputs(ctx context.Context, inputs []codex.Input, opts *codex.TurnOptions) (*codex.TurnResult, error) {
 	return t.thread.RunInputs(ctx, inputs, opts)
-}
-
-func codexIdentityFromMetadata(meta map[string]string) (string, string, error) {
-	threadID := strings.TrimSpace(meta[workflow.MetaCodexThreadID])
-	sessionID := strings.TrimSpace(meta[workflow.MetaCodexSessionID])
-
-	if threadID == "" && sessionID == "" {
-		return "", "", nil
-	}
-	if threadID == "" || sessionID == "" {
-		return "", "", fmt.Errorf(
-			"incomplete codex metadata (%s=%q, %s=%q): clear both metadata keys and retry",
-			workflow.MetaCodexThreadID, threadID,
-			workflow.MetaCodexSessionID, sessionID,
-		)
-	}
-
-	return threadID, sessionID, nil
 }
