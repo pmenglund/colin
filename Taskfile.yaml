@@ -1,0 +1,89 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  deps:
+    desc: Download Go module dependencies
+    cmds:
+      - go mod download
+
+  tidy:
+    desc: Tidy Go module dependencies
+    cmds:
+      - go mod tidy
+
+  fmt:
+    desc: Format Go source files
+    cmds:
+      - gofmt -w .
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  e2e:
+    desc: Run end-to-end tests
+    cmds:
+      - go test ./e2e
+
+  test-lifecycle:
+    desc: Run lifecycle-focused test suites
+    cmds:
+      - go test ./e2e ./internal/worker ./internal/linear
+
+  build:
+    desc: Build all packages
+    cmds:
+      - go build ./...
+
+  generate:
+    desc: Run code generation directives
+    cmds:
+      - go generate ./...
+
+  check:
+    desc: Run formatting, vet, and full test suite
+    deps:
+      - fmt
+      - vet
+      - test
+
+  help:
+    desc: Show CLI help
+    cmds:
+      - go run . --help
+
+  worker-help:
+    desc: Show worker command help
+    cmds:
+      - go run . worker run --help
+
+  run-once-dry:
+    desc: Run worker once in dry-run mode (uses CONFIG or ./colin.toml)
+    cmds:
+      - go run . --config "${CONFIG:-./colin.toml}" worker run --once --dry-run
+
+  run-once:
+    desc: Run worker once (uses CONFIG or ./colin.toml)
+    cmds:
+      - go run . --config "${CONFIG:-./colin.toml}" worker run --once
+
+  run:
+    desc: Run worker continuously (uses CONFIG or ./colin.toml)
+    cmds:
+      - go run . --config "${CONFIG:-./colin.toml}" worker run
+
+  run-fake-once:
+    desc: Run worker once with fake Linear backend (uses CONFIG or ./colin.toml)
+    cmds:
+      - COLIN_LINEAR_BACKEND=fake go run . --config "${CONFIG:-./colin.toml}" worker run --once
