@@ -20,6 +20,12 @@ var (
 	ErrConflict = errors.New("linear conflict")
 )
 
+const (
+	colinMetadataAttachmentTitle    = "Colin metadata"
+	colinMetadataAttachmentSubtitle = "Managed by Colin"
+	colinMetadataAttachmentURL      = "https://github.com/pmenglund/colin/blob/main/docs/metadata.md"
+)
+
 //go:generate go run github.com/maxbrunsfeld/counterfeiter/v6@v6.12.1 -generate
 //counterfeiter:generate -o fakes/fake_client.go . Client
 
@@ -142,7 +148,7 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 			} `json:"nodes"`
 		} `json:"issues"`
 	}
-	if err := c.graphQL(ctx, query, map[string]string{"teamKey": teamID}, func(data json.RawMessage) error {
+	if err := c.graphQL(ctx, query, map[string]any{"teamKey": teamID}, func(data json.RawMessage) error {
 		return json.Unmarshal(data, &resp)
 	}); err != nil {
 		return nil, err
@@ -157,9 +163,9 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 			continue
 		}
 
-		meta, err := parseMetadata(n.Description)
+		meta, err := c.getIssueMetadata(ctx, n.ID)
 		if err != nil {
-			return nil, fmt.Errorf("parse issue %s metadata: %w", n.ID, err)
+			return nil, fmt.Errorf("read issue %s metadata attachment: %w", n.ID, err)
 		}
 
 		updatedAt, err := time.Parse(time.RFC3339, n.UpdatedAt)
@@ -206,7 +212,7 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 		} `json:"issue"`
 	}
 
-	if err := c.graphQL(ctx, query, map[string]string{"issueId": issueID}, func(data json.RawMessage) error {
+	if err := c.graphQL(ctx, query, map[string]any{"issueId": issueID}, func(data json.RawMessage) error {
 		return json.Unmarshal(data, &resp)
 	}); err != nil {
 		return Issue{}, err
@@ -215,9 +221,9 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 		return Issue{}, fmt.Errorf("issue %s not found", issueID)
 	}
 
-	meta, err := parseMetadata(resp.Issue.Description)
+	meta, err := c.getIssueMetadata(ctx, issueID)
 	if err != nil {
-		return Issue{}, fmt.Errorf("parse issue metadata: %w", err)
+		return Issue{}, fmt.Errorf("read issue metadata attachment: %w", err)
 	}
 
 	updatedAt, err := time.Parse(time.RFC3339, resp.Issue.UpdatedAt)
@@ -262,7 +268,7 @@ func (c *HTTPClient) UpdateIssueState(ctx context.Context, issueID string, toSta
 		} `json:"issueUpdate"`
 	}
 
-	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "stateId": stateID}, func(data json.RawMessage) error {
+	if err := c.graphQL(ctx, mutation, map[string]any{"issueId": issueID, "stateId": stateID}, func(data json.RawMessage) error {
 		return json.Unmarshal(data, &resp)
 	}); err != nil {
 		return err
@@ -280,11 +286,8 @@ func (c *HTTPClient) UpdateIssueMetadata(ctx context.Context, issueID string, pa
 		return err
 	}
 
-	nextDescription, _, err := upsertMetadata(observed.Description, patch)
-	if err != nil {
-		return err
-	}
-	if nextDescription == observed.Description {
+	nextMetadata := applyMetadataPatch(observed.Metadata, patch)
+	if metadataMapsEqual(nextMetadata, observed.Metadata) {
 		return nil
 	}
 
@@ -293,32 +296,10 @@ func (c *HTTPClient) UpdateIssueMetadata(ctx context.Context, issueID string, pa
 	if err != nil {
 		return err
 	}
-	if current.Description != observed.Description || current.StateName != observed.StateName {
+	if !metadataMapsEqual(current.Metadata, observed.Metadata) || current.StateName != observed.StateName {
 		return fmt.Errorf("update issue metadata: %w", ErrConflict)
 	}
-
-	mutation := `mutation UpdateIssueDescription($issueId: String!, $description: String!) {
-  issueUpdate(id: $issueId, input: { description: $description }) {
-    success
-  }
-}`
-
-	var resp struct {
-		IssueUpdate struct {
-			Success bool `json:"success"`
-		} `json:"issueUpdate"`
-	}
-
-	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "description": nextDescription}, func(data json.RawMessage) error {
-		return json.Unmarshal(data, &resp)
-	}); err != nil {
-		return err
-	}
-	if !resp.IssueUpdate.Success {
-		return fmt.Errorf("update issue metadata: %w", ErrConflict)
-	}
-
-	return nil
+	return c.upsertIssueMetadataAttachment(ctx, issueID, nextMetadata)
 }
 
 func (c *HTTPClient) CreateIssueComment(ctx context.Context, issueID string, body string) error {
@@ -339,7 +320,7 @@ func (c *HTTPClient) CreateIssueComment(ctx context.Context, issueID string, bod
 		} `json:"commentCreate"`
 	}
 
-	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "body": body}, func(data json.RawMessage) error {
+	if err := c.graphQL(ctx, mutation, map[string]any{"issueId": issueID, "body": body}, func(data json.RawMessage) error {
 		return json.Unmarshal(data, &resp)
 	}); err != nil {
 		return err
@@ -376,7 +357,7 @@ func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (stri
 		} `json:"workflowStates"`
 	}
 
-	if err := c.graphQL(ctx, query, map[string]string{"teamKey": c.teamID}, func(data json.RawMessage) error {
+	if err := c.graphQL(ctx, query, map[string]any{"teamKey": c.teamID}, func(data json.RawMessage) error {
 		return json.Unmarshal(data, &resp)
 	}); err != nil {
 		return "", err
@@ -420,17 +401,152 @@ func resolveStateIDFromMap(stateIDMap map[string]string, stateName string) strin
 	return ""
 }
 
+func metadataAttachmentURL(_ string) string {
+	return colinMetadataAttachmentURL
+}
+
+func (c *HTTPClient) getIssueMetadata(ctx context.Context, issueID string) (map[string]string, error) {
+	url := metadataAttachmentURL(issueID)
+	query := `query AttachmentsForURL($url: String!) {
+  attachmentsForURL(url: $url) {
+    nodes {
+      id
+      updatedAt
+      metadata
+      issue {
+        id
+      }
+    }
+  }
+}`
+
+	var resp struct {
+		AttachmentsForURL struct {
+			Nodes []struct {
+				ID        string `json:"id"`
+				UpdatedAt string `json:"updatedAt"`
+				Metadata  any    `json:"metadata"`
+				Issue     *struct {
+					ID string `json:"id"`
+				} `json:"issue"`
+			} `json:"nodes"`
+		} `json:"attachmentsForURL"`
+	}
+	if err := c.graphQL(ctx, query, map[string]any{"url": url}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
+		return nil, err
+	}
+
+	trimmedIssueID := strings.TrimSpace(issueID)
+	var (
+		selected        map[string]string
+		selectedTimeUTC time.Time
+	)
+	for _, node := range resp.AttachmentsForURL.Nodes {
+		if node.Issue == nil || strings.TrimSpace(node.Issue.ID) != trimmedIssueID {
+			continue
+		}
+		nodeMetadata := metadataObjectToStringMap(node.Metadata)
+		if selected == nil {
+			selected = nodeMetadata
+			selectedTimeUTC = parseRFC3339OrZero(node.UpdatedAt)
+			continue
+		}
+		nodeUpdatedAt := parseRFC3339OrZero(node.UpdatedAt)
+		if nodeUpdatedAt.After(selectedTimeUTC) {
+			selected = nodeMetadata
+			selectedTimeUTC = nodeUpdatedAt
+		}
+	}
+	if selected == nil {
+		return map[string]string{}, nil
+	}
+	return selected, nil
+}
+
+func parseRFC3339OrZero(raw string) time.Time {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func metadataObjectToStringMap(raw any) map[string]string {
+	object, ok := raw.(map[string]any)
+	if !ok || len(object) == 0 {
+		return map[string]string{}
+	}
+
+	out := make(map[string]string, len(object))
+	for rawKey, rawValue := range object {
+		key := strings.TrimSpace(rawKey)
+		if key == "" || rawValue == nil {
+			continue
+		}
+		out[key] = fmt.Sprint(rawValue)
+	}
+	return out
+}
+
+func metadataStringMapToObject(metadata map[string]string) map[string]any {
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		out[trimmedKey] = value
+	}
+	return out
+}
+
+func (c *HTTPClient) upsertIssueMetadataAttachment(ctx context.Context, issueID string, metadata map[string]string) error {
+	mutation := `mutation UpsertIssueMetadataAttachment($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) {
+    success
+  }
+}`
+
+	var resp struct {
+		AttachmentCreate struct {
+			Success bool `json:"success"`
+		} `json:"attachmentCreate"`
+	}
+	if err := c.graphQL(ctx, mutation, map[string]any{
+		"input": map[string]any{
+			"issueId":  strings.TrimSpace(issueID),
+			"url":      metadataAttachmentURL(issueID),
+			"title":    colinMetadataAttachmentTitle,
+			"subtitle": colinMetadataAttachmentSubtitle,
+			"metadata": metadataStringMapToObject(metadata),
+		},
+	}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
+		return err
+	}
+	if !resp.AttachmentCreate.Success {
+		return fmt.Errorf("update issue metadata: %w", ErrConflict)
+	}
+	return nil
+}
+
 func normalizeStateName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
 }
 
-func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[string]string, decodePayload func(data json.RawMessage) error) error {
+func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[string]any, decodePayload func(data json.RawMessage) error) error {
 	if decodePayload == nil {
 		return errors.New("graphql payload decoder is nil")
 	}
+	if variables == nil {
+		variables = map[string]any{}
+	}
 	body, err := json.Marshal(struct {
-		Query     string            `json:"query"`
-		Variables map[string]string `json:"variables"`
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
 	}{
 		Query:     query,
 		Variables: variables,

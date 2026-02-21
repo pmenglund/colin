@@ -2,7 +2,6 @@ package linear
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/pmenglund/colin/internal/workflow"
@@ -137,8 +136,8 @@ func TestInMemoryClientUpdates(t *testing.T) {
 	if issue.Metadata["colin.reason"] != "testing" {
 		t.Fatalf("Metadata[colin.reason] = %q", issue.Metadata["colin.reason"])
 	}
-	if !strings.Contains(issue.Description, "colin:metadata") {
-		t.Fatalf("description missing metadata block: %q", issue.Description)
+	if issue.Description != "spec" {
+		t.Fatalf("Description = %q, want %q", issue.Description, "spec")
 	}
 }
 

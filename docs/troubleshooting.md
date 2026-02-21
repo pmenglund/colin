@@ -163,7 +163,7 @@ Cause:
 Fix:
 
 1. Wait for lease expiry (`lease_ttl`, default 5m).
-2. If urgent, remove these metadata keys from the issue description metadata block:
+2. If urgent, remove these metadata keys from the issue metadata attachment:
    - `colin.lease_owner`
    - `colin.execution_id`
    - `colin.lease_expires_at`
@@ -177,21 +177,21 @@ Cause:
 
 Fix:
 
-1. Add/update metadata block in issue description:
+1. Add/update metadata attachment `https://github.com/pmenglund/colin/blob/main/docs/metadata.md` with:
 
-       <!-- colin:metadata {"colin.merge_ready":"true"} -->
+       {"colin.merge_ready":"true"}
 
 2. Run one worker cycle.
 
-### Metadata parse error from malformed `<!-- colin:metadata ... -->`
+### Missing or malformed metadata attachment values
 
 Cause:
 
-- Metadata block JSON is invalid.
+- Metadata attachment is missing required keys or contains unexpected value types.
 
 Fix:
 
-1. Edit issue description and repair/remove malformed JSON.
+1. Edit/create metadata attachment `https://github.com/pmenglund/colin/blob/main/docs/metadata.md` and set valid string values.
 2. Re-run one cycle:
 
        go run . --config ./colin.toml worker run --once

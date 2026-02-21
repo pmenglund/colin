@@ -9,15 +9,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
 
 const liveLinearEndpoint = "https://api.linear.app/graphql"
-
-var liveMetadataBlockRegexp = regexp.MustCompile(`<!-- colin:metadata (\{.*?\}) -->`)
+const (
+	liveMetadataAttachmentTitle    = "Colin metadata"
+	liveMetadataAttachmentSubtitle = "Managed by Colin"
+	liveMetadataAttachmentURLValue = "https://github.com/pmenglund/colin/blob/main/docs/metadata.md"
+)
 
 type liveLinearAdmin struct {
 	endpoint   string
@@ -219,7 +220,16 @@ func (a *liveLinearAdmin) createIssue(ctx context.Context, input liveLinearIssue
 	if !resp.IssueCreate.Success || strings.TrimSpace(resp.IssueCreate.Issue.ID) == "" {
 		return liveLinearIssue{}, fmt.Errorf("issueCreate returned unsuccessful response")
 	}
-	return toLiveIssue(resp.IssueCreate.Issue.ID, resp.IssueCreate.Issue.Identifier, resp.IssueCreate.Issue.Title, resp.IssueCreate.Issue.URL, resp.IssueCreate.Issue.State.Name, resp.IssueCreate.Issue.Description, nil), nil
+	return toLiveIssue(
+		resp.IssueCreate.Issue.ID,
+		resp.IssueCreate.Issue.Identifier,
+		resp.IssueCreate.Issue.Title,
+		resp.IssueCreate.Issue.URL,
+		resp.IssueCreate.Issue.State.Name,
+		resp.IssueCreate.Issue.Description,
+		map[string]string{},
+		nil,
+	), nil
 }
 
 func (a *liveLinearAdmin) updateIssueDescription(ctx context.Context, issueID string, description string) error {
@@ -298,7 +308,21 @@ func (a *liveLinearAdmin) getIssue(ctx context.Context, issueID string) (liveLin
 		comments = append(comments, strings.TrimSpace(node.Body))
 	}
 
-	return toLiveIssue(resp.Issue.ID, resp.Issue.Identifier, resp.Issue.Title, resp.Issue.URL, resp.Issue.State.Name, resp.Issue.Description, comments), nil
+	metadata, err := a.getIssueMetadata(ctx, strings.TrimSpace(issueID))
+	if err != nil {
+		return liveLinearIssue{}, err
+	}
+
+	return toLiveIssue(
+		resp.Issue.ID,
+		resp.Issue.Identifier,
+		resp.Issue.Title,
+		resp.Issue.URL,
+		resp.Issue.State.Name,
+		resp.Issue.Description,
+		metadata,
+		comments,
+	), nil
 }
 
 func (a *liveLinearAdmin) archiveIssue(ctx context.Context, issueID string) error {
@@ -413,7 +437,16 @@ func (a *liveLinearAdmin) graphQL(ctx context.Context, query string, variables m
 	return nil
 }
 
-func toLiveIssue(id string, identifier string, title string, url string, stateName string, description string, comments []string) liveLinearIssue {
+func toLiveIssue(
+	id string,
+	identifier string,
+	title string,
+	url string,
+	stateName string,
+	description string,
+	metadata map[string]string,
+	comments []string,
+) liveLinearIssue {
 	return liveLinearIssue{
 		ID:          strings.TrimSpace(id),
 		Identifier:  strings.TrimSpace(identifier),
@@ -421,65 +454,129 @@ func toLiveIssue(id string, identifier string, title string, url string, stateNa
 		URL:         strings.TrimSpace(url),
 		StateName:   strings.TrimSpace(stateName),
 		Description: description,
-		Metadata:    parseLiveMetadata(description),
+		Metadata:    cloneLiveMetadata(metadata),
 		Comments:    append([]string(nil), comments...),
 	}
 }
 
-func parseLiveMetadata(description string) map[string]string {
-	match := liveMetadataBlockRegexp.FindStringSubmatch(description)
-	if len(match) != 2 {
+func (a *liveLinearAdmin) getIssueMetadata(ctx context.Context, issueID string) (map[string]string, error) {
+	query := `query AttachmentsForURL($url: String!) {
+  attachmentsForURL(url: $url) {
+    nodes {
+      metadata
+      issue {
+        id
+      }
+    }
+  }
+}`
+
+	var resp struct {
+		AttachmentsForURL struct {
+			Nodes []struct {
+				Metadata any `json:"metadata"`
+				Issue    *struct {
+					ID string `json:"id"`
+				} `json:"issue"`
+			} `json:"nodes"`
+		} `json:"attachmentsForURL"`
+	}
+	if err := a.graphQL(ctx, query, map[string]any{
+		"url": liveMetadataAttachmentURL(issueID),
+	}, &resp); err != nil {
+		return nil, err
+	}
+
+	trimmedIssueID := strings.TrimSpace(issueID)
+	for _, node := range resp.AttachmentsForURL.Nodes {
+		if node.Issue == nil || strings.TrimSpace(node.Issue.ID) != trimmedIssueID {
+			continue
+		}
+		return liveMetadataObjectToStringMap(node.Metadata), nil
+	}
+	return map[string]string{}, nil
+}
+
+func (a *liveLinearAdmin) upsertIssueMetadata(ctx context.Context, issueID string, set map[string]string) error {
+	current, err := a.getIssueMetadata(ctx, issueID)
+	if err != nil {
+		return err
+	}
+	for key, value := range set {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		current[trimmedKey] = value
+	}
+
+	mutation := `mutation UpsertIssueMetadataAttachment($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) {
+    success
+  }
+}`
+	var resp struct {
+		AttachmentCreate struct {
+			Success bool `json:"success"`
+		} `json:"attachmentCreate"`
+	}
+	if err := a.graphQL(ctx, mutation, map[string]any{
+		"input": map[string]any{
+			"issueId":  strings.TrimSpace(issueID),
+			"url":      liveMetadataAttachmentURL(issueID),
+			"title":    liveMetadataAttachmentTitle,
+			"subtitle": liveMetadataAttachmentSubtitle,
+			"metadata": liveMetadataStringMapToObject(current),
+		},
+	}, &resp); err != nil {
+		return err
+	}
+	if !resp.AttachmentCreate.Success {
+		return fmt.Errorf("attachmentCreate returned unsuccessful response")
+	}
+	return nil
+}
+
+func liveMetadataAttachmentURL(_ string) string {
+	return liveMetadataAttachmentURLValue
+}
+
+func liveMetadataObjectToStringMap(raw any) map[string]string {
+	object, ok := raw.(map[string]any)
+	if !ok || len(object) == 0 {
 		return map[string]string{}
 	}
 
-	out := map[string]string{}
-	if err := json.Unmarshal([]byte(match[1]), &out); err != nil {
-		return map[string]string{}
+	out := make(map[string]string, len(object))
+	for key, value := range object {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" || value == nil {
+			continue
+		}
+		out[trimmedKey] = fmt.Sprint(value)
 	}
 	return out
 }
 
-func upsertLiveMetadata(description string, set map[string]string) (string, error) {
-	meta := parseLiveMetadata(description)
-	if meta == nil {
-		meta = map[string]string{}
-	}
-	for k, v := range set {
-		trimmedKey := strings.TrimSpace(k)
+func liveMetadataStringMapToObject(metadata map[string]string) map[string]any {
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		trimmedKey := strings.TrimSpace(key)
 		if trimmedKey == "" {
 			continue
 		}
-		meta[trimmedKey] = v
+		out[trimmedKey] = value
 	}
-
-	clean := liveMetadataBlockRegexp.ReplaceAllString(description, "")
-	clean = strings.TrimRight(clean, " \n\t")
-
-	block, err := renderLiveMetadataBlock(meta)
-	if err != nil {
-		return "", err
-	}
-	if clean == "" {
-		return block, nil
-	}
-	return clean + "\n\n" + block, nil
+	return out
 }
 
-func renderLiveMetadataBlock(meta map[string]string) (string, error) {
-	keys := make([]string, 0, len(meta))
-	for k := range meta {
-		keys = append(keys, k)
+func cloneLiveMetadata(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return map[string]string{}
 	}
-	sort.Strings(keys)
-
-	ordered := make(map[string]string, len(meta))
-	for _, key := range keys {
-		ordered[key] = meta[key]
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
 	}
-
-	encoded, err := json.Marshal(ordered)
-	if err != nil {
-		return "", fmt.Errorf("marshal metadata block: %w", err)
-	}
-	return "<!-- colin:metadata " + string(encoded) + " -->", nil
+	return out
 }

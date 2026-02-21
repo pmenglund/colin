@@ -152,16 +152,12 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	t.Logf("live artifacts created: project=%s issues=%v", project.URL, []string{issueRefine.URL, issueReview.URL, issueMerge.URL})
 
 	mergeFixture := sandbox.createMergeFixture(t, issueMerge.Identifier, colinHome)
-	mergeDescription, err := upsertLiveMetadata(issueMerge.Description, map[string]string{
+	if err := admin.upsertIssueMetadata(ctx, issueMerge.ID, map[string]string{
 		workflow.MetaMergeReady:   "true",
 		workflow.MetaBranchName:   mergeFixture.BranchName,
 		workflow.MetaWorktreePath: mergeFixture.WorktreePath,
-	})
-	if err != nil {
-		t.Fatalf("build merge issue metadata: %v", err)
-	}
-	if err := admin.updateIssueDescription(ctx, issueMerge.ID, mergeDescription); err != nil {
-		t.Fatalf("update merge issue metadata: %v", err)
+	}); err != nil {
+		t.Fatalf("upsert merge issue metadata attachment: %v", err)
 	}
 
 	binaryPath := buildColinBinary(t, repoRoot)
@@ -533,7 +529,7 @@ func assertLiveIssueContainsComment(t *testing.T, issue liveLinearIssue, needle 
 func assertLiveMetadataKeyPresent(t *testing.T, issue liveLinearIssue, key string) {
 	t.Helper()
 	if strings.TrimSpace(issue.Metadata[key]) == "" {
-		t.Fatalf("issue %s missing metadata key %s in description", issue.Identifier, key)
+		t.Fatalf("issue %s missing metadata key %s in metadata attachment", issue.Identifier, key)
 	}
 }
 

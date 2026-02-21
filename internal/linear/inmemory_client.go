@@ -124,7 +124,7 @@ func (c *InMemoryClient) UpdateIssueState(ctx context.Context, issueID string, t
 	return nil
 }
 
-// UpdateIssueMetadata applies metadata patch to issue description and metadata map.
+// UpdateIssueMetadata applies metadata patch to issue metadata map.
 func (c *InMemoryClient) UpdateIssueMetadata(ctx context.Context, issueID string, patch MetadataPatch) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -138,12 +138,7 @@ func (c *InMemoryClient) UpdateIssueMetadata(ctx context.Context, issueID string
 		return fmt.Errorf("issue %s not found", issueID)
 	}
 
-	nextDescription, nextMetadata, err := upsertMetadata(issue.Description, patch)
-	if err != nil {
-		return err
-	}
-	issue.Description = nextDescription
-	issue.Metadata = nextMetadata
+	issue.Metadata = applyMetadataPatch(issue.Metadata, patch)
 	issue.UpdatedAt = time.Now().UTC()
 	c.issues[issueID] = issue
 	return nil

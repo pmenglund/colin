@@ -1,17 +1,9 @@
 package linear
 
 import (
-	"encoding/json"
-	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
-)
-
-const (
-	metadataBlockPrefix = "<!-- colin:metadata "
-	metadataBlockSuffix = " -->"
 )
 
 var metadataBlockRegexp = regexp.MustCompile(`<!-- colin:metadata (\{.*?\}) -->`)
@@ -39,80 +31,49 @@ func (m MetadataPatch) HasChanges() bool {
 	return len(m.Set) > 0 || len(m.Delete) > 0
 }
 
-func parseMetadata(description string) (map[string]string, error) {
-	match := metadataBlockRegexp.FindStringSubmatch(description)
-	if len(match) != 2 {
-		return map[string]string{}, nil
-	}
-
-	out := map[string]string{}
-	if err := json.Unmarshal([]byte(match[1]), &out); err != nil {
-		return nil, fmt.Errorf("parse metadata block: %w", err)
-	}
-	return out, nil
-}
-
 // StripMetadataBlock removes the Colin metadata comment and trims surrounding whitespace.
 func StripMetadataBlock(description string) string {
 	return strings.TrimSpace(metadataBlockRegexp.ReplaceAllString(description, ""))
 }
 
-func upsertMetadata(description string, patch MetadataPatch) (string, map[string]string, error) {
-	meta, err := parseMetadata(description)
-	if err != nil {
-		return "", nil, err
-	}
-	if meta == nil {
-		meta = map[string]string{}
-	}
-
+func applyMetadataPatch(metadata map[string]string, patch MetadataPatch) map[string]string {
+	out := copyMetadataMap(metadata)
 	for k, v := range patch.Set {
-		if strings.TrimSpace(k) == "" {
+		trimmedKey := strings.TrimSpace(k)
+		if trimmedKey == "" {
 			continue
 		}
-		meta[k] = v
+		out[trimmedKey] = v
 	}
 	for _, k := range patch.Delete {
-		delete(meta, k)
-	}
-
-	clean := metadataBlockRegexp.ReplaceAllString(description, "")
-	clean = strings.TrimRight(clean, " \n\t")
-
-	if len(meta) == 0 {
-		if clean == "" {
-			return "", map[string]string{}, nil
+		trimmedKey := strings.TrimSpace(k)
+		if trimmedKey == "" {
+			continue
 		}
-		return clean, map[string]string{}, nil
+		delete(out, trimmedKey)
 	}
-
-	block, err := renderMetadataBlock(meta)
-	if err != nil {
-		return "", nil, err
-	}
-
-	if clean == "" {
-		return block, meta, nil
-	}
-	return clean + "\n\n" + block, meta, nil
+	return out
 }
 
-func renderMetadataBlock(meta map[string]string) (string, error) {
-	// Keep metadata rendering stable for deterministic behavior and clean diffs.
-	keys := make([]string, 0, len(meta))
-	for k := range meta {
-		keys = append(keys, k)
+func metadataMapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
 	}
-	sort.Strings(keys)
+	for key, leftValue := range left {
+		if rightValue, ok := right[key]; !ok || rightValue != leftValue {
+			return false
+		}
+	}
+	return true
+}
 
-	ordered := make(map[string]string, len(meta))
-	for _, k := range keys {
-		ordered[k] = meta[k]
+func copyMetadataMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return map[string]string{}
 	}
-
-	b, err := json.Marshal(ordered)
-	if err != nil {
-		return "", fmt.Errorf("marshal metadata: %w", err)
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
-	return metadataBlockPrefix + string(b) + metadataBlockSuffix, nil
+	return out
 }

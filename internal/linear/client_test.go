@@ -12,41 +12,94 @@ import (
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
-func TestUpsertMetadata(t *testing.T) {
-	description := "Issue details"
-	patched, meta, err := upsertMetadata(description, MetadataPatch{Set: map[string]string{"a": "1", "b": "2"}})
-	if err != nil {
-		t.Fatalf("upsertMetadata() error = %v", err)
-	}
-	if !strings.Contains(patched, "colin:metadata") {
-		t.Fatalf("expected metadata block in %q", patched)
-	}
-	if meta["a"] != "1" || meta["b"] != "2" {
-		t.Fatalf("unexpected metadata map: %#v", meta)
-	}
+func TestApplyMetadataPatch(t *testing.T) {
+	metadata := map[string]string{"a": "1", "b": "2"}
+	patched := applyMetadataPatch(metadata, MetadataPatch{
+		Set:    map[string]string{"a": "10", "c": "3"},
+		Delete: []string{"b"},
+	})
 
-	patched, meta, err = upsertMetadata(patched, MetadataPatch{Delete: []string{"a"}})
+	if patched["a"] != "10" {
+		t.Fatalf("patched[a] = %q, want %q", patched["a"], "10")
+	}
+	if patched["c"] != "3" {
+		t.Fatalf("patched[c] = %q, want %q", patched["c"], "3")
+	}
+	if _, ok := patched["b"]; ok {
+		t.Fatalf("patched should delete key b: %#v", patched)
+	}
+	if metadata["a"] != "1" {
+		t.Fatalf("input metadata mutated: %#v", metadata)
+	}
+}
+
+func TestGetIssueReadsMetadataFromAttachment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(req.Query, "query GetIssue"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"id":          "1",
+						"identifier":  "COL-1",
+						"title":       "x",
+						"description": "spec",
+						"updatedAt":   "2026-02-11T00:00:00Z",
+						"state":       map[string]any{"name": "Todo"},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "a-1",
+								"updatedAt": "2026-02-11T00:00:00Z",
+								"metadata":  map[string]any{"colin.merge_ready": "true"},
+								"issue":     map[string]any{"id": "1"},
+							},
+						},
+					},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	issue, err := client.GetIssue(context.Background(), "1")
 	if err != nil {
-		t.Fatalf("upsertMetadata() delete error = %v", err)
+		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if _, ok := meta["a"]; ok {
-		t.Fatalf("expected key a to be deleted: %#v", meta)
-	}
-	if meta["b"] != "2" {
-		t.Fatalf("expected key b to stay set: %#v", meta)
+	if issue.Metadata["colin.merge_ready"] != "true" {
+		t.Fatalf("Metadata[colin.merge_ready] = %q, want %q", issue.Metadata["colin.merge_ready"], "true")
 	}
 }
 
 func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Query string `json:"query"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
 
-		if strings.Contains(req.Query, "query ListIssues") {
+		switch {
+		case strings.Contains(req.Query, "query ListIssues"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
 					"issues": map[string]any{
@@ -66,10 +119,30 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 					},
 				},
 			})
-			return
-		}
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			nodes := []map[string]any{
+				{
+					"id":        "att-1",
+					"updatedAt": "2026-02-11T00:00:00Z",
+					"metadata":  map[string]any{"colin.thread_id": "thread-1"},
+					"issue":     map[string]any{"id": "1"},
+				},
+				{
+					"id":        "att-3",
+					"updatedAt": "2026-02-11T00:00:00Z",
+					"metadata":  map[string]any{"colin.thread_id": "thread-3"},
+					"issue":     map[string]any{"id": "3"},
+				},
+			}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{"nodes": nodes},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
 	}))
 	defer srv.Close()
 
@@ -87,15 +160,19 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	if issues[1].Identifier != "COL-3" {
 		t.Fatalf("unexpected second issue identifier: %q", issues[1].Identifier)
 	}
+	if issues[0].Metadata[workflow.MetaThreadID] != "thread-1" {
+		t.Fatalf("issues[0] metadata thread id = %q", issues[0].Metadata[workflow.MetaThreadID])
+	}
 }
 
 func TestUpdateIssueMetadataDetectsConflict(t *testing.T) {
 	var mutationCalled bool
-	getIssueCalls := 0
+	attachmentReads := 0
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Query string `json:"query"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -103,32 +180,41 @@ func TestUpdateIssueMetadataDetectsConflict(t *testing.T) {
 
 		switch {
 		case strings.Contains(req.Query, "query GetIssue"):
-			getIssueCalls++
-			desc := "A"
-			if getIssueCalls == 2 {
-				desc = "B"
-			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
 					"issue": map[string]any{
 						"id":          "1",
 						"identifier":  "COL-1",
 						"title":       "x",
-						"description": desc,
+						"description": "spec",
 						"updatedAt":   "2026-02-11T00:00:00Z",
 						"state":       map[string]any{"name": "Todo"},
 					},
 				},
 			})
-			return
-		case strings.Contains(req.Query, "mutation UpdateIssueDescription"):
-			mutationCalled = true
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			attachmentReads++
+			metadata := map[string]any{"k": "old"}
+			if attachmentReads >= 2 {
+				metadata = map[string]any{"k": "changed"}
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
-					"issueUpdate": map[string]any{"success": true},
+					"attachmentsForURL": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "a-1",
+								"updatedAt": "2026-02-11T00:00:00Z",
+								"metadata":  metadata,
+								"issue":     map[string]any{"id": "1"},
+							},
+						},
+					},
 				},
 			})
-			return
+		case strings.Contains(req.Query, "mutation UpsertIssueMetadataAttachment"):
+			mutationCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"attachmentCreate": map[string]any{"success": true}}})
 		default:
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
 		}
@@ -136,10 +222,7 @@ func TestUpdateIssueMetadataDetectsConflict(t *testing.T) {
 	defer srv.Close()
 
 	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
-	err := client.UpdateIssueMetadata(context.Background(), "1", MetadataPatch{
-		Set: map[string]string{"k": "v"},
-	})
-
+	err := client.UpdateIssueMetadata(context.Background(), "1", MetadataPatch{Set: map[string]string{"k": "v"}})
 	if err == nil {
 		t.Fatal("expected conflict error")
 	}
@@ -148,6 +231,79 @@ func TestUpdateIssueMetadataDetectsConflict(t *testing.T) {
 	}
 	if mutationCalled {
 		t.Fatal("expected mutation not to be called after conflict detection")
+	}
+}
+
+func TestUpdateIssueMetadataUsesAttachmentCreate(t *testing.T) {
+	var issueUpdateDescriptionCalled bool
+	var attachmentCreateCalled bool
+	var metadataValue string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(req.Query, "query GetIssue"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"id":          "1",
+						"identifier":  "COL-1",
+						"title":       "x",
+						"description": "spec",
+						"updatedAt":   "2026-02-11T00:00:00Z",
+						"state":       map[string]any{"name": "Todo"},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "a-1",
+								"updatedAt": "2026-02-11T00:00:00Z",
+								"metadata":  map[string]any{"k": "old"},
+								"issue":     map[string]any{"id": "1"},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "mutation UpdateIssueDescription"):
+			issueUpdateDescriptionCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"issueUpdate": map[string]any{"success": true}}})
+		case strings.Contains(req.Query, "mutation UpsertIssueMetadataAttachment"):
+			attachmentCreateCalled = true
+			input, _ := req.Variables["input"].(map[string]any)
+			metadata, _ := input["metadata"].(map[string]any)
+			metadataValue = stringVariable(metadata, "k")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"attachmentCreate": map[string]any{"success": true}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	if err := client.UpdateIssueMetadata(context.Background(), "1", MetadataPatch{Set: map[string]string{"k": "new"}}); err != nil {
+		t.Fatalf("UpdateIssueMetadata() error = %v", err)
+	}
+	if issueUpdateDescriptionCalled {
+		t.Fatal("did not expect issueUpdate description mutation")
+	}
+	if !attachmentCreateCalled {
+		t.Fatal("expected attachmentCreate mutation")
+	}
+	if metadataValue != "new" {
+		t.Fatalf("attachment metadata k = %q, want %q", metadataValue, "new")
 	}
 }
 
@@ -199,8 +355,8 @@ func TestUpdateIssueStateUsesConfiguredStateName(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Query     string            `json:"query"`
-			Variables map[string]string `json:"variables"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -221,6 +377,13 @@ func TestUpdateIssueStateUsesConfiguredStateName(t *testing.T) {
 				},
 			})
 			return
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{"nodes": []map[string]any{}},
+				},
+			})
+			return
 		case strings.Contains(req.Query, "query WorkflowStates"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
@@ -233,7 +396,7 @@ func TestUpdateIssueStateUsesConfiguredStateName(t *testing.T) {
 			})
 			return
 		case strings.Contains(req.Query, "mutation UpdateIssueState"):
-			updateStateID = req.Variables["stateId"]
+			updateStateID = stringVariable(req.Variables, "stateId")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
 					"issueUpdate": map[string]any{"success": true},
@@ -268,13 +431,15 @@ func TestUpdateIssueStateUsesConfiguredStateName(t *testing.T) {
 func TestListCandidateIssuesUsesConfiguredRuntimeStates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Query string `json:"query"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
 
-		if strings.Contains(req.Query, "query ListIssues") {
+		switch {
+		case strings.Contains(req.Query, "query ListIssues"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
 					"issues": map[string]any{
@@ -286,8 +451,16 @@ func TestListCandidateIssuesUsesConfiguredRuntimeStates(t *testing.T) {
 				},
 			})
 			return
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{"nodes": []map[string]any{}},
+				},
+			})
+			return
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
 	}))
 	defer srv.Close()
 
@@ -313,4 +486,19 @@ func TestListCandidateIssuesUsesConfiguredRuntimeStates(t *testing.T) {
 	if issues[0].Identifier != "COL-1" {
 		t.Fatalf("issue identifier = %q, want %q", issues[0].Identifier, "COL-1")
 	}
+}
+
+func stringVariable(variables map[string]any, key string) string {
+	if len(variables) == 0 {
+		return ""
+	}
+	raw, ok := variables[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }

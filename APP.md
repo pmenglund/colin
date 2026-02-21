@@ -87,7 +87,7 @@ Merge coordinates are read from issue metadata keys `colin.branch_name` and `col
 
 - Primary runtime(s): macOS (CLI process)
 - External services: Linear GraphQL API
-- Data stores: Linear issue state and metadata stored in issue descriptions, plus metadata stored in git branch metadata
+- Data stores: Linear issue state and metadata stored in Linear attachments, plus metadata stored in git branch metadata
 
 ## Repository Layout
 

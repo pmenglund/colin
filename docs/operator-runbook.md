@@ -130,9 +130,11 @@ Operational guidance:
 - Set merge-ready metadata for only one issue at a time to preserve queue semantics.
 - After an issue moves to `Done`, set the next issue in `Merge` to merge-ready.
 
-Metadata is stored in the issue description as a block like:
+Metadata is stored in a per-issue Linear attachment with URL:
 
-    <!-- colin:metadata {"colin.merge_ready":"true"} -->
+    https://github.com/pmenglund/colin/blob/main/docs/metadata.md
+
+Set `colin.merge_ready = "true"` in that attachment metadata object to allow `Merge -> Done`.
 
 If metadata is missing or set to false, Colin leaves the issue in `Merge`.
 
@@ -155,7 +157,7 @@ Symptom: issue remains in `In Progress` and logs indicate active lease owned by 
 Recovery options:
 
 1. Wait for lease expiration (`lease_ttl`, default 5 minutes).
-2. If immediate recovery is needed, clear lease metadata keys from issue description metadata block:
+2. If immediate recovery is needed, clear lease metadata keys from the issue metadata attachment:
    - `colin.lease_owner`
    - `colin.execution_id`
    - `colin.lease_expires_at`
@@ -171,14 +173,15 @@ Recovery:
 3. Run `git worktree prune` from repository root.
 4. Restart the worker; Colin recreates the worktree on next eligible transition.
 
-### Invalid metadata JSON in issue description
+### Missing or invalid metadata attachment
 
-Symptom: metadata parse errors prevent expected transitions.
+Symptom: expected metadata keys are absent or malformed in attachment metadata, preventing expected transitions.
 
 Recovery:
 
-1. Edit the issue description and remove/fix malformed `<!-- colin:metadata ... -->` block.
-2. Re-run one cycle:
+1. Edit/create the issue metadata attachment at `https://github.com/pmenglund/colin/blob/main/docs/metadata.md`.
+2. Ensure required keys are present with string values.
+3. Re-run one cycle:
 
        go run . --config ./colin.toml worker run --once
 
