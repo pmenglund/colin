@@ -317,7 +317,7 @@ func (c *HTTPClient) CreateIssueComment(ctx context.Context, issueID string, bod
 
 func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (string, error) {
 	c.mu.Lock()
-	cached := c.stateIDMap[stateName]
+	cached := resolveStateIDFromMap(c.stateIDMap, stateName)
 	c.mu.Unlock()
 	if cached != "" {
 		return cached, nil
@@ -352,7 +352,7 @@ func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (stri
 		stateIDMap[state.Name] = state.ID
 	}
 
-	id := stateIDMap[stateName]
+	id := resolveStateIDFromMap(stateIDMap, stateName)
 	if id == "" {
 		return "", fmt.Errorf("unknown workflow state %q", stateName)
 	}
@@ -364,6 +364,50 @@ func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (stri
 	c.mu.Unlock()
 
 	return id, nil
+}
+
+func resolveStateIDFromMap(stateIDMap map[string]string, stateName string) string {
+	if len(stateIDMap) == 0 {
+		return ""
+	}
+
+	if id := strings.TrimSpace(stateIDMap[stateName]); id != "" {
+		return id
+	}
+
+	normalized := normalizeStateName(stateName)
+	for candidate, id := range stateIDMap {
+		if normalizeStateName(candidate) == normalized && strings.TrimSpace(id) != "" {
+			return strings.TrimSpace(id)
+		}
+	}
+
+	for _, alias := range stateAliases(stateName) {
+		if id := strings.TrimSpace(stateIDMap[alias]); id != "" {
+			return id
+		}
+		normalizedAlias := normalizeStateName(alias)
+		for candidate, id := range stateIDMap {
+			if normalizeStateName(candidate) == normalizedAlias && strings.TrimSpace(id) != "" {
+				return strings.TrimSpace(id)
+			}
+		}
+	}
+
+	return ""
+}
+
+func normalizeStateName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+}
+
+func stateAliases(stateName string) []string {
+	switch normalizeStateName(stateName) {
+	case "review":
+		return []string{"In Review", "Human Review"}
+	default:
+		return nil
+	}
 }
 
 func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[string]string, decodePayload func(data json.RawMessage) error) error {

@@ -91,7 +91,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 			"transcript_ref":      map[string]any{"type": "string"},
 			"screenshot_ref":      map[string]any{"type": "string"},
 		},
-		"required":             []string{"is_well_specified", "needs_input_summary", "execution_summary"},
+		"required":             []string{"is_well_specified", "needs_input_summary", "execution_summary", "transcript_ref", "screenshot_ref"},
 		"additionalProperties": false,
 	})
 

@@ -23,7 +23,7 @@ type liveLinearAdmin struct {
 	endpoint   string
 	token      string
 	teamID     string
-	teamKey    string
+	team       string
 	httpClient *http.Client
 }
 
@@ -51,16 +51,42 @@ type liveLinearIssueInput struct {
 	StateID     string
 }
 
-func newLiveLinearAdmin(token string, teamID string, teamKey string) *liveLinearAdmin {
+func newLiveLinearAdmin(token string, team string) *liveLinearAdmin {
 	return &liveLinearAdmin{
 		endpoint: liveLinearEndpoint,
 		token:    strings.TrimSpace(token),
-		teamID:   strings.TrimSpace(teamID),
-		teamKey:  strings.TrimSpace(teamKey),
+		team:     strings.TrimSpace(team),
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 		},
 	}
+}
+
+func (a *liveLinearAdmin) resolveTeamIDByKey(ctx context.Context) (string, error) {
+	query := `query ResolveTeamByKey($teamKey: String!) {
+  teams(filter: { key: { eq: $teamKey } }, first: 1) {
+    nodes {
+      id
+      key
+    }
+  }
+}`
+
+	var resp struct {
+		Teams struct {
+			Nodes []struct {
+				ID  string `json:"id"`
+				Key string `json:"key"`
+			} `json:"nodes"`
+		} `json:"teams"`
+	}
+	if err := a.graphQL(ctx, query, map[string]any{"teamKey": a.team}, &resp); err != nil {
+		return "", err
+	}
+	if len(resp.Teams.Nodes) == 0 || strings.TrimSpace(resp.Teams.Nodes[0].ID) == "" {
+		return "", fmt.Errorf("team with key %q not found", a.team)
+	}
+	return strings.TrimSpace(resp.Teams.Nodes[0].ID), nil
 }
 
 func (a *liveLinearAdmin) stateIDByName(ctx context.Context) (map[string]string, error) {
@@ -81,7 +107,7 @@ func (a *liveLinearAdmin) stateIDByName(ctx context.Context) (map[string]string,
 			} `json:"nodes"`
 		} `json:"workflowStates"`
 	}
-	if err := a.graphQL(ctx, query, map[string]any{"teamKey": a.teamKey}, &resp); err != nil {
+	if err := a.graphQL(ctx, query, map[string]any{"teamKey": a.team}, &resp); err != nil {
 		return nil, err
 	}
 
@@ -93,6 +119,10 @@ func (a *liveLinearAdmin) stateIDByName(ctx context.Context) (map[string]string,
 }
 
 func (a *liveLinearAdmin) createProject(ctx context.Context, name string, description string) (liveLinearProject, error) {
+	if strings.TrimSpace(a.teamID) == "" {
+		return liveLinearProject{}, fmt.Errorf("team id is required")
+	}
+
 	mutation := `mutation CreateProject($input: ProjectCreateInput!) {
   projectCreate(input: $input) {
     success
@@ -136,6 +166,10 @@ func (a *liveLinearAdmin) createProject(ctx context.Context, name string, descri
 }
 
 func (a *liveLinearAdmin) createIssue(ctx context.Context, input liveLinearIssueInput) (liveLinearIssue, error) {
+	if strings.TrimSpace(a.teamID) == "" {
+		return liveLinearIssue{}, fmt.Errorf("team id is required")
+	}
+
 	mutation := `mutation CreateIssue($input: IssueCreateInput!) {
   issueCreate(input: $input) {
     success

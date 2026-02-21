@@ -28,28 +28,32 @@ type liveMergeFixture struct {
 	CommitSHA       string
 }
 
-func prepareLiveGitSandbox(t *testing.T, remoteURL string) *liveGitSandbox {
+func prepareLiveGitSandbox(t *testing.T) *liveGitSandbox {
 	t.Helper()
 
-	trimmedRemote := strings.TrimSpace(remoteURL)
-	if trimmedRemote == "" {
-		t.Fatal("sandbox remote url is required")
-	}
+	originPath := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "", "init", "--bare", originPath)
 
 	repoRoot := filepath.Join(t.TempDir(), "sandbox-repo")
-	runGit(t, "", "clone", trimmedRemote, repoRoot)
+	runGit(t, "", "clone", originPath, repoRoot)
 	runGit(t, repoRoot, "config", "user.email", "colin-live-e2e@example.com")
 	runGit(t, repoRoot, "config", "user.name", "Colin Live E2E")
-	runGit(t, repoRoot, "fetch", "origin", "main")
-	runGit(t, repoRoot, "checkout", "-B", "main", "origin/main")
-	runGit(t, repoRoot, "push", "origin", "main")
+
+	seedFile := filepath.Join(repoRoot, "README.md")
+	if err := os.WriteFile(seedFile, []byte("live e2e seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", seedFile, err)
+	}
+	runGit(t, repoRoot, "add", "README.md")
+	runGit(t, repoRoot, "commit", "-m", "seed")
+	runGit(t, repoRoot, "branch", "-M", "main")
+	runGit(t, repoRoot, "push", "-u", "origin", "main")
 
 	status := runGit(t, repoRoot, "status", "--porcelain")
 	if strings.TrimSpace(status) != "" {
 		t.Fatalf("sandbox clone is dirty before test run:\n%s", status)
 	}
 
-	return &liveGitSandbox{RepoRoot: repoRoot, RemoteURL: trimmedRemote}
+	return &liveGitSandbox{RepoRoot: repoRoot, RemoteURL: originPath}
 }
 
 func (s *liveGitSandbox) createMergeFixture(t *testing.T, issueIdentifier string, colinHome string) liveMergeFixture {

@@ -182,3 +182,82 @@ func TestCreateIssueComment(t *testing.T) {
 		t.Fatal("expected commentCreate mutation")
 	}
 }
+
+func TestResolveStateIDFromMapSupportsReviewAlias(t *testing.T) {
+	stateID := resolveStateIDFromMap(map[string]string{
+		"In Review": "state-in-review",
+	}, "Review")
+	if stateID != "state-in-review" {
+		t.Fatalf("resolveStateIDFromMap() = %q, want %q", stateID, "state-in-review")
+	}
+}
+
+func TestResolveStateIDFromMapSupportsHumanReviewAlias(t *testing.T) {
+	stateID := resolveStateIDFromMap(map[string]string{
+		"Human Review": "state-human-review",
+	}, "Review")
+	if stateID != "state-human-review" {
+		t.Fatalf("resolveStateIDFromMap() = %q, want %q", stateID, "state-human-review")
+	}
+}
+
+func TestUpdateIssueStateResolvesReviewAlias(t *testing.T) {
+	var updateStateID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string            `json:"query"`
+			Variables map[string]string `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(req.Query, "query GetIssue"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"id":          "1",
+						"identifier":  "COL-1",
+						"title":       "test",
+						"description": "x",
+						"updatedAt":   "2026-02-11T00:00:00Z",
+						"state":       map[string]any{"name": "In Progress"},
+					},
+				},
+			})
+			return
+		case strings.Contains(req.Query, "query WorkflowStates"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"workflowStates": map[string]any{
+						"nodes": []map[string]any{
+							{"id": "state-in-review", "name": "In Review"},
+						},
+					},
+				},
+			})
+			return
+		case strings.Contains(req.Query, "mutation UpdateIssueState"):
+			updateStateID = req.Variables["stateId"]
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueUpdate": map[string]any{"success": true},
+				},
+			})
+			return
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "COLIN", srv.Client())
+	if err := client.UpdateIssueState(context.Background(), "1", "Review"); err != nil {
+		t.Fatalf("UpdateIssueState() error = %v", err)
+	}
+	if updateStateID != "state-in-review" {
+		t.Fatalf("UpdateIssueState() stateId = %q, want %q", updateStateID, "state-in-review")
+	}
+}

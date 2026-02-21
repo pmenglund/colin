@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,23 +21,17 @@ import (
 )
 
 const (
-	liveEnvEnabled        = "COLIN_LIVE_E2E"
-	liveEnvLinearToken    = "COLIN_LIVE_LINEAR_API_TOKEN"
-	liveEnvLinearTeamKey  = "COLIN_LIVE_LINEAR_TEAM_KEY"
-	liveEnvLinearTeamID   = "COLIN_LIVE_LINEAR_TEAM_ID"
-	liveEnvSandboxRepoURL = "COLIN_LIVE_GIT_SANDBOX_REPO_URL"
+	liveEnvLinearToken = "COLIN_LIVE_LINEAR_API_TOKEN"
+	liveEnvLinearTeam  = "COLIN_LIVE_LINEAR_TEAM"
 )
 
 type liveHarnessEnv struct {
-	LinearToken    string
-	LinearTeamKey  string
-	LinearTeamID   string
-	SandboxRepoURL string
-	CodexHome      string
+	LinearToken string
+	LinearTeam  string
 }
 
 func TestLifecycleLiveExternalSystems(t *testing.T) {
-	env := loadLiveHarnessEnvOrSkip(t)
+	env := loadLiveHarnessEnvOrFail(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -46,19 +41,22 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 		t.Fatalf("generate run suffix: %v", err)
 	}
 
-	admin := newLiveLinearAdmin(env.LinearToken, env.LinearTeamID, env.LinearTeamKey)
+	admin := newLiveLinearAdmin(env.LinearToken, env.LinearTeam)
+	teamID, err := admin.resolveTeamIDByKey(ctx)
+	if err != nil {
+		t.Fatalf("resolve team id for %q: %v", env.LinearTeam, err)
+	}
+	admin.teamID = teamID
+
 	stateIDs, err := admin.stateIDByName(ctx)
 	if err != nil {
 		t.Fatalf("load state ids: %v", err)
 	}
-	todoStateID, ok := stateIDs[workflow.StateTodo]
-	if !ok {
-		t.Fatalf("state id missing for %q", workflow.StateTodo)
-	}
-	mergeStateID, ok := stateIDs[workflow.StateMerge]
-	if !ok {
-		t.Fatalf("state id missing for %q", workflow.StateMerge)
-	}
+	_, todoStateID := mustResolveLiveState(t, stateIDs, workflow.StateTodo)
+	_, mergeStateID := mustResolveLiveState(t, stateIDs, workflow.StateMerge)
+	refineStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateRefine)
+	reviewStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateReview)
+	doneStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateDone)
 
 	projectName := "COLIN LIVE E2E " + strings.ToUpper(suffix)
 	project, err := admin.createProject(ctx, projectName, "Temporary project created by TestLifecycleLiveExternalSystems")
@@ -78,15 +76,23 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 
 		for _, issueID := range artifactIssueIDs {
 			if err := admin.archiveIssue(cleanupCtx, issueID); err != nil {
+				if isLiveNotFoundError(err) {
+					t.Logf("archive issue %s skipped: %v", issueID, err)
+					continue
+				}
 				t.Errorf("archive issue %s: %v", issueID, err)
 			}
 		}
 		if err := admin.archiveProject(cleanupCtx, project.ID); err != nil {
+			if isLiveNotFoundError(err) {
+				t.Logf("archive project %s skipped: %v", project.ID, err)
+				return
+			}
 			t.Errorf("archive project %s: %v", project.ID, err)
 		}
 	}()
 
-	sandbox := prepareLiveGitSandbox(t, env.SandboxRepoURL)
+	sandbox := prepareLiveGitSandbox(t)
 	repoRoot := mustRepoRoot(t)
 	promptPath := filepath.Join(repoRoot, "e2e", "testdata", "live_work_prompt.md")
 	if _, err := os.Stat(promptPath); err != nil {
@@ -96,6 +102,10 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	colinHome := filepath.Join(t.TempDir(), "colin-home")
 	if err := os.MkdirAll(colinHome, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", colinHome, err)
+	}
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	if err := prepareTempCodexHome(codexHome); err != nil {
+		t.Fatalf("prepare CODEX_HOME (%s): %v", codexHome, err)
 	}
 	configPath := filepath.Join(t.TempDir(), "colin-live-e2e.toml")
 	workerID := "live-e2e-" + suffix
@@ -150,16 +160,16 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 
 	trackedIssueIDs := []string{issueRefine.ID, issueReview.ID, issueMerge.ID}
 	terminalStates := map[string]struct{}{
-		workflow.StateReview: {},
-		workflow.StateRefine: {},
-		workflow.StateDone:   {},
+		reviewStateName: {},
+		refineStateName: {},
+		doneStateName:   {},
 	}
 
 	issuesByID := map[string]liveLinearIssue{}
 	maxCycles := 14
 	converged := false
 	for cycle := 1; cycle <= maxCycles; cycle++ {
-		output, err := runLiveWorkerOnce(binaryPath, sandbox.RepoRoot, configPath, env.CodexHome)
+		output, err := runLiveWorkerOnce(binaryPath, sandbox.RepoRoot, configPath, codexHome)
 		t.Logf("worker cycle %d output:\n%s", cycle, strings.TrimSpace(output))
 		if err != nil {
 			t.Fatalf("run worker cycle %d: %v", cycle, err)
@@ -192,14 +202,14 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	finalReview := issuesByID[issueReview.ID]
 	finalMerge := issuesByID[issueMerge.ID]
 
-	if finalRefine.StateName != workflow.StateRefine {
-		t.Fatalf("refine issue final state = %q, want %q", finalRefine.StateName, workflow.StateRefine)
+	if finalRefine.StateName != refineStateName {
+		t.Fatalf("refine issue final state = %q, want %q", finalRefine.StateName, refineStateName)
 	}
-	if finalReview.StateName != workflow.StateReview {
-		t.Fatalf("review issue final state = %q, want %q", finalReview.StateName, workflow.StateReview)
+	if finalReview.StateName != reviewStateName {
+		t.Fatalf("review issue final state = %q, want %q", finalReview.StateName, reviewStateName)
 	}
-	if finalMerge.StateName != workflow.StateDone {
-		t.Fatalf("merge issue final state = %q, want %q", finalMerge.StateName, workflow.StateDone)
+	if finalMerge.StateName != doneStateName {
+		t.Fatalf("merge issue final state = %q, want %q", finalMerge.StateName, doneStateName)
 	}
 
 	assertLiveIssueContainsComment(t, finalRefine, "Moved to **Refine**")
@@ -229,19 +239,12 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	cleanupOnSuccess = true
 }
 
-func loadLiveHarnessEnvOrSkip(t *testing.T) liveHarnessEnv {
+func loadLiveHarnessEnvOrFail(t *testing.T) liveHarnessEnv {
 	t.Helper()
 
-	if strings.TrimSpace(os.Getenv(liveEnvEnabled)) != "1" {
-		t.Skipf("set %s=1 to run live external lifecycle harness", liveEnvEnabled)
-	}
-
 	required := map[string]string{
-		liveEnvLinearToken:    strings.TrimSpace(os.Getenv(liveEnvLinearToken)),
-		liveEnvLinearTeamKey:  strings.TrimSpace(os.Getenv(liveEnvLinearTeamKey)),
-		liveEnvLinearTeamID:   strings.TrimSpace(os.Getenv(liveEnvLinearTeamID)),
-		liveEnvSandboxRepoURL: strings.TrimSpace(os.Getenv(liveEnvSandboxRepoURL)),
-		"CODEX_HOME":          strings.TrimSpace(os.Getenv("CODEX_HOME")),
+		liveEnvLinearToken: strings.TrimSpace(os.Getenv(liveEnvLinearToken)),
+		liveEnvLinearTeam:  strings.TrimSpace(os.Getenv(liveEnvLinearTeam)),
 	}
 	missing := make([]string, 0, len(required))
 	for key, value := range required {
@@ -251,20 +254,12 @@ func loadLiveHarnessEnvOrSkip(t *testing.T) liveHarnessEnv {
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		t.Skipf("live harness requires env vars: %s", strings.Join(missing, ", "))
-	}
-
-	codexHome := required["CODEX_HOME"]
-	if err := ensureWritableDir(codexHome); err != nil {
-		t.Skipf("CODEX_HOME is not writable (%s): %v", codexHome, err)
+		t.Fatalf("live harness requires env vars: %s", strings.Join(missing, ", "))
 	}
 
 	return liveHarnessEnv{
-		LinearToken:    required[liveEnvLinearToken],
-		LinearTeamKey:  required[liveEnvLinearTeamKey],
-		LinearTeamID:   required[liveEnvLinearTeamID],
-		SandboxRepoURL: required[liveEnvSandboxRepoURL],
-		CodexHome:      codexHome,
+		LinearToken: required[liveEnvLinearToken],
+		LinearTeam:  required[liveEnvLinearTeam],
 	}
 }
 
@@ -280,6 +275,160 @@ func ensureWritableDir(path string) error {
 		return err
 	}
 	return os.Remove(probe)
+}
+
+func mustResolveLiveState(t *testing.T, stateIDs map[string]string, canonical string) (string, string) {
+	t.Helper()
+
+	if id, ok := stateIDs[canonical]; ok && strings.TrimSpace(id) != "" {
+		return canonical, strings.TrimSpace(id)
+	}
+
+	normalizedCanonical := normalizeLiveStateName(canonical)
+	for name, id := range stateIDs {
+		if normalizeLiveStateName(name) == normalizedCanonical && strings.TrimSpace(id) != "" {
+			return name, strings.TrimSpace(id)
+		}
+	}
+
+	for _, alias := range liveStateAliases(canonical) {
+		if id, ok := stateIDs[alias]; ok && strings.TrimSpace(id) != "" {
+			return alias, strings.TrimSpace(id)
+		}
+		normalizedAlias := normalizeLiveStateName(alias)
+		for name, id := range stateIDs {
+			if normalizeLiveStateName(name) == normalizedAlias && strings.TrimSpace(id) != "" {
+				return name, strings.TrimSpace(id)
+			}
+		}
+	}
+
+	available := make([]string, 0, len(stateIDs))
+	for name := range stateIDs {
+		available = append(available, name)
+	}
+	sort.Strings(available)
+	t.Fatalf("state id missing for %q (available states: %s)", canonical, strings.Join(available, ", "))
+	return "", ""
+}
+
+func normalizeLiveStateName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+}
+
+func liveStateAliases(canonical string) []string {
+	switch normalizeLiveStateName(canonical) {
+	case normalizeLiveStateName(workflow.StateReview):
+		return []string{"In Review", "Human Review"}
+	default:
+		return nil
+	}
+}
+
+func isLiveNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "entity not found") || strings.Contains(message, "not found")
+}
+
+func prepareTempCodexHome(target string) error {
+	if err := ensureWritableDir(target); err != nil {
+		return err
+	}
+
+	source, err := codexHomeSeedSource()
+	if err != nil {
+		return err
+	}
+	return copyDirContents(source, target)
+}
+
+func codexHomeSeedSource() (string, error) {
+	source := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if source == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home directory: %w", err)
+		}
+		source = filepath.Join(home, ".codex")
+	}
+	source = filepath.Clean(source)
+
+	info, err := os.Stat(source)
+	if err != nil {
+		return "", fmt.Errorf("resolve codex home seed source %q: %w", source, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("codex home seed source %q is not a directory", source)
+	}
+	return source, nil
+}
+
+func copyDirContents(source string, target string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return fmt.Errorf("read seed source %q: %w", source, err)
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(source, entry.Name())
+		dstPath := filepath.Join(target, entry.Name())
+		if err := copyEntry(srcPath, dstPath, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyEntry(srcPath string, dstPath string, entry os.DirEntry) error {
+	if entry.IsDir() {
+		if err := os.MkdirAll(dstPath, 0o755); err != nil {
+			return fmt.Errorf("mkdir %q: %w", dstPath, err)
+		}
+		return copyDirContents(srcPath, dstPath)
+	}
+
+	if entry.Type()&os.ModeSymlink != 0 {
+		linkTarget, err := os.Readlink(srcPath)
+		if err != nil {
+			return fmt.Errorf("read symlink %q: %w", srcPath, err)
+		}
+		if err := os.Symlink(linkTarget, dstPath); err != nil {
+			return fmt.Errorf("create symlink %q -> %q: %w", dstPath, linkTarget, err)
+		}
+		return nil
+	}
+
+	if !entry.Type().IsRegular() {
+		return nil
+	}
+
+	info, err := entry.Info()
+	if err != nil {
+		return fmt.Errorf("stat %q: %w", srcPath, err)
+	}
+	return copyRegularFile(srcPath, dstPath, info.Mode().Perm())
+}
+
+func copyRegularFile(srcPath string, dstPath string, perm os.FileMode) error {
+	sourceFile, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", srcPath, err)
+	}
+	defer sourceFile.Close()
+
+	targetFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return fmt.Errorf("create %q: %w", dstPath, err)
+	}
+	defer targetFile.Close()
+
+	if _, err := io.Copy(targetFile, sourceFile); err != nil {
+		return fmt.Errorf("copy %q to %q: %w", srcPath, dstPath, err)
+	}
+	return nil
 }
 
 func liveRunSuffix() (string, error) {
@@ -302,7 +451,7 @@ poll_every = "1s"
 lease_ttl = "5m"
 max_concurrency = 4
 dry_run = false
-`, env.LinearToken, env.LinearTeamKey, liveLinearEndpoint, promptPath, colinHome, workerID)
+`, env.LinearToken, env.LinearTeam, liveLinearEndpoint, promptPath, colinHome, workerID)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
