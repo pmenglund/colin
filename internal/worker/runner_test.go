@@ -38,9 +38,7 @@ func newFakeLinearClient(state *fakeClientState) *fakes.FakeClient {
 
 		out := make([]linear.Issue, 0, len(state.issues))
 		for _, issue := range state.issues {
-			if issue.StateName == workflow.StateTodo || issue.StateName == workflow.StateInProgress || issue.StateName == workflow.StateMerge {
-				out = append(out, cloneIssue(issue))
-			}
+			out = append(out, cloneIssue(issue))
 		}
 		sort.Slice(out, func(i, j int) bool {
 			return out[i].ID < out[j].ID
@@ -829,6 +827,64 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
 	if comments[0] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
+	}
+}
+
+func TestRunnerUsesConfiguredWorkflowStateNames(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   "Doing",
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		States: workflow.States{
+			Todo:       "Backlog",
+			InProgress: "Doing",
+			Refine:     "Needs Spec",
+			Review:     "Human Review",
+			Merge:      "Merge Queue",
+			Done:       "Closed",
+		},
+		Clock:  time.Now,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if got := state.issues["1"].StateName; got != "Human Review" {
+		t.Fatalf("StateName = %q, want %q", got, "Human Review")
+	}
+	comments := state.comments["1"]
+	if len(comments) != 1 {
+		t.Fatalf("comment count = %d, want 1", len(comments))
+	}
+	if !strings.Contains(comments[0], "Moved to **Human Review**") {
+		t.Fatalf("comment body = %q, want configured review state", comments[0])
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 // InMemoryClient is a thread-safe fake Linear client for local and e2e testing.
@@ -14,6 +16,7 @@ type InMemoryClient struct {
 	mu       sync.Mutex
 	issues   map[string]Issue
 	comments map[string][]string
+	states   workflow.States
 }
 
 // NewInMemoryClient returns a fake Linear client seeded with provided issues.
@@ -30,6 +33,7 @@ func NewInMemoryClient(seed []Issue) *InMemoryClient {
 	return &InMemoryClient{
 		issues:   issues,
 		comments: map[string][]string{},
+		states:   workflow.DefaultStates(),
 	}
 }
 
@@ -46,6 +50,19 @@ func NewDefaultInMemoryClient() *InMemoryClient {
 	})
 }
 
+// SetWorkflowStates configures runtime workflow state names.
+func (c *InMemoryClient) SetWorkflowStates(states workflow.States) error {
+	states = states.WithDefaults()
+	if err := states.Validate(); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.states = states
+	c.mu.Unlock()
+	return nil
+}
+
 // ListCandidateIssues returns all issues in states Colin can process automatically.
 func (c *InMemoryClient) ListCandidateIssues(ctx context.Context, _ string) ([]Issue, error) {
 	if err := ctx.Err(); err != nil {
@@ -54,13 +71,14 @@ func (c *InMemoryClient) ListCandidateIssues(ctx context.Context, _ string) ([]I
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	states := c.states.WithDefaults()
 
 	out := make([]Issue, 0, len(c.issues))
 	for _, issue := range c.issues {
-		if !isCandidateState(issue.StateName) {
+		if !states.IsCandidate(issue.StateName) {
 			continue
 		}
-		if issueHasBlockingDependency(issue, c.issues) {
+		if issueHasBlockingDependency(issue, c.issues, states) {
 			continue
 		}
 		out = append(out, cloneInMemoryIssue(issue))
@@ -162,7 +180,7 @@ func cloneInMemoryIssue(issue Issue) Issue {
 	return out
 }
 
-func issueHasBlockingDependency(issue Issue, issues map[string]Issue) bool {
+func issueHasBlockingDependency(issue Issue, issues map[string]Issue, states workflow.States) bool {
 	for _, blockedByID := range issue.BlockedBy {
 		dependencyID := strings.TrimSpace(blockedByID)
 		if dependencyID == "" {
@@ -172,7 +190,7 @@ func issueHasBlockingDependency(issue Issue, issues map[string]Issue) bool {
 		if !ok {
 			return true
 		}
-		if strings.TrimSpace(dependency.StateName) != "Done" {
+		if !states.IsDone(dependency.StateName) {
 			return true
 		}
 	}

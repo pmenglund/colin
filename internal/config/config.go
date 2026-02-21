@@ -10,6 +10,7 @@ import (
 	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 const (
@@ -42,20 +43,86 @@ type Config struct {
 	LeaseTTL       time.Duration
 	MaxConcurrency int
 	DryRun         bool
+	WorkflowStates WorkflowStates
 }
 
 type fileConfig struct {
-	LinearAPIToken string `toml:"linear_api_token"`
-	LinearTeamID   string `toml:"linear_team_id"`
-	LinearBaseURL  string `toml:"linear_base_url"`
-	LinearBackend  string `toml:"linear_backend"`
-	WorkPromptPath string `toml:"work_prompt_path"`
-	ColinHome      string `toml:"colin_home"`
-	WorkerID       string `toml:"worker_id"`
-	PollEvery      string `toml:"poll_every"`
-	LeaseTTL       string `toml:"lease_ttl"`
-	MaxConcurrency *int   `toml:"max_concurrency"`
-	DryRun         *bool  `toml:"dry_run"`
+	LinearAPIToken string         `toml:"linear_api_token"`
+	LinearTeamID   string         `toml:"linear_team_id"`
+	LinearBaseURL  string         `toml:"linear_base_url"`
+	LinearBackend  string         `toml:"linear_backend"`
+	WorkPromptPath string         `toml:"work_prompt_path"`
+	ColinHome      string         `toml:"colin_home"`
+	WorkerID       string         `toml:"worker_id"`
+	PollEvery      string         `toml:"poll_every"`
+	LeaseTTL       string         `toml:"lease_ttl"`
+	MaxConcurrency *int           `toml:"max_concurrency"`
+	DryRun         *bool          `toml:"dry_run"`
+	WorkflowStates WorkflowStates `toml:"workflow_states"`
+}
+
+// WorkflowStates configures canonical workflow states to actual Linear state names.
+type WorkflowStates struct {
+	Todo       string `toml:"todo"`
+	InProgress string `toml:"in_progress"`
+	Refine     string `toml:"refine"`
+	Review     string `toml:"review"`
+	Merge      string `toml:"merge"`
+	Done       string `toml:"done"`
+}
+
+// DefaultWorkflowStates returns canonical workflow state mapping defaults.
+func DefaultWorkflowStates() WorkflowStates {
+	return WorkflowStates{
+		Todo:       workflow.StateTodo,
+		InProgress: workflow.StateInProgress,
+		Refine:     workflow.StateRefine,
+		Review:     workflow.StateReview,
+		Merge:      workflow.StateMerge,
+		Done:       workflow.StateDone,
+	}
+}
+
+// WithDefaults fills blank configured values with canonical defaults.
+func (w WorkflowStates) WithDefaults() WorkflowStates {
+	defaults := DefaultWorkflowStates()
+	if strings.TrimSpace(w.Todo) == "" {
+		w.Todo = defaults.Todo
+	}
+	if strings.TrimSpace(w.InProgress) == "" {
+		w.InProgress = defaults.InProgress
+	}
+	if strings.TrimSpace(w.Refine) == "" {
+		w.Refine = defaults.Refine
+	}
+	if strings.TrimSpace(w.Review) == "" {
+		w.Review = defaults.Review
+	}
+	if strings.TrimSpace(w.Merge) == "" {
+		w.Merge = defaults.Merge
+	}
+	if strings.TrimSpace(w.Done) == "" {
+		w.Done = defaults.Done
+	}
+	return w
+}
+
+// Validate reports whether configured workflow states are complete and unique.
+func (w WorkflowStates) Validate() error {
+	return w.AsRuntimeStates().Validate()
+}
+
+// AsRuntimeStates returns workflow runtime state names with defaults applied.
+func (w WorkflowStates) AsRuntimeStates() workflow.States {
+	w = w.WithDefaults()
+	return workflow.States{
+		Todo:       strings.TrimSpace(w.Todo),
+		InProgress: strings.TrimSpace(w.InProgress),
+		Refine:     strings.TrimSpace(w.Refine),
+		Review:     strings.TrimSpace(w.Review),
+		Merge:      strings.TrimSpace(w.Merge),
+		Done:       strings.TrimSpace(w.Done),
+	}
 }
 
 // Load reads configuration from colin.toml (or COLIN_CONFIG) and applies
@@ -76,6 +143,7 @@ func LoadFromPath(configPath string) (Config, error) {
 		PollEvery:      defaultPollEvery,
 		LeaseTTL:       defaultLeaseTTL,
 		MaxConcurrency: defaultMaxConcurrency,
+		WorkflowStates: DefaultWorkflowStates(),
 	}
 
 	configPath = strings.TrimSpace(configPath)
@@ -108,6 +176,7 @@ func LoadFromEnv() (Config, error) {
 		PollEvery:      defaultPollEvery,
 		LeaseTTL:       defaultLeaseTTL,
 		MaxConcurrency: defaultMaxConcurrency,
+		WorkflowStates: DefaultWorkflowStates(),
 	}
 
 	if err := applyEnvOverrides(&cfg); err != nil {
@@ -177,8 +246,32 @@ func applyFileConfig(cfg *Config, path string) error {
 	if parsed.MaxConcurrency != nil {
 		cfg.MaxConcurrency = *parsed.MaxConcurrency
 	}
+	cfg.WorkflowStates = mergeWorkflowStateOverrides(cfg.WorkflowStates, parsed.WorkflowStates)
 
 	return nil
+}
+
+func mergeWorkflowStateOverrides(base WorkflowStates, overrides WorkflowStates) WorkflowStates {
+	base = base.WithDefaults()
+	if strings.TrimSpace(overrides.Todo) != "" {
+		base.Todo = strings.TrimSpace(overrides.Todo)
+	}
+	if strings.TrimSpace(overrides.InProgress) != "" {
+		base.InProgress = strings.TrimSpace(overrides.InProgress)
+	}
+	if strings.TrimSpace(overrides.Refine) != "" {
+		base.Refine = strings.TrimSpace(overrides.Refine)
+	}
+	if strings.TrimSpace(overrides.Review) != "" {
+		base.Review = strings.TrimSpace(overrides.Review)
+	}
+	if strings.TrimSpace(overrides.Merge) != "" {
+		base.Merge = strings.TrimSpace(overrides.Merge)
+	}
+	if strings.TrimSpace(overrides.Done) != "" {
+		base.Done = strings.TrimSpace(overrides.Done)
+	}
+	return base
 }
 
 func applyEnvOverrides(cfg *Config) error {
@@ -266,6 +359,9 @@ func (c Config) Validate() error {
 	}
 	if c.WorkerID == "" {
 		return errors.New("COLIN_WORKER_ID must not be empty")
+	}
+	if err := c.WorkflowStates.Validate(); err != nil {
+		return fmt.Errorf("workflow_states: %w", err)
 	}
 	return nil
 }

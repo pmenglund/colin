@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 func TestUpsertMetadata(t *testing.T) {
@@ -183,25 +185,16 @@ func TestCreateIssueComment(t *testing.T) {
 	}
 }
 
-func TestResolveStateIDFromMapSupportsReviewAlias(t *testing.T) {
-	stateID := resolveStateIDFromMap(map[string]string{
-		"In Review": "state-in-review",
-	}, "Review")
-	if stateID != "state-in-review" {
-		t.Fatalf("resolveStateIDFromMap() = %q, want %q", stateID, "state-in-review")
-	}
-}
-
-func TestResolveStateIDFromMapSupportsHumanReviewAlias(t *testing.T) {
+func TestResolveStateIDFromMapSupportsNormalizedMatching(t *testing.T) {
 	stateID := resolveStateIDFromMap(map[string]string{
 		"Human Review": "state-human-review",
-	}, "Review")
+	}, "  human   review ")
 	if stateID != "state-human-review" {
 		t.Fatalf("resolveStateIDFromMap() = %q, want %q", stateID, "state-human-review")
 	}
 }
 
-func TestUpdateIssueStateResolvesReviewAlias(t *testing.T) {
+func TestUpdateIssueStateUsesConfiguredStateName(t *testing.T) {
 	var updateStateID string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +226,7 @@ func TestUpdateIssueStateResolvesReviewAlias(t *testing.T) {
 				"data": map[string]any{
 					"workflowStates": map[string]any{
 						"nodes": []map[string]any{
-							{"id": "state-in-review", "name": "In Review"},
+							{"id": "state-human-review", "name": "Human Review"},
 						},
 					},
 				},
@@ -254,10 +247,70 @@ func TestUpdateIssueStateResolvesReviewAlias(t *testing.T) {
 	defer srv.Close()
 
 	client := NewHTTPClient(srv.URL, "token", "COLIN", srv.Client())
-	if err := client.UpdateIssueState(context.Background(), "1", "Review"); err != nil {
+	if err := client.SetWorkflowStates(workflow.States{
+		Todo:       "Todo",
+		InProgress: "In Progress",
+		Refine:     "Refine",
+		Review:     "Human Review",
+		Merge:      "Merge",
+		Done:       "Done",
+	}); err != nil {
+		t.Fatalf("SetWorkflowStates() error = %v", err)
+	}
+	if err := client.UpdateIssueState(context.Background(), "1", "Human Review"); err != nil {
 		t.Fatalf("UpdateIssueState() error = %v", err)
 	}
-	if updateStateID != "state-in-review" {
-		t.Fatalf("UpdateIssueState() stateId = %q, want %q", updateStateID, "state-in-review")
+	if updateStateID != "state-human-review" {
+		t.Fatalf("UpdateIssueState() stateId = %q, want %q", updateStateID, "state-human-review")
+	}
+}
+
+func TestListCandidateIssuesUsesConfiguredRuntimeStates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if strings.Contains(req.Query, "query ListIssues") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{
+							{"id": "1", "identifier": "COL-1", "title": "custom todo", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Backlog"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
+							{"id": "2", "identifier": "COL-2", "title": "custom done", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Closed"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
+						},
+					},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	if err := client.SetWorkflowStates(workflow.States{
+		Todo:       "Backlog",
+		InProgress: "Doing",
+		Refine:     "Needs Spec",
+		Review:     "Human Review",
+		Merge:      "Merge Queue",
+		Done:       "Closed",
+	}); err != nil {
+		t.Fatalf("SetWorkflowStates() error = %v", err)
+	}
+
+	issues, err := client.ListCandidateIssues(context.Background(), "team")
+	if err != nil {
+		t.Fatalf("ListCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("candidate issue count = %d, want 1", len(issues))
+	}
+	if issues[0].Identifier != "COL-1" {
+		t.Fatalf("issue identifier = %q, want %q", issues[0].Identifier, "COL-1")
 	}
 }

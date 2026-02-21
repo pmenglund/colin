@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 func TestInMemoryClientListCandidateIssuesFiltersStates(t *testing.T) {
@@ -148,5 +150,31 @@ func TestNewDefaultInMemoryClientHasSeedIssue(t *testing.T) {
 	}
 	if len(issues) == 0 {
 		t.Fatal("expected default client to have at least one seeded issue")
+	}
+}
+
+func TestInMemoryClientUsesConfiguredRuntimeStates(t *testing.T) {
+	client := NewInMemoryClient([]Issue{
+		{ID: "1", Identifier: "COL-1", StateName: "Backlog", Description: "spec"},
+		{ID: "2", Identifier: "COL-2", StateName: "Blocked", Description: "blocked", BlockedBy: []string{"3"}},
+		{ID: "3", Identifier: "COL-3", StateName: "Closed", Description: "done"},
+	})
+	if err := client.SetWorkflowStates(workflow.States{
+		Todo:       "Backlog",
+		InProgress: "Blocked",
+		Refine:     "Needs Spec",
+		Review:     "Review",
+		Merge:      "Merge Queue",
+		Done:       "Closed",
+	}); err != nil {
+		t.Fatalf("SetWorkflowStates() error = %v", err)
+	}
+
+	issues, err := client.ListCandidateIssues(context.Background(), "team")
+	if err != nil {
+		t.Fatalf("ListCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("candidate issue count = %d, want 2", len(issues))
 	}
 }

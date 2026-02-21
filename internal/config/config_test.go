@@ -53,6 +53,9 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	if cfg.WorkPromptPath != "" {
 		t.Fatalf("WorkPromptPath = %q, want empty", cfg.WorkPromptPath)
 	}
+	if cfg.WorkflowStates != DefaultWorkflowStates() {
+		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
+	}
 }
 
 func TestLoadFromEnvOverrides(t *testing.T) {
@@ -217,6 +220,9 @@ poll_every = "15s"
 	if cfg.WorkPromptPath != "/tmp/file-work-prompt.md" {
 		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
 	}
+	if cfg.WorkflowStates != DefaultWorkflowStates() {
+		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
+	}
 }
 
 func TestLoadEnvOverridesFile(t *testing.T) {
@@ -307,5 +313,61 @@ func TestLoadUsesCOLIN_CONFIGByDefault(t *testing.T) {
 	}
 	if cfg.LinearTeamID != "file-team" {
 		t.Fatalf("LinearTeamID = %q", cfg.LinearTeamID)
+	}
+}
+
+func TestLoadFromFileWorkflowStatesPartialOverride(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "colin.toml")
+	content := `linear_api_token = "file-token"
+linear_team_id = "file-team"
+
+[workflow_states]
+review = "Human Review"
+refine = "Needs Spec"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	t.Setenv("LINEAR_API_TOKEN", "")
+	t.Setenv("LINEAR_TEAM_ID", "")
+
+	cfg, err := LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+
+	want := DefaultWorkflowStates()
+	want.Review = "Human Review"
+	want.Refine = "Needs Spec"
+	if cfg.WorkflowStates != want {
+		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, want)
+	}
+}
+
+func TestLoadFromPathRejectsDuplicateWorkflowStates(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "colin.toml")
+	content := `linear_api_token = "file-token"
+linear_team_id = "file-team"
+
+[workflow_states]
+todo = "Todo"
+in_progress = "todo"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	t.Setenv("LINEAR_API_TOKEN", "")
+	t.Setenv("LINEAR_TEAM_ID", "")
+
+	_, err := LoadFromPath(configPath)
+	if err == nil {
+		t.Fatal("LoadFromPath() error = nil, want duplicate workflow states error")
+	}
+	if !strings.Contains(err.Error(), "workflow_states") {
+		t.Fatalf("error = %q, want workflow_states context", err.Error())
 	}
 }

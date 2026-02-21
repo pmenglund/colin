@@ -52,8 +52,9 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state ids: %v", err)
 	}
-	_, todoStateID := mustResolveLiveState(t, stateIDs, workflow.StateTodo)
-	_, mergeStateID := mustResolveLiveState(t, stateIDs, workflow.StateMerge)
+	todoStateName, todoStateID := mustResolveLiveState(t, stateIDs, workflow.StateTodo)
+	inProgressStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateInProgress)
+	mergeStateName, mergeStateID := mustResolveLiveState(t, stateIDs, workflow.StateMerge)
 	refineStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateRefine)
 	reviewStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateReview)
 	doneStateName, _ := mustResolveLiveState(t, stateIDs, workflow.StateDone)
@@ -83,12 +84,12 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 				t.Errorf("archive issue %s: %v", issueID, err)
 			}
 		}
-		if err := admin.archiveProject(cleanupCtx, project.ID); err != nil {
+		if err := admin.deleteProject(cleanupCtx, project.ID); err != nil {
 			if isLiveNotFoundError(err) {
-				t.Logf("archive project %s skipped: %v", project.ID, err)
+				t.Logf("delete project %s skipped: %v", project.ID, err)
 				return
 			}
-			t.Errorf("archive project %s: %v", project.ID, err)
+			t.Errorf("delete project %s: %v", project.ID, err)
 		}
 	}()
 
@@ -109,7 +110,14 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	}
 	configPath := filepath.Join(t.TempDir(), "colin-live-e2e.toml")
 	workerID := "live-e2e-" + suffix
-	if err := writeLiveWorkerConfig(configPath, env, workerID, colinHome, promptPath); err != nil {
+	if err := writeLiveWorkerConfig(configPath, env, workerID, colinHome, promptPath, workflow.States{
+		Todo:       todoStateName,
+		InProgress: inProgressStateName,
+		Refine:     refineStateName,
+		Review:     reviewStateName,
+		Merge:      mergeStateName,
+		Done:       doneStateName,
+	}); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -212,8 +220,8 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 		t.Fatalf("merge issue final state = %q, want %q", finalMerge.StateName, doneStateName)
 	}
 
-	assertLiveIssueContainsComment(t, finalRefine, "Moved to **Refine**")
-	assertLiveIssueContainsComment(t, finalReview, "Moved to **Review**")
+	assertLiveIssueContainsComment(t, finalRefine, fmt.Sprintf("Moved to **%s**", refineStateName))
+	assertLiveIssueContainsComment(t, finalReview, fmt.Sprintf("Moved to **%s**", reviewStateName))
 
 	assertLiveMetadataKeyPresent(t, finalReview, workflow.MetaWorktreePath)
 	assertLiveMetadataKeyPresent(t, finalReview, workflow.MetaBranchName)
@@ -439,7 +447,8 @@ func liveRunSuffix() (string, error) {
 	return time.Now().UTC().Format("20060102-150405") + "-" + strings.ToLower(hex.EncodeToString(random)), nil
 }
 
-func writeLiveWorkerConfig(path string, env liveHarnessEnv, workerID string, colinHome string, promptPath string) error {
+func writeLiveWorkerConfig(path string, env liveHarnessEnv, workerID string, colinHome string, promptPath string, states workflow.States) error {
+	states = states.WithDefaults()
 	content := fmt.Sprintf(`linear_api_token = %q
 linear_team_id = %q
 linear_base_url = %q
@@ -451,7 +460,15 @@ poll_every = "1s"
 lease_ttl = "5m"
 max_concurrency = 4
 dry_run = false
-`, env.LinearToken, env.LinearTeam, liveLinearEndpoint, promptPath, colinHome, workerID)
+
+[workflow_states]
+todo = %q
+in_progress = %q
+refine = %q
+review = %q
+merge = %q
+done = %q
+`, env.LinearToken, env.LinearTeam, liveLinearEndpoint, promptPath, colinHome, workerID, states.Todo, states.InProgress, states.Refine, states.Review, states.Merge, states.Done)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

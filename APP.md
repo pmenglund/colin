@@ -123,6 +123,7 @@ Merge coordinates are read from issue metadata keys `colin.branch_name` and `col
 - Set `COLIN_HOME` (or `colin_home` in config) to control where task worktrees are created; default is `~/.colin`
 - Override config path with root flag: `go run . --config /path/to/colin.toml worker run --once`
 - Show CLI help: `go run . --help`
+- Ensure required workflow states exist/are valid: `go run . --config ./colin.toml setup`
 - Run worker once (dry-run): `go run . --config ./colin.toml worker run --once --dry-run`
 - Run worker once with fake backend (offline): set `linear_backend = "fake"` and run `go run . --config ./colin.toml worker run --once`
 - Run tests locally: `go test ./...`
@@ -136,7 +137,7 @@ Merge coordinates are read from issue metadata keys `colin.branch_name` and `col
 - CLI precedence: root `--config` flag controls which file is loaded (default `colin.toml`).
 - Backend constraint: `COLIN_LINEAR_BACKEND`/`linear_backend` must be either `http` or `fake`.
 - Performance expectations: polling loop should be lightweight, deterministic, and safe to run repeatedly.
-- Compatibility constraints: workflow state names are currently hard-coded to `Todo`, `Refine`, `In Progress`, `Review`, `Merge`, and `Done`.
+- Compatibility constraints: workflow state names are resolved at startup from `[workflow_states]` in `colin.toml`; runtime fails fast when mapped names cannot be resolved to actual Linear workflow states.
 - Codex runtime constraint: Codex app-server must be able to write session state under `CODEX_HOME` (or default `~/.codex`), and authentication must be available for turn execution.
 - When processing Linear issues, processing happens in goroutines so multiple issues can run concurrently. Concurrency is controlled by the `MaxConcurrency` configuration value.
 - Prompt should be embedded, but have a config option to read an alternative from a file.

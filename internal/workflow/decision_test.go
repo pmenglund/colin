@@ -163,3 +163,31 @@ func TestDecideIsDeterministic(t *testing.T) {
 		t.Fatalf("lease expiration differs: %s vs %s", d1.LeasePatch.ExpiresAtUTC, d2.LeasePatch.ExpiresAtUTC)
 	}
 }
+
+func TestDecideWithStatesUsesConfiguredNames(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	states := States{
+		Todo:       "Backlog",
+		InProgress: "Doing",
+		Refine:     "Needs Spec",
+		Review:     "Human Review",
+		Merge:      "Merge Queue",
+		Done:       "Closed",
+	}
+
+	d := DecideWithStates(IssueSnapshot{
+		State:       "Backlog",
+		Description: "spec",
+		Metadata:    map[string]string{},
+		WorkerID:    "worker-1",
+		ExecutionID: "exec-1",
+		LeaseTTL:    time.Minute,
+	}, now, states)
+
+	if d.Action != ActionClaimAndTransition {
+		t.Fatalf("Action = %q, want %q", d.Action, ActionClaimAndTransition)
+	}
+	if d.ToState != "Doing" {
+		t.Fatalf("ToState = %q, want %q", d.ToState, "Doing")
+	}
+}

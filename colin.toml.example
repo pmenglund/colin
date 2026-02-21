@@ -19,3 +19,12 @@ lease_ttl = "5m"
 max_concurrency = 8
 # When true, compute decisions but skip Linear writes.
 dry_run = false
+
+[workflow_states]
+# Map Colin's expected workflow keys to actual Linear state names.
+todo = "Todo"
+in_progress = "In Progress"
+refine = "Refine"
+review = "Review"
+merge = "Merge"
+done = "Done"

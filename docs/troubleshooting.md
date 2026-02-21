@@ -37,6 +37,37 @@ Fix:
 1. Set `linear_team_id` in `colin.toml` or `LINEAR_TEAM_ID` in environment.
 2. Re-run one-shot validation.
 
+### `resolve workflow states: required workflow states not found: ...; run 'colin setup' to create/validate mapped states`
+
+Cause:
+
+- Worker startup could not resolve one or more configured `[workflow_states]` names to actual team states.
+
+Fix:
+
+1. Verify `[workflow_states]` names in `colin.toml`.
+2. Run setup:
+
+       go run . --config ./colin.toml setup
+
+3. Re-run worker once.
+
+### `ensure workflow states: workflow state "<key>" mapped to "<name>" has type "<actual>", expected "<expected>"`
+
+Cause:
+
+- A mapped state exists but has an incompatible Linear workflow type.
+
+Fix:
+
+1. Point the mapping to a state with the required type:
+   - `todo` must be `unstarted`
+   - `done` must be `completed`
+   - `in_progress`, `refine`, `review`, `merge` must be `started`
+2. Re-run setup:
+
+       go run . --config ./colin.toml setup
+
 ### `COLIN_LINEAR_BACKEND must be one of "http" or "fake"`
 
 Cause:

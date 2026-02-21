@@ -322,23 +322,23 @@ func (a *liveLinearAdmin) archiveIssue(ctx context.Context, issueID string) erro
 	return nil
 }
 
-func (a *liveLinearAdmin) archiveProject(ctx context.Context, projectID string) error {
-	mutation := `mutation ArchiveProject($id: String!) {
-  projectUpdateArchive(id: $id) {
+func (a *liveLinearAdmin) deleteProject(ctx context.Context, projectID string) error {
+	mutation := `mutation DeleteProject($id: String!) {
+  projectDelete(id: $id) {
     success
   }
 }`
 
 	var resp struct {
-		ProjectUpdateArchive struct {
+		ProjectDelete struct {
 			Success bool `json:"success"`
-		} `json:"projectUpdateArchive"`
+		} `json:"projectDelete"`
 	}
 	if err := a.graphQL(ctx, mutation, map[string]any{"id": projectID}, &resp); err != nil {
 		return err
 	}
-	if !resp.ProjectUpdateArchive.Success {
-		return fmt.Errorf("projectUpdateArchive returned unsuccessful response")
+	if !resp.ProjectDelete.Success {
+		return fmt.Errorf("projectDelete returned unsuccessful response")
 	}
 	return nil
 }

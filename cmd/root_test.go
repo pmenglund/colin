@@ -58,4 +58,7 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	if !strings.Contains(helpOutput, "worker") {
 		t.Fatalf("expected help output to contain worker command, got: %q", helpOutput)
 	}
+	if !strings.Contains(helpOutput, "setup") {
+		t.Fatalf("expected help output to contain setup command, got: %q", helpOutput)
+	}
 }

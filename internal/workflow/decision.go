@@ -37,6 +37,13 @@ type Decision struct {
 
 // Decide evaluates one issue snapshot and emits the next action.
 func Decide(snapshot IssueSnapshot, now time.Time) Decision {
+	return DecideWithStates(snapshot, now, DefaultStates())
+}
+
+// DecideWithStates evaluates one issue snapshot using runtime state names.
+func DecideWithStates(snapshot IssueSnapshot, now time.Time, states States) Decision {
+	states = states.WithDefaults()
+
 	lease, err := LeaseFromMetadata(snapshot.Metadata)
 	leaseMetadataInvalid := err != nil
 
@@ -44,11 +51,11 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 	specReady := hasRequiredSpec(snapshot)
 
 	switch snapshot.State {
-	case StateTodo:
+	case states.Todo:
 		if !specReady {
 			return Decision{
 				Action:  ActionTransition,
-				ToState: StateRefine,
+				ToState: states.Refine,
 				Reason:  "missing required specification",
 				MetadataPatch: map[string]string{
 					MetaReason:      "missing required specification",
@@ -67,7 +74,7 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 		}
 		return Decision{
 			Action:     ActionClaimAndTransition,
-			ToState:    StateInProgress,
+			ToState:    states.InProgress,
 			Reason:     reason,
 			LeasePatch: &newLease,
 			MetadataPatch: map[string]string{
@@ -76,14 +83,14 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 			},
 		}
 
-	case StateInProgress:
+	case states.InProgress:
 		if activeLeaseByOther {
 			return Decision{Action: ActionNoop, Reason: "active lease owned by another worker"}
 		}
 		if !specReady || parseBool(snapshot.Metadata[MetaNeedsRefine]) {
 			return Decision{
 				Action:  ActionTransition,
-				ToState: StateRefine,
+				ToState: states.Refine,
 				Reason:  "specification requires refinement",
 				MetadataPatch: map[string]string{
 					MetaReason:              "specification requires refinement",
@@ -98,7 +105,7 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 		if parseBool(snapshot.Metadata[MetaReadyForHumanReview]) {
 			return Decision{
 				Action:  ActionTransition,
-				ToState: StateReview,
+				ToState: states.Review,
 				Reason:  "issue ready for human review",
 				MetadataPatch: map[string]string{
 					MetaReason:            "",
@@ -110,11 +117,11 @@ func Decide(snapshot IssueSnapshot, now time.Time) Decision {
 		}
 		return Decision{Action: ActionNoop, Reason: "no state change required"}
 
-	case StateMerge:
+	case states.Merge:
 		if parseBool(snapshot.Metadata[MetaMergeReady]) {
 			return Decision{
 				Action:  ActionTransition,
-				ToState: StateDone,
+				ToState: states.Done,
 				Reason:  "merge-ready metadata set",
 				MetadataPatch: map[string]string{
 					MetaReason:     "",

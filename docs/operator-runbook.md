@@ -1,16 +1,12 @@
 # Colin Operator Runbook
 
-This runbook is for operating Colin in production-like environments. It is written against the current code in `cmd/worker.go`, `internal/config/config.go`, and `internal/workflow/`. For error-specific recovery, use `docs/troubleshooting.md`.
+This runbook is for operating Colin in production-like environments. It is written against the current code in `cmd/worker.go`, `cmd/setup.go`, `internal/config/config.go`, and `internal/workflow/`. For error-specific recovery, use `docs/troubleshooting.md`.
 
 ## What Colin Automates
 
-Colin continuously polls Linear and only processes issues in these states:
+Colin continuously polls Linear and processes only the configured candidate states (`workflow_states.todo`, `workflow_states.in_progress`, `workflow_states.merge`). At startup, Colin resolves those configured names against the team’s real Linear workflow states and fails fast if any mapped state is missing.
 
-- `Todo`
-- `In Progress`
-- `Merge`
-
-A `Todo` issue with required specification is moved to `In Progress` and receives lease metadata. `In Progress` issues are evaluated by Codex and moved to `Review` or `Refine`. `Merge` issues move to `Done` when merge metadata says they are ready.
+A `todo` issue with required specification is moved to `in_progress` and receives lease metadata. `in_progress` issues are evaluated by Codex and moved to `review` or `refine`. `merge` issues move to `done` when merge metadata says they are ready.
 
 ## Required Configuration
 
@@ -34,6 +30,16 @@ Common runtime controls:
 - `COLIN_LEASE_TTL` / `lease_ttl`: lease expiration window
 - `COLIN_DRY_RUN` / `dry_run`: compute decisions but do not write to Linear
 
+Workflow mapping controls (`colin.toml` only in this iteration):
+
+- `[workflow_states]`
+- `todo`
+- `in_progress`
+- `refine`
+- `review`
+- `merge`
+- `done`
+
 ## Startup Runbook
 
 ### 1. Prepare configuration
@@ -51,11 +57,22 @@ Edit `colin.toml` and set at least:
 ### 2. Validate CLI wiring
 
     go run . --help
+    go run . setup --help
     go run . worker run --help
 
-Expected flags include `--config`, `--once`, and `--dry-run`.
+Expected commands include `setup` and `worker run`; expected flags include `--config`, `--once`, and `--dry-run`.
 
-### 3. Dry-run a single cycle
+### 3. Ensure workflow states
+
+    go run . --config ./colin.toml setup
+
+Expected behavior:
+
+- Command prints created/validated states and resolved runtime mapping.
+- Missing mapped states are created.
+- Existing mapped states are validated to required type.
+
+### 4. Dry-run a single cycle
 
     go run . --config ./colin.toml worker run --once --dry-run
 
@@ -65,7 +82,7 @@ Expected behavior:
 - Logs include `action=cycle_start`, `action=issues_fetched`, and one or more `action=...` decisions.
 - No Linear state or metadata writes are performed.
 
-### 4. Start continuous worker
+### 5. Start continuous worker
 
     go run . --config ./colin.toml worker run
 
@@ -123,7 +140,9 @@ If metadata is missing or set to false, Colin leaves the issue in `Merge`.
 
 ### Worker crash or host restart
 
-1. Restart the worker with the same config:
+1. Re-run setup and then restart the worker with the same config:
+
+       go run . --config ./colin.toml setup
 
        go run . --config ./colin.toml worker run
 

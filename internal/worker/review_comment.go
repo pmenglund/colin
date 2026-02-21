@@ -4,6 +4,7 @@ import "strings"
 
 type reviewCommentInput struct {
 	ExecutionSummary string
+	ReviewStateName  string
 	ThreadID         string
 	BranchName       string
 	WorktreePath     string
@@ -16,9 +17,15 @@ func buildReviewComment(input reviewCommentInput) string {
 	if summary == "" {
 		summary = "Codex execution completed; no additional details were provided."
 	}
+	reviewStateName := strings.TrimSpace(input.ReviewStateName)
+	if reviewStateName == "" {
+		reviewStateName = "Review"
+	}
 
 	var b strings.Builder
-	b.WriteString("Moved to **Review** after Codex execution.\n\n")
+	b.WriteString("Moved to **")
+	b.WriteString(reviewStateName)
+	b.WriteString("** after Codex execution.\n\n")
 	b.WriteString("## Execution Summary\n")
 	b.WriteString(summary)
 	b.WriteString("\n\n## Execution Context\n")

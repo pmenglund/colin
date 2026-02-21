@@ -29,6 +29,7 @@ type Runner struct {
 	LeaseTTL       time.Duration
 	MaxConcurrency int
 	DryRun         bool
+	States         workflow.States
 	Clock          func() time.Time
 	Logger         *slog.Logger
 }
@@ -44,6 +45,9 @@ func (r *Runner) Validate() error {
 	}
 	if r.LeaseTTL <= 0 {
 		return errors.New("runner lease ttl must be positive")
+	}
+	if err := r.runtimeStates().Validate(); err != nil {
+		return fmt.Errorf("runner workflow states: %w", err)
 	}
 	return nil
 }
@@ -99,9 +103,10 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		issueID string
 		err     error
 	}
+	states := r.runtimeStates()
 	mergeIssueToProcess := ""
 	for _, issue := range issues {
-		if issue.StateName == workflow.StateMerge {
+		if issue.StateName == states.Merge {
 			mergeIssueToProcess = issue.ID
 			break
 		}
@@ -122,7 +127,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	for _, issue := range issues {
-		if issue.StateName == workflow.StateMerge && mergeIssueToProcess != "" && issue.ID != mergeIssueToProcess {
+		if issue.StateName == states.Merge && mergeIssueToProcess != "" && issue.ID != mergeIssueToProcess {
 			r.Logger.Info("worker decision",
 				"execution_id", executionID,
 				"issue", issue.Identifier,
@@ -232,7 +237,8 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	if err != nil {
 		return err
 	}
-	if issue.StateName == workflow.StateInProgress && r.Executor != nil {
+	states := r.runtimeStates()
+	if issue.StateName == states.InProgress && r.Executor != nil {
 		return r.processInProgressIssue(ctx, issue, executionID, now)
 	}
 
@@ -247,7 +253,7 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		LeaseTTL:    r.LeaseTTL,
 	}
 
-	decision := workflow.Decide(snapshot, now)
+	decision := workflow.DecideWithStates(snapshot, now, states)
 	r.Logger.Info("worker decision",
 		"execution_id", executionID,
 		"issue", issue.Identifier,
@@ -260,7 +266,7 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	if r.DryRun {
 		return nil
 	}
-	if shouldExecuteMerge(issue.StateName, decision) {
+	if shouldExecuteMerge(issue.StateName, decision, states) {
 		if r.MergeExecutor == nil {
 			return errors.New("runner merge executor is required for merge transitions")
 		}
@@ -269,7 +275,7 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		}
 	}
 
-	if shouldBootstrapWorkspace(issue.StateName, decision) {
+	if shouldBootstrapWorkspace(issue.StateName, decision, states) {
 		if r.Bootstrapper != nil {
 			workspace, err := r.Bootstrapper.EnsureTaskWorkspace(ctx, issue.Identifier)
 			if err != nil {
@@ -297,7 +303,7 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	}
 
 	if decision.Action != workflow.ActionNoop && decision.ToState != "" {
-		if !workflow.CanTransition(issue.StateName, decision.ToState) {
+		if !states.CanTransition(issue.StateName, decision.ToState) {
 			return fmt.Errorf("invalid transition %q -> %q", issue.StateName, decision.ToState)
 		}
 		if issue.StateName != decision.ToState {
@@ -353,16 +359,18 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
 	}
 
+	states := r.runtimeStates()
 	if !result.IsWellSpecified {
 		needsInput := strings.TrimSpace(result.NeedsInputSummary)
 		if needsInput == "" {
 			needsInput = "Provide clear scope, acceptance criteria, and implementation constraints."
 		}
 		comment := fmt.Sprintf(
-			"Moved to **Refine** because this task is not specified enough for autonomous execution.\n\nWhat is needed:\n%s",
+			"Moved to **%s** because this task is not specified enough for autonomous execution.\n\nWhat is needed:\n%s",
+			states.Refine,
 			needsInput,
 		)
-		if err := r.applyInProgressOutcome(ctx, issue, workflow.StateRefine, comment, now, map[string]string{
+		if err := r.applyInProgressOutcome(ctx, issue, states.Refine, comment, now, map[string]string{
 			workflow.MetaNeedsRefine: "true",
 			workflow.MetaReason:      "missing required specification for execution",
 		}, "refine", result.ThreadID); err != nil {
@@ -372,7 +380,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 			"execution_id", executionID,
 			"issue", issue.Identifier,
 			"action", "transition",
-			"to", workflow.StateRefine,
+			"to", states.Refine,
 			"reason", "specification requires refinement",
 		)
 		return nil
@@ -384,13 +392,14 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	}
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary: result.ExecutionSummary,
+		ReviewStateName:  states.Review,
 		ThreadID:         threadID,
 		BranchName:       issue.Metadata[workflow.MetaBranchName],
 		WorktreePath:     issue.Metadata[workflow.MetaWorktreePath],
 		TranscriptRef:    result.TranscriptRef,
 		ScreenshotRef:    result.ScreenshotRef,
 	})
-	if err := r.applyInProgressOutcome(ctx, issue, workflow.StateReview, comment, now, map[string]string{
+	if err := r.applyInProgressOutcome(ctx, issue, states.Review, comment, now, map[string]string{
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
@@ -401,7 +410,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		"execution_id", executionID,
 		"issue", issue.Identifier,
 		"action", "transition",
-		"to", workflow.StateReview,
+		"to", states.Review,
 		"reason", "issue processed by codex",
 	)
 	return nil
@@ -463,7 +472,7 @@ func (r *Runner) applyInProgressOutcome(
 		}
 	}
 
-	if !workflow.CanTransition(issue.StateName, toState) {
+	if !r.runtimeStates().CanTransition(issue.StateName, toState) {
 		return fmt.Errorf("invalid transition %q -> %q", issue.StateName, toState)
 	}
 	if issue.StateName == toState {
@@ -512,16 +521,16 @@ func copyMetadata(in map[string]string) map[string]string {
 	return out
 }
 
-func shouldBootstrapWorkspace(fromState string, decision workflow.Decision) bool {
-	return fromState == workflow.StateTodo &&
+func shouldBootstrapWorkspace(fromState string, decision workflow.Decision, states workflow.States) bool {
+	return fromState == states.Todo &&
 		decision.Action != workflow.ActionNoop &&
-		decision.ToState == workflow.StateInProgress
+		decision.ToState == states.InProgress
 }
 
-func shouldExecuteMerge(fromState string, decision workflow.Decision) bool {
-	return fromState == workflow.StateMerge &&
+func shouldExecuteMerge(fromState string, decision workflow.Decision, states workflow.States) bool {
+	return fromState == states.Merge &&
 		decision.Action != workflow.ActionNoop &&
-		decision.ToState == workflow.StateDone
+		decision.ToState == states.Done
 }
 
 func (r *Runner) recordBranchSessionMetadata(ctx context.Context, issue linear.Issue, sessionID string) error {
@@ -540,4 +549,8 @@ func (r *Runner) recordBranchSessionMetadata(ctx context.Context, issue linear.I
 		return fmt.Errorf("record codex session metadata for issue %s: %w", issue.Identifier, err)
 	}
 	return nil
+}
+
+func (r *Runner) runtimeStates() workflow.States {
+	return r.States.WithDefaults()
 }

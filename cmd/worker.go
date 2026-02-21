@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/worker"
+	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -44,7 +46,18 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				return err
 			}
 
-			client := newLinearClient(cfg)
+			runtimeStates := cfg.WorkflowStates.AsRuntimeStates()
+			client := newLinearClient(cfg, runtimeStates)
+			if cfg.LinearBackend == config.LinearBackendHTTP {
+				admin := linear.NewWorkflowStateAdmin(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+				resolved, err := admin.ResolveWorkflowStates(cmd.Context(), runtimeStates)
+				if err != nil {
+					return fmt.Errorf("resolve workflow states: %w; run `colin setup` to create/validate mapped states", err)
+				}
+				runtimeStates = resolved.RuntimeStates()
+				configureLinearRuntimeState(client, runtimeStates, resolved.StateIDByName())
+			}
+
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
 			mergeExecutor := newMergeExecutor(cfg, cwd)
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
@@ -60,6 +73,7 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				LeaseTTL:       cfg.LeaseTTL,
 				MaxConcurrency: cfg.MaxConcurrency,
 				DryRun:         cfg.DryRun,
+				States:         runtimeStates,
 				Logger:         slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo})),
 			}
 
@@ -78,14 +92,20 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 	return workerCmd
 }
 
-func newLinearClient(cfg config.Config) linear.Client {
+func newLinearClient(cfg config.Config, states workflow.States) linear.Client {
 	switch cfg.LinearBackend {
 	case config.LinearBackendHTTP:
-		return linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+		client := linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+		_ = client.SetWorkflowStates(states)
+		return client
 	case config.LinearBackendFake:
-		return linear.NewDefaultInMemoryClient()
+		client := linear.NewDefaultInMemoryClient()
+		_ = client.SetWorkflowStates(states)
+		return client
 	}
-	return linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+	client := linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+	_ = client.SetWorkflowStates(states)
+	return client
 }
 
 func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.InProgressExecutor {
@@ -121,4 +141,14 @@ func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper 
 		RepoRoot:  cwd,
 		ColinHome: cfg.ColinHome,
 	})
+}
+
+func configureLinearRuntimeState(client linear.Client, states workflow.States, stateIDs map[string]string) {
+	switch c := client.(type) {
+	case *linear.HTTPClient:
+		_ = c.SetWorkflowStates(states)
+		c.SetStateIDs(stateIDs)
+	case *linear.InMemoryClient:
+		_ = c.SetWorkflowStates(states)
+	}
 }

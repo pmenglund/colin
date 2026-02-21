@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 var (
@@ -39,6 +41,7 @@ type HTTPClient struct {
 
 	mu         sync.Mutex
 	stateIDMap map[string]string
+	states     workflow.States
 }
 
 // NewHTTPClient creates a Linear GraphQL client with sane defaults.
@@ -56,10 +59,42 @@ func NewHTTPClient(endpoint, token, teamID string, httpClient *http.Client) *HTT
 		teamID:     teamID,
 		http:       httpClient,
 		stateIDMap: map[string]string{},
+		states:     workflow.DefaultStates(),
+	}
+}
+
+// SetWorkflowStates configures runtime workflow state names.
+func (c *HTTPClient) SetWorkflowStates(states workflow.States) error {
+	states = states.WithDefaults()
+	if err := states.Validate(); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.states = states
+	c.mu.Unlock()
+	return nil
+}
+
+// SetStateIDs seeds the client cache with known state name to state ID mappings.
+func (c *HTTPClient) SetStateIDs(stateIDs map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.stateIDMap = map[string]string{}
+	for name, id := range stateIDs {
+		trimmedName := strings.TrimSpace(name)
+		trimmedID := strings.TrimSpace(id)
+		if trimmedName == "" || trimmedID == "" {
+			continue
+		}
+		c.stateIDMap[trimmedName] = trimmedID
 	}
 }
 
 func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]Issue, error) {
+	states := c.runtimeStates()
+
 	query := `query ListIssues($teamKey: String!) {
   issues(filter: { team: { key: { eq: $teamKey } } }, first: 50) {
     nodes {
@@ -115,10 +150,10 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 
 	issues := make([]Issue, 0, len(resp.Issues.Nodes))
 	for _, n := range resp.Issues.Nodes {
-		if !isCandidateState(n.State.Name) {
+		if !states.IsCandidate(n.State.Name) {
 			continue
 		}
-		if hasActiveBlockingInverseRelation(n.ID, n.InverseRelations.Nodes) {
+		if hasActiveBlockingInverseRelation(n.ID, n.InverseRelations.Nodes, states) {
 			continue
 		}
 
@@ -382,32 +417,11 @@ func resolveStateIDFromMap(stateIDMap map[string]string, stateName string) strin
 		}
 	}
 
-	for _, alias := range stateAliases(stateName) {
-		if id := strings.TrimSpace(stateIDMap[alias]); id != "" {
-			return id
-		}
-		normalizedAlias := normalizeStateName(alias)
-		for candidate, id := range stateIDMap {
-			if normalizeStateName(candidate) == normalizedAlias && strings.TrimSpace(id) != "" {
-				return strings.TrimSpace(id)
-			}
-		}
-	}
-
 	return ""
 }
 
 func normalizeStateName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
-}
-
-func stateAliases(stateName string) []string {
-	switch normalizeStateName(stateName) {
-	case "review":
-		return []string{"In Review", "Human Review"}
-	default:
-		return nil
-	}
 }
 
 func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[string]string, decodePayload func(data json.RawMessage) error) error {
@@ -468,15 +482,6 @@ func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[st
 	return nil
 }
 
-func isCandidateState(stateName string) bool {
-	switch stateName {
-	case "Todo", "In Progress", "Merge":
-		return true
-	default:
-		return false
-	}
-}
-
 type inverseRelation struct {
 	Type         string                `json:"type"`
 	Issue        *inverseRelationIssue `json:"issue"`
@@ -490,7 +495,7 @@ type inverseRelationIssue struct {
 	} `json:"state"`
 }
 
-func hasActiveBlockingInverseRelation(issueID string, relations []inverseRelation) bool {
+func hasActiveBlockingInverseRelation(issueID string, relations []inverseRelation, states workflow.States) bool {
 	normalizedIssueID := strings.TrimSpace(issueID)
 	for _, relation := range relations {
 		if !strings.EqualFold(strings.TrimSpace(relation.Type), "blocks") {
@@ -501,11 +506,17 @@ func hasActiveBlockingInverseRelation(issueID string, relations []inverseRelatio
 			// Treat unknown relation shape as blocked for safety.
 			return true
 		}
-		if !strings.EqualFold(strings.TrimSpace(blocker.State.Name), "Done") {
+		if !states.IsDone(blocker.State.Name) {
 			return true
 		}
 	}
 	return false
+}
+
+func (c *HTTPClient) runtimeStates() workflow.States {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.states.WithDefaults()
 }
 
 func relationBlockerIssue(issueID string, relation inverseRelation) *inverseRelationIssue {
