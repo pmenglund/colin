@@ -36,6 +36,11 @@ tasks:
     cmds:
       - go test ./e2e
 
+  e2e-live:
+    desc: Run live external lifecycle e2e harness (requires live env vars)
+    cmds:
+      - go test -run TestLifecycleLiveExternalSystems -tags livee2e ./e2e
+
   test-lifecycle:
     desc: Run lifecycle-focused test suites
     cmds:
