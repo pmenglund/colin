@@ -107,7 +107,9 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 			} `json:"nodes"`
 		} `json:"issues"`
 	}
-	if err := c.graphQL(ctx, query, map[string]string{"teamKey": teamID}, &resp); err != nil {
+	if err := c.graphQL(ctx, query, map[string]string{"teamKey": teamID}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -169,7 +171,9 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 		} `json:"issue"`
 	}
 
-	if err := c.graphQL(ctx, query, map[string]string{"issueId": issueID}, &resp); err != nil {
+	if err := c.graphQL(ctx, query, map[string]string{"issueId": issueID}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
 		return Issue{}, err
 	}
 	if resp.Issue == nil {
@@ -223,7 +227,9 @@ func (c *HTTPClient) UpdateIssueState(ctx context.Context, issueID string, toSta
 		} `json:"issueUpdate"`
 	}
 
-	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "stateId": stateID}, &resp); err != nil {
+	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "stateId": stateID}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
 		return err
 	}
 	if !resp.IssueUpdate.Success {
@@ -268,7 +274,9 @@ func (c *HTTPClient) UpdateIssueMetadata(ctx context.Context, issueID string, pa
 		} `json:"issueUpdate"`
 	}
 
-	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "description": nextDescription}, &resp); err != nil {
+	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "description": nextDescription}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
 		return err
 	}
 	if !resp.IssueUpdate.Success {
@@ -296,7 +304,9 @@ func (c *HTTPClient) CreateIssueComment(ctx context.Context, issueID string, bod
 		} `json:"commentCreate"`
 	}
 
-	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "body": body}, &resp); err != nil {
+	if err := c.graphQL(ctx, mutation, map[string]string{"issueId": issueID, "body": body}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
 		return err
 	}
 	if !resp.CommentCreate.Success {
@@ -331,7 +341,9 @@ func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (stri
 		} `json:"workflowStates"`
 	}
 
-	if err := c.graphQL(ctx, query, map[string]string{"teamKey": c.teamID}, &resp); err != nil {
+	if err := c.graphQL(ctx, query, map[string]string{"teamKey": c.teamID}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
 		return "", err
 	}
 
@@ -354,10 +366,16 @@ func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (stri
 	return id, nil
 }
 
-func (c *HTTPClient) graphQL(ctx context.Context, query string, variables any, out any) error {
-	body, err := json.Marshal(map[string]any{
-		"query":     query,
-		"variables": variables,
+func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[string]string, decodePayload func(data json.RawMessage) error) error {
+	if decodePayload == nil {
+		return errors.New("graphql payload decoder is nil")
+	}
+	body, err := json.Marshal(struct {
+		Query     string            `json:"query"`
+		Variables map[string]string `json:"variables"`
+	}{
+		Query:     query,
+		Variables: variables,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal GraphQL request: %w", err)
@@ -400,7 +418,7 @@ func (c *HTTPClient) graphQL(ctx context.Context, query string, variables any, o
 		return errors.New("graphql response missing data")
 	}
 
-	if err := json.Unmarshal(envelope.Data, out); err != nil {
+	if err := decodePayload(envelope.Data); err != nil {
 		return fmt.Errorf("decode response payload: %w", err)
 	}
 	return nil

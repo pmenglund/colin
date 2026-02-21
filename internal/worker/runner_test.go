@@ -187,6 +187,21 @@ func (f *fakeTaskBootstrapper) RecordBranchSession(_ context.Context, worktreePa
 	return nil
 }
 
+type fakeMergeExecutor struct {
+	callCnt   int
+	lastIssue linear.Issue
+	err       error
+}
+
+func (f *fakeMergeExecutor) ExecuteMerge(_ context.Context, issue linear.Issue) error {
+	f.callCnt++
+	f.lastIssue = issue
+	if f.err != nil {
+		return f.err
+	}
+	return nil
+}
+
 func TestRunnerValidate(t *testing.T) {
 	t.Parallel()
 
@@ -1097,9 +1112,11 @@ func TestRunnerRunOnceSerializesMergeQueue(t *testing.T) {
 		},
 	}
 	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{}
 
 	r := Runner{
 		Linear:         client,
+		MergeExecutor:  mergeExecutor,
 		TeamID:         "team-1",
 		WorkerID:       "worker-1",
 		LeaseTTL:       5 * time.Minute,
@@ -1123,6 +1140,52 @@ func TestRunnerRunOnceSerializesMergeQueue(t *testing.T) {
 	}
 	if got := state.issues["2"].StateName; got != workflow.StateDone {
 		t.Fatalf("issue 2 state after second cycle = %q, want %q", got, workflow.StateDone)
+	}
+	if mergeExecutor.callCnt != 2 {
+		t.Fatalf("merge executor call count = %d, want 2", mergeExecutor.callCnt)
+	}
+}
+
+func TestRunnerRunOnceMergeExecutionFailureKeepsIssueInMerge(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateMerge,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaMergeReady: "true",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{err: errors.New("push failed")}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want merge execution failure")
+	}
+	if !strings.Contains(err.Error(), "execute merge for issue COL-1") {
+		t.Fatalf("error = %q, want merge execution context", err.Error())
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue state after merge failure = %q, want %q", got, workflow.StateMerge)
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaMergeReady]; got != "true" {
+		t.Fatalf("merge_ready after merge failure = %q, want %q", got, "true")
 	}
 }
 

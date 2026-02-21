@@ -21,6 +21,7 @@ import (
 type Runner struct {
 	Linear         linear.Client
 	Executor       InProgressExecutor
+	MergeExecutor  MergeExecutor
 	Bootstrapper   TaskBootstrapper
 	TeamID         string
 	WorkerID       string
@@ -258,6 +259,14 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 
 	if r.DryRun {
 		return nil
+	}
+	if shouldExecuteMerge(issue.StateName, decision) {
+		if r.MergeExecutor == nil {
+			return errors.New("runner merge executor is required for merge transitions")
+		}
+		if err := r.MergeExecutor.ExecuteMerge(ctx, issue); err != nil {
+			return fmt.Errorf("execute merge for issue %s: %w", issue.Identifier, err)
+		}
 	}
 
 	if shouldBootstrapWorkspace(issue.StateName, decision) {
@@ -507,6 +516,12 @@ func shouldBootstrapWorkspace(fromState string, decision workflow.Decision) bool
 	return fromState == workflow.StateTodo &&
 		decision.Action != workflow.ActionNoop &&
 		decision.ToState == workflow.StateInProgress
+}
+
+func shouldExecuteMerge(fromState string, decision workflow.Decision) bool {
+	return fromState == workflow.StateMerge &&
+		decision.Action != workflow.ActionNoop &&
+		decision.ToState == workflow.StateDone
 }
 
 func (r *Runner) recordBranchSessionMetadata(ctx context.Context, issue linear.Issue, sessionID string) error {

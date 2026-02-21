@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -58,7 +57,7 @@ func (s *GitBranchMetadataStore) GetBranchSessionID(ctx context.Context, branchN
 	}
 
 	key := branchSessionConfigKey(branchName)
-	value, err := s.gitOutputAllowMissing(ctx, "-C", s.repoRoot, "config", "--local", "--get", key)
+	value, err := gitOutputAllowMissing(ctx, s.gitBinary, "-C", s.repoRoot, "config", "--local", "--get", key)
 	if err != nil {
 		return "", fmt.Errorf("read git metadata %q for branch %q in %q: %w", key, branchName, s.repoRoot, err)
 	}
@@ -83,7 +82,7 @@ func (s *GitBranchMetadataStore) SetBranchSessionID(ctx context.Context, branchN
 	}
 
 	key := branchSessionConfigKey(branchName)
-	if err := s.gitRun(ctx, "-C", s.repoRoot, "config", "--local", key, sessionID); err != nil {
+	if err := gitRun(ctx, s.gitBinary, "-C", s.repoRoot, "config", "--local", key, sessionID); err != nil {
 		return fmt.Errorf("write git metadata %q for branch %q in %q: %w", key, branchName, s.repoRoot, err)
 	}
 	return nil
@@ -91,26 +90,4 @@ func (s *GitBranchMetadataStore) SetBranchSessionID(ctx context.Context, branchN
 
 func branchSessionConfigKey(branchName string) string {
 	return "branch." + strings.TrimSpace(branchName) + "." + branchSessionConfigKeySuffix
-}
-
-func (s *GitBranchMetadataStore) gitRun(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, s.gitBinary, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
-}
-
-func (s *GitBranchMetadataStore) gitOutputAllowMissing(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, s.gitBinary, args...)
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return strings.TrimSpace(string(output)), nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return "", nil
-	}
-	return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
 }

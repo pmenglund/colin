@@ -56,14 +56,15 @@ func TestLifecycleHappyPathTodoToDone(t *testing.T) {
 	executor := &e2eFakeExecutor{}
 
 	runner := &worker.Runner{
-		Linear:       client,
-		Executor:     executor,
-		Bootstrapper: bootstrapper,
-		TeamID:       "team-1",
-		WorkerID:     "worker-e2e",
-		LeaseTTL:     5 * time.Minute,
-		Clock:        func() time.Time { return now },
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Linear:        client,
+		Executor:      executor,
+		MergeExecutor: worker.NoopMergeExecutor{},
+		Bootstrapper:  bootstrapper,
+		TeamID:        "team-1",
+		WorkerID:      "worker-e2e",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := runner.RunOnce(ctx); err != nil {
@@ -159,12 +160,13 @@ func TestLifecycleBlockedDependencyUnblocksWhenDependencyDone(t *testing.T) {
 	})
 
 	runner := &worker.Runner{
-		Linear:   client,
-		TeamID:   "team-1",
-		WorkerID: "worker-e2e",
-		LeaseTTL: 5 * time.Minute,
-		Clock:    func() time.Time { return now },
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Linear:        client,
+		MergeExecutor: worker.NoopMergeExecutor{},
+		TeamID:        "team-1",
+		WorkerID:      "worker-e2e",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	if err := runner.RunOnce(ctx); err != nil {
@@ -226,6 +228,7 @@ func TestLifecycleMergeQueueSerializedAcrossCycles(t *testing.T) {
 
 	runner := &worker.Runner{
 		Linear:         client,
+		MergeExecutor:  worker.NoopMergeExecutor{},
 		TeamID:         "team-1",
 		WorkerID:       "worker-e2e",
 		LeaseTTL:       5 * time.Minute,

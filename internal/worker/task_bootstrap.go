@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -43,14 +42,16 @@ type GitTaskBootstrapperOptions struct {
 
 // GitTaskBootstrapper creates and reuses per-issue worktrees and branches.
 type GitTaskBootstrapper struct {
-	repoRoot   string
-	colinHome  string
-	baseBranch string
-	gitBinary  string
+	repoRoot            string
+	colinHome           string
+	baseBranch          string
+	gitBinary           string
+	branchMetadataStore BranchMetadataStore
 }
 
 // NewGitTaskBootstrapper builds a git-backed bootstrapper.
 func NewGitTaskBootstrapper(opts GitTaskBootstrapperOptions) *GitTaskBootstrapper {
+	repoRoot := filepath.Clean(strings.TrimSpace(opts.RepoRoot))
 	baseBranch := strings.TrimSpace(opts.BaseBranch)
 	if baseBranch == "" {
 		baseBranch = defaultTaskBaseBranch
@@ -59,11 +60,16 @@ func NewGitTaskBootstrapper(opts GitTaskBootstrapperOptions) *GitTaskBootstrappe
 	if gitBinary == "" {
 		gitBinary = defaultGitBinary
 	}
+	branchMetadataStore := NewGitBranchMetadataStore(GitBranchMetadataStoreOptions{
+		RepoRoot:  repoRoot,
+		GitBinary: gitBinary,
+	})
 	return &GitTaskBootstrapper{
-		repoRoot:   filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
-		colinHome:  filepath.Clean(strings.TrimSpace(opts.ColinHome)),
-		baseBranch: baseBranch,
-		gitBinary:  gitBinary,
+		repoRoot:            repoRoot,
+		colinHome:           filepath.Clean(strings.TrimSpace(opts.ColinHome)),
+		baseBranch:          baseBranch,
+		gitBinary:           gitBinary,
+		branchMetadataStore: branchMetadataStore,
 	}
 }
 
@@ -124,16 +130,17 @@ func (b *GitTaskBootstrapper) RecordBranchSession(ctx context.Context, worktreeP
 	if normalizedSessionID == "" {
 		return errors.New("session id is required")
 	}
-
-	configKey := fmt.Sprintf("branch.%s.colinSessionID", normalizedBranch)
-	if err := b.gitRun(ctx, "-C", normalizedWorktreePath, "config", configKey, normalizedSessionID); err != nil {
+	if b.branchMetadataStore == nil {
+		return errors.New("branch metadata store is required")
+	}
+	if err := b.branchMetadataStore.SetBranchSessionID(ctx, normalizedBranch, normalizedSessionID); err != nil {
 		return fmt.Errorf("record codex session metadata for branch %q in %q: %w", normalizedBranch, normalizedWorktreePath, err)
 	}
 	return nil
 }
 
 func (b *GitTaskBootstrapper) ensureBaseBranchExists(ctx context.Context) error {
-	if err := b.gitRun(ctx, "-C", b.repoRoot, "rev-parse", "--verify", b.baseBranch+"^{commit}"); err != nil {
+	if err := gitRun(ctx, b.gitBinary, "-C", b.repoRoot, "rev-parse", "--verify", b.baseBranch+"^{commit}"); err != nil {
 		return fmt.Errorf("verify base branch %q in %q: %w", b.baseBranch, b.repoRoot, err)
 	}
 	return nil
@@ -146,14 +153,14 @@ func (b *GitTaskBootstrapper) ensureWorktreeExists(ctx context.Context, worktree
 		return fmt.Errorf("stat worktree path %q: %w", worktreePath, err)
 	}
 
-	if err := b.gitRun(ctx, "-C", b.repoRoot, "worktree", "add", "--detach", worktreePath, b.baseBranch); err != nil {
+	if err := gitRun(ctx, b.gitBinary, "-C", b.repoRoot, "worktree", "add", "--detach", worktreePath, b.baseBranch); err != nil {
 		return fmt.Errorf("create worktree %q from %q: %w", worktreePath, b.baseBranch, err)
 	}
 	return nil
 }
 
 func (b *GitTaskBootstrapper) ensureBranchCheckedOut(ctx context.Context, worktreePath string, branchName string) error {
-	currentBranch, err := b.gitOutput(ctx, "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+	currentBranch, err := gitOutput(ctx, b.gitBinary, "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return fmt.Errorf("inspect current branch in %q: %w", worktreePath, err)
 	}
@@ -166,45 +173,22 @@ func (b *GitTaskBootstrapper) ensureBranchCheckedOut(ctx context.Context, worktr
 		return err
 	}
 	if exists {
-		if err := b.gitRun(ctx, "-C", worktreePath, "checkout", branchName); err != nil {
+		if err := gitRun(ctx, b.gitBinary, "-C", worktreePath, "checkout", branchName); err != nil {
 			return fmt.Errorf("checkout branch %q in %q: %w", branchName, worktreePath, err)
 		}
 		return nil
 	}
 
-	if err := b.gitRun(ctx, "-C", worktreePath, "checkout", "-b", branchName, b.baseBranch); err != nil {
+	if err := gitRun(ctx, b.gitBinary, "-C", worktreePath, "checkout", "-b", branchName, b.baseBranch); err != nil {
 		return fmt.Errorf("create branch %q from %q in %q: %w", branchName, b.baseBranch, worktreePath, err)
 	}
 	return nil
 }
 
 func (b *GitTaskBootstrapper) branchExists(ctx context.Context, branchName string) (bool, error) {
-	cmd := exec.CommandContext(ctx, b.gitBinary, "-C", b.repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return true, nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, fmt.Errorf("check branch %q in %q: %w (%s)", branchName, b.repoRoot, err, strings.TrimSpace(string(output)))
-}
-
-func (b *GitTaskBootstrapper) gitRun(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, b.gitBinary, args...)
-	output, err := cmd.CombinedOutput()
+	exists, err := gitCheckExitCodeOneMeansFalse(ctx, b.gitBinary, "-C", b.repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
 	if err != nil {
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+		return false, fmt.Errorf("check branch %q in %q: %w", branchName, b.repoRoot, err)
 	}
-	return nil
-}
-
-func (b *GitTaskBootstrapper) gitOutput(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, b.gitBinary, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return strings.TrimSpace(string(output)), nil
+	return exists, nil
 }

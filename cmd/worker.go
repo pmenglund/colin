@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -45,16 +44,15 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				return err
 			}
 
-			client, err := newLinearClient(cfg)
-			if err != nil {
-				return err
-			}
+			client := newLinearClient(cfg)
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
+			mergeExecutor := newMergeExecutor(cfg, cwd)
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
 
 			runner := &worker.Runner{
 				Linear:         client,
 				Executor:       executor,
+				MergeExecutor:  mergeExecutor,
 				Bootstrapper:   bootstrapper,
 				TeamID:         cfg.LinearTeamID,
 				WorkerID:       cfg.WorkerID,
@@ -80,15 +78,14 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 	return workerCmd
 }
 
-func newLinearClient(cfg config.Config) (linear.Client, error) {
+func newLinearClient(cfg config.Config) linear.Client {
 	switch cfg.LinearBackend {
 	case config.LinearBackendHTTP:
-		return linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil), nil
+		return linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
 	case config.LinearBackendFake:
-		return linear.NewDefaultInMemoryClient(), nil
-	default:
-		return nil, fmt.Errorf("unsupported linear backend %q", cfg.LinearBackend)
+		return linear.NewDefaultInMemoryClient()
 	}
+	return linear.NewHTTPClient(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
 }
 
 func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.InProgressExecutor {
@@ -102,6 +99,15 @@ func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) work
 		Cwd:            cwd,
 		Logger:         codexLogger,
 		WorkPromptPath: cfg.WorkPromptPath,
+	})
+}
+
+func newMergeExecutor(cfg config.Config, cwd string) worker.MergeExecutor {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		return worker.NoopMergeExecutor{}
+	}
+	return worker.NewGitMergeExecutor(worker.GitMergeExecutorOptions{
+		RepoRoot: cwd,
 	})
 }
 

@@ -8,17 +8,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/pmenglund/codex-sdk-go"
 
+	"github.com/pmenglund/colin/internal/execution"
 	"github.com/pmenglund/colin/internal/linear"
-	"github.com/pmenglund/colin/internal/worker"
 	"github.com/pmenglund/colin/prompts"
 )
-
-var metadataCommentRegexp = regexp.MustCompile(`(?s)<!--\s*colin:metadata\s+\{.*?\}\s*-->`)
 
 // Options controls Codex-backed issue execution.
 type Options struct {
@@ -64,14 +61,14 @@ func New(opts Options) *Executor {
 }
 
 // EvaluateAndExecute starts Codex, opens a thread, and executes an in-progress issue task.
-func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (worker.InProgressExecutionResult, error) {
+func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (execution.InProgressExecutionResult, error) {
 	if e == nil || e.newClient == nil {
-		return worker.InProgressExecutionResult{}, fmt.Errorf("codex executor is not configured")
+		return execution.InProgressExecutionResult{}, fmt.Errorf("codex executor is not configured")
 	}
 
 	client, err := e.newClient(ctx)
 	if err != nil {
-		return worker.InProgressExecutionResult{}, fmt.Errorf("start codex: %w", err)
+		return execution.InProgressExecutionResult{}, fmt.Errorf("start codex: %w", err)
 	}
 	defer client.Close()
 
@@ -82,7 +79,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
 	})
 	if err != nil {
-		return worker.InProgressExecutionResult{}, fmt.Errorf("start thread: %w", err)
+		return execution.InProgressExecutionResult{}, fmt.Errorf("start thread: %w", err)
 	}
 
 	responseSchema := codex.MustJSON(map[string]any{
@@ -100,7 +97,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 
 	prompt, err := e.buildPrompt(issue)
 	if err != nil {
-		return worker.InProgressExecutionResult{}, fmt.Errorf("build work prompt: %w", err)
+		return execution.InProgressExecutionResult{}, fmt.Errorf("build work prompt: %w", err)
 	}
 
 	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(prompt)}, &codex.TurnOptions{
@@ -109,12 +106,12 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		OutputSchema: responseSchema,
 	})
 	if err != nil {
-		return worker.InProgressExecutionResult{}, fmt.Errorf("run codex turn: %w", err)
+		return execution.InProgressExecutionResult{}, fmt.Errorf("run codex turn: %w", err)
 	}
 
 	payload, err := parseResponse(turn.FinalResponse)
 	if err != nil {
-		return worker.InProgressExecutionResult{}, fmt.Errorf("parse codex response: %w", err)
+		return execution.InProgressExecutionResult{}, fmt.Errorf("parse codex response: %w", err)
 	}
 	if !payload.IsWellSpecified && strings.TrimSpace(payload.NeedsInputSummary) == "" {
 		payload.NeedsInputSummary = "Provide clear scope, acceptance criteria, and constraints before retrying."
@@ -123,7 +120,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		payload.ExecutionSummary = "Execution completed without a summary from Codex."
 	}
 
-	return worker.InProgressExecutionResult{
+	return execution.InProgressExecutionResult{
 		IsWellSpecified:   payload.IsWellSpecified,
 		NeedsInputSummary: strings.TrimSpace(payload.NeedsInputSummary),
 		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
@@ -178,7 +175,7 @@ func (e *Executor) buildPrompt(issue linear.Issue) (string, error) {
 }
 
 func issuePromptDescription(issue linear.Issue) string {
-	description := strings.TrimSpace(metadataCommentRegexp.ReplaceAllString(issue.Description, ""))
+	description := linear.StripMetadataBlock(issue.Description)
 	if description == "" {
 		description = "(empty description)"
 	}

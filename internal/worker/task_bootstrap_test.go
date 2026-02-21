@@ -89,7 +89,7 @@ func TestGitTaskBootstrapperRecordBranchSessionPersistsMetadata(t *testing.T) {
 		t.Fatalf("RecordBranchSession() error = %v", err)
 	}
 
-	got := runGit(t, "-C", repoRoot, "config", "--get", "branch."+workspace.BranchName+".colinSessionID")
+	got := runGit(t, "-C", repoRoot, "config", "--get", "branch."+workspace.BranchName+".colinSessionId")
 	if got != "thr_123" {
 		t.Fatalf("branch session metadata = %q, want %q", got, "thr_123")
 	}

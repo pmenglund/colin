@@ -52,6 +52,11 @@ func parseMetadata(description string) (map[string]string, error) {
 	return out, nil
 }
 
+// StripMetadataBlock removes the Colin metadata comment and trims surrounding whitespace.
+func StripMetadataBlock(description string) string {
+	return strings.TrimSpace(metadataBlockRegexp.ReplaceAllString(description, ""))
+}
+
 func upsertMetadata(description string, patch MetadataPatch) (string, map[string]string, error) {
 	meta, err := parseMetadata(description)
 	if err != nil {
