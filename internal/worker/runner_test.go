@@ -776,17 +776,18 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 		t.Fatalf("executor call count = %d, want 1", executor.callCnt)
 	}
 	comments := state.comments["1"]
-	if len(comments) != 1 {
-		t.Fatalf("comment count = %d, want 1", len(comments))
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
 	}
-	if !strings.Contains(comments[0], "Moved to **Refine**") {
+	wantContextComment := "Starting Codex turn with current execution context.\n\n## Execution Context\n- Thread: _not recorded_\n- Branch: _not recorded_\n- Worktree: _not recorded_"
+	if comments[0] != wantContextComment {
 		t.Fatalf("unexpected comment body: %q", comments[0])
 	}
-	if !strings.Contains(comments[0], "## Turn Execution Context") {
-		t.Fatalf("unexpected comment body: %q", comments[0])
+	if !strings.Contains(comments[1], "Moved to **Refine**") {
+		t.Fatalf("unexpected comment body: %q", comments[1])
 	}
-	if !strings.Contains(comments[0], "Issue identifier: COL-1") {
-		t.Fatalf("unexpected comment body: %q", comments[0])
+	if strings.Contains(comments[1], "## Turn Execution Context") {
+		t.Fatalf("unexpected comment body: %q", comments[1])
 	}
 	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_1" {
 		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_1")
@@ -838,12 +839,16 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 		t.Fatalf("StateName = %q, want %q", got, workflow.StateReview)
 	}
 	comments := state.comments["1"]
-	if len(comments) != 1 {
-		t.Fatalf("comment count = %d, want 1", len(comments))
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
 	}
-	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Turn Execution Context\n````text\nIssue identifier: COL-1\n````"
-	if comments[0] != wantComment {
-		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
+	wantContextComment := "Starting Codex turn with current execution context.\n\n## Execution Context\n- Thread: _not recorded_\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
+	if comments[0] != wantContextComment {
+		t.Fatalf("comment body = %q, want %q", comments[0], wantContextComment)
+	}
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
+	if comments[1] != wantComment {
+		t.Fatalf("comment body = %q, want %q", comments[1], wantComment)
 	}
 	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_2" {
 		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_2")
@@ -904,12 +909,77 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	}
 
 	comments := state.comments["1"]
-	if len(comments) != 1 {
-		t.Fatalf("comment count = %d, want 1", len(comments))
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
 	}
-	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Turn Execution Context\n````text\nIssue identifier: COL-1\n````\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
-	if comments[0] != wantComment {
-		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
+	wantContextComment := "Starting Codex turn with current execution context.\n\n## Execution Context\n- Thread: _not recorded_\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
+	if comments[0] != wantContextComment {
+		t.Fatalf("comment body = %q, want %q", comments[0], wantContextComment)
+	}
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
+	if comments[1] != wantComment {
+		t.Fatalf("comment body = %q, want %q", comments[1], wantComment)
+	}
+}
+
+func TestRunnerInProgressCommentsExecutionContextBeforeTurnStarts(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaThreadID:     "thr_existing",
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &blockingInProgressExecutor{
+		entered: make(chan string, 1),
+		release: make(chan struct{}),
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- r.RunOnce(context.Background())
+	}()
+
+	<-executor.entered
+	state.mu.Lock()
+	comments := append([]string(nil), state.comments["1"]...)
+	state.mu.Unlock()
+
+	wantContextComment := "Starting Codex turn with current execution context.\n\n## Execution Context\n- Thread: `thr_existing`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
+	if len(comments) != 1 {
+		t.Fatalf("comment count before executor completes = %d, want 1", len(comments))
+	}
+	if comments[0] != wantContextComment {
+		t.Fatalf("comment body = %q, want %q", comments[0], wantContextComment)
+	}
+
+	close(executor.release)
+	if err := <-done; err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
 	}
 }
 
@@ -963,11 +1033,11 @@ func TestRunnerUsesConfiguredWorkflowStateNames(t *testing.T) {
 		t.Fatalf("StateName = %q, want %q", got, "Human Review")
 	}
 	comments := state.comments["1"]
-	if len(comments) != 1 {
-		t.Fatalf("comment count = %d, want 1", len(comments))
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
 	}
-	if !strings.Contains(comments[0], "Moved to **Human Review**") {
-		t.Fatalf("comment body = %q, want configured review state", comments[0])
+	if !strings.Contains(comments[1], "Moved to **Human Review**") {
+		t.Fatalf("comment body = %q, want configured review state", comments[1])
 	}
 }
 
@@ -1009,8 +1079,8 @@ func TestRunnerInProgressRetryAfterConflictDoesNotDuplicateComment(t *testing.T)
 	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
 		t.Fatalf("first run StateName = %q, want %q", got, workflow.StateInProgress)
 	}
-	if got := len(state.comments["1"]); got != 1 {
-		t.Fatalf("first run comment count = %d, want 1", got)
+	if got := len(state.comments["1"]); got != 2 {
+		t.Fatalf("first run comment count = %d, want 2", got)
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -1019,8 +1089,18 @@ func TestRunnerInProgressRetryAfterConflictDoesNotDuplicateComment(t *testing.T)
 	if got := state.issues["1"].StateName; got != workflow.StateRefine {
 		t.Fatalf("second run StateName = %q, want %q", got, workflow.StateRefine)
 	}
-	if got := len(state.comments["1"]); got != 1 {
-		t.Fatalf("second run comment count = %d, want 1", got)
+	comments := state.comments["1"]
+	if got := len(comments); got != 3 {
+		t.Fatalf("second run comment count = %d, want 3", got)
+	}
+	refineComments := 0
+	for _, comment := range comments {
+		if strings.Contains(comment, "Moved to **Refine**") {
+			refineComments++
+		}
+	}
+	if refineComments != 1 {
+		t.Fatalf("refine completion comment count = %d, want 1", refineComments)
 	}
 }
 
@@ -1065,8 +1145,8 @@ func TestRunnerInProgressReviewRetryAfterConflictDoesNotDuplicateComment(t *test
 	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
 		t.Fatalf("first run StateName = %q, want %q", got, workflow.StateInProgress)
 	}
-	if got := len(state.comments["1"]); got != 1 {
-		t.Fatalf("first run comment count = %d, want 1", got)
+	if got := len(state.comments["1"]); got != 2 {
+		t.Fatalf("first run comment count = %d, want 2", got)
 	}
 
 	if err := r.RunOnce(context.Background()); err != nil {
@@ -1075,8 +1155,18 @@ func TestRunnerInProgressReviewRetryAfterConflictDoesNotDuplicateComment(t *test
 	if got := state.issues["1"].StateName; got != workflow.StateReview {
 		t.Fatalf("second run StateName = %q, want %q", got, workflow.StateReview)
 	}
-	if got := len(state.comments["1"]); got != 1 {
-		t.Fatalf("second run comment count = %d, want 1", got)
+	comments := state.comments["1"]
+	if got := len(comments); got != 3 {
+		t.Fatalf("second run comment count = %d, want 3", got)
+	}
+	reviewComments := 0
+	for _, comment := range comments {
+		if strings.Contains(comment, "Moved to **Review** after Codex execution.") {
+			reviewComments++
+		}
+	}
+	if reviewComments != 1 {
+		t.Fatalf("review completion comment count = %d, want 1", reviewComments)
 	}
 }
 

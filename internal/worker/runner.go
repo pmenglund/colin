@@ -376,6 +376,10 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		}
 	}
 
+	if err := r.commentTurnExecutionContext(ctx, issue); err != nil {
+		return err
+	}
+
 	result, err := r.Executor.EvaluateAndExecute(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
@@ -388,10 +392,9 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 			needsInput = "Provide clear scope, acceptance criteria, and implementation constraints."
 		}
 		comment := fmt.Sprintf(
-			"Moved to **%s** because this task is not specified enough for autonomous execution.\n\nWhat is needed:\n%s\n\n## Turn Execution Context\n%s",
+			"Moved to **%s** because this task is not specified enough for autonomous execution.\n\nWhat is needed:\n%s",
 			states.Refine,
 			needsInput,
-			formatExecutionContext(result.ExecutionContext),
 		)
 		if err := r.applyInProgressOutcome(ctx, issue, states.Refine, comment, now, map[string]string{
 			workflow.MetaNeedsRefine: "true",
@@ -416,7 +419,6 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary: result.ExecutionSummary,
 		ReviewStateName:  states.Review,
-		ExecutionContext: result.ExecutionContext,
 		ThreadID:         threadID,
 		BranchName:       issue.Metadata[workflow.MetaBranchName],
 		WorktreePath:     issue.Metadata[workflow.MetaWorktreePath],
@@ -503,6 +505,33 @@ func (r *Runner) applyInProgressOutcome(
 		return nil
 	}
 	return r.Linear.UpdateIssueState(ctx, issue.ID, toState)
+}
+
+func (r *Runner) commentTurnExecutionContext(ctx context.Context, issue linear.Issue) error {
+	comment := buildExecutionContextComment(executionContextInput{
+		ThreadID:     issue.Metadata[workflow.MetaThreadID],
+		BranchName:   issue.Metadata[workflow.MetaBranchName],
+		WorktreePath: issue.Metadata[workflow.MetaWorktreePath],
+	})
+	commentID := commentFingerprint(comment)
+	if issue.Metadata[workflow.MetaInProgressContextCommentID] == commentID {
+		return nil
+	}
+	if err := r.Linear.CreateIssueComment(ctx, issue.ID, comment); err != nil {
+		return err
+	}
+	if r.DryRun {
+		return nil
+	}
+	patch := linear.MetadataPatch{
+		Set: map[string]string{
+			workflow.MetaInProgressContextCommentID: commentID,
+		},
+	}
+	if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+		return err
+	}
+	return nil
 }
 
 func commentFingerprint(comment string) string {

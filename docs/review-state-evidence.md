@@ -1,51 +1,49 @@
 # COLIN-10 Review-State Evidence Format
 
-This runbook defines the expected Linear comment payload when Colin transitions an issue from `In Progress` to `Review`.
+This runbook defines the expected Linear comment payload when Colin processes an issue in `In Progress` and transitions it to `Review`.
 
-## Expected Comment Structure
+## Expected Comment Sequence
 
-The worker posts one deterministic markdown comment with sections in this exact order:
+The worker posts two deterministic markdown comments:
 
-1. Header line:
+1. A pre-turn execution-context comment before Codex starts:
+
+    Starting Codex turn with current execution context.
+
+   This comment includes `## Execution Context` with:
+   - `Thread` (Codex thread id from issue metadata, or `_not recorded_`)
+   - `Branch` (git branch name, or `_not recorded_`)
+   - `Worktree` (worktree path, or `_not recorded_`)
+
+2. A turn-complete review comment:
 
     Moved to **Review** after Codex execution.
 
-2. `## Execution Summary`
-3. `## Execution Context`
-4. `## Turn Execution Context`
-5. Optional `## Evidence` (only when evidence pointers are present)
-
-`Execution Context` always includes three rows:
-
-- `Thread` (Codex thread id, or `_not recorded_`)
-- `Branch` (git branch name, or `_not recorded_`)
-- `Worktree` (worktree path, or `_not recorded_`)
-
-`Turn Execution Context` includes the exact Codex turn message sent by the worker in a fenced `text` block (or `_not recorded_` when unavailable).
+   Section order is:
+   - `## Execution Summary`
+   - `## Execution Context`
+   - Optional `## Evidence` (only when evidence pointers are present)
 
 `Evidence` may include:
 
 - `Terminal transcript` (for example a transcript path or URL)
 - `Screenshot` (for example a screenshot path or URL)
 
-If no evidence pointers are provided, the `## Evidence` section is omitted.
+If no evidence pointers are provided, the `## Evidence` section is omitted from the review comment.
 
 ## Reviewer Verification Steps
 
-1. Open the issue in Linear and locate the latest comment generated at transition to `Review`.
-2. Confirm section order is deterministic:
-   - header
+1. Open the issue in Linear and locate the latest two worker comments posted while processing `In Progress`.
+2. Verify the earlier comment starts with `Starting Codex turn with current execution context.` and includes `## Execution Context`.
+3. Verify the review-transition comment starts with `Moved to **Review** after Codex execution.` and uses deterministic section order:
    - `Execution Summary`
    - `Execution Context`
-   - `Turn Execution Context`
    - optional `Evidence`
-3. Verify `Execution Summary` explains what changed in plain language.
-4. Verify `Execution Context` includes a thread id and the expected branch/worktree metadata for the task.
-5. Verify `Turn Execution Context` contains the issue-specific work instructions used for the finished Codex turn.
-6. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
-7. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
+4. Verify `Execution Context` includes the expected branch/worktree metadata and an appropriate thread value.
+5. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
+6. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
 
 ## Troubleshooting
 
 - If `Thread`, `Branch`, or `Worktree` shows `_not recorded_`, the task can still be reviewed, but the missing context should be noted in a follow-up issue.
-- If a retry occurs after a conflict, the worker should not duplicate the same review comment; duplicate comments indicate a regression in in-progress outcome idempotence.
+- If a retry occurs after a conflict, the worker should not duplicate the same review-transition completion comment; duplicate completion comments indicate a regression in in-progress outcome idempotence.
