@@ -213,11 +213,11 @@ Fix:
 Cause:
 
 - Worktree path under `COLIN_HOME/worktrees/<ISSUE_IDENTIFIER>` is stale/corrupt.
-- Base branch (`main`) is missing locally.
+- Configured base branch (`base_branch` / `COLIN_BASE_BRANCH`) is missing locally.
 
 Fix:
 
-1. Ensure repository has `main` branch locally.
+1. Ensure repository has the configured base branch locally (default `main`).
 2. Stop worker.
 3. Remove stale worktree path.
 4. Run `git worktree prune`.

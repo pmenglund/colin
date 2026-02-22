@@ -137,6 +137,7 @@ func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.Me
 
 	return worker.NewGitMergeExecutor(worker.GitMergeExecutorOptions{
 		RepoRoot:      cwd,
+		BaseBranch:    cfg.BaseBranch,
 		MergePreparer: mergePreparer,
 	})
 }
@@ -148,8 +149,9 @@ func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper 
 	}
 
 	return worker.NewGitTaskBootstrapper(worker.GitTaskBootstrapperOptions{
-		RepoRoot:  cwd,
-		ColinHome: cfg.ColinHome,
+		RepoRoot:   cwd,
+		ColinHome:  cfg.ColinHome,
+		BaseBranch: cfg.BaseBranch,
 	})
 }
 

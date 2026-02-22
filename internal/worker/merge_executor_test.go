@@ -162,6 +162,63 @@ func TestGitMergeExecutorExecuteMergeInvokesMergePreparer(t *testing.T) {
 	}
 }
 
+func TestGitMergeExecutorExecuteMergeUsesConfiguredBaseBranch(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	runGit(t, "-C", repoRoot, "checkout", "-b", "master")
+	runGit(t, "-C", repoRoot, "branch", "-D", "main")
+
+	remotePath := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "init", "--bare", remotePath)
+	runGit(t, "-C", repoRoot, "remote", "add", "origin", remotePath)
+	runGit(t, "-C", repoRoot, "push", "-u", "origin", "master")
+
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:   repoRoot,
+		ColinHome:  filepath.Join(t.TempDir(), "colin-home"),
+		BaseBranch: "master",
+	})
+	workspace, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-76")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	changePath := filepath.Join(workspace.WorktreePath, "merge-master-target.txt")
+	if err := os.WriteFile(changePath, []byte("merged into master\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", changePath, err)
+	}
+	runGit(t, "-C", workspace.WorktreePath, "add", "merge-master-target.txt")
+	runGit(t, "-C", workspace.WorktreePath, "commit", "-m", "task change")
+
+	preparer := &fakeMergePreparer{}
+	executor := NewGitMergeExecutor(GitMergeExecutorOptions{
+		RepoRoot:      repoRoot,
+		BaseBranch:    "master",
+		MergePreparer: preparer,
+	})
+	issue := linear.Issue{
+		Identifier: "COLIN-76",
+		Metadata: map[string]string{
+			workflow.MetaBranchName:   workspace.BranchName,
+			workflow.MetaWorktreePath: workspace.WorktreePath,
+		},
+	}
+
+	if err := executor.ExecuteMerge(context.Background(), issue); err != nil {
+		t.Fatalf("ExecuteMerge() error = %v", err)
+	}
+	if preparer.lastBase != "master" {
+		t.Fatalf("PrepareMerge() base branch = %q, want %q", preparer.lastBase, "master")
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "merge-master-target.txt")); err != nil {
+		t.Fatalf("expected merged file in base repo: %v", err)
+	}
+	localMaster := runGit(t, "-C", repoRoot, "rev-parse", "master")
+	remoteMaster := runGit(t, "--git-dir", remotePath, "rev-parse", "refs/heads/master")
+	if localMaster != remoteMaster {
+		t.Fatalf("remote master %q != local master %q", remoteMaster, localMaster)
+	}
+}
+
 func TestGitMergeExecutorExecuteMergePushFailureLeavesRecoverableState(t *testing.T) {
 	repoRoot := initTestGitRepo(t)
 	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
