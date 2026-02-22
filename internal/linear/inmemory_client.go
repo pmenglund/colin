@@ -105,6 +105,37 @@ func (c *InMemoryClient) GetIssue(ctx context.Context, issueID string) (Issue, e
 	return cloneInMemoryIssue(issue), nil
 }
 
+// GetIssueByIdentifier returns one issue snapshot by identifier.
+func (c *InMemoryClient) GetIssueByIdentifier(ctx context.Context, issueIdentifier string) (Issue, error) {
+	if err := ctx.Err(); err != nil {
+		return Issue{}, err
+	}
+
+	trimmedIdentifier := strings.TrimSpace(issueIdentifier)
+	if trimmedIdentifier == "" {
+		return Issue{}, fmt.Errorf("issue identifier is required")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var selected *Issue
+	for _, issue := range c.issues {
+		if !strings.EqualFold(strings.TrimSpace(issue.Identifier), trimmedIdentifier) {
+			continue
+		}
+		issueCopy := cloneInMemoryIssue(issue)
+		if selected == nil || strings.Compare(issueCopy.ID, selected.ID) < 0 {
+			selected = &issueCopy
+		}
+	}
+	if selected == nil {
+		return Issue{}, fmt.Errorf("issue %s not found", trimmedIdentifier)
+	}
+
+	return *selected, nil
+}
+
 // UpdateIssueState updates issue workflow state.
 func (c *InMemoryClient) UpdateIssueState(ctx context.Context, issueID string, toState string) error {
 	if err := ctx.Err(); err != nil {

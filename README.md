@@ -71,6 +71,7 @@ colin --config ./colin.toml worker run
 ## How to use Colin
 
 - `colin setup`: create/validate required Linear workflow states.
+- `colin metadata <ISSUE-ID>`: print Colin metadata currently stored for one issue.
 - `colin worker run --once`: run a single reconciliation cycle and exit.
 - `colin worker run --dry-run`: compute decisions without writing to Linear.
 - `colin worker run`: run continuously on the configured poll interval.

@@ -125,6 +125,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		IsWellSpecified:   payload.IsWellSpecified,
 		NeedsInputSummary: strings.TrimSpace(payload.NeedsInputSummary),
 		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
+		ExecutionContext:  strings.TrimSpace(prompt),
 		ThreadID:          strings.TrimSpace(thread.ID()),
 		TranscriptRef:     strings.TrimSpace(payload.TranscriptRef),
 		ScreenshotRef:     strings.TrimSpace(payload.ScreenshotRef),

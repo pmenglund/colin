@@ -12,13 +12,16 @@ The worker posts one deterministic markdown comment with sections in this exact 
 
 2. `## Execution Summary`
 3. `## Execution Context`
-4. Optional `## Evidence` (only when evidence pointers are present)
+4. `## Turn Execution Context`
+5. Optional `## Evidence` (only when evidence pointers are present)
 
 `Execution Context` always includes three rows:
 
 - `Thread` (Codex thread id, or `_not recorded_`)
 - `Branch` (git branch name, or `_not recorded_`)
 - `Worktree` (worktree path, or `_not recorded_`)
+
+`Turn Execution Context` includes the exact Codex turn message sent by the worker in a fenced `text` block (or `_not recorded_` when unavailable).
 
 `Evidence` may include:
 
@@ -34,11 +37,13 @@ If no evidence pointers are provided, the `## Evidence` section is omitted.
    - header
    - `Execution Summary`
    - `Execution Context`
+   - `Turn Execution Context`
    - optional `Evidence`
 3. Verify `Execution Summary` explains what changed in plain language.
 4. Verify `Execution Context` includes a thread id and the expected branch/worktree metadata for the task.
-5. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
-6. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
+5. Verify `Turn Execution Context` contains the issue-specific work instructions used for the finished Codex turn.
+6. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
+7. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
 
 ## Troubleshooting
 

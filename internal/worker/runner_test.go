@@ -750,6 +750,7 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 		result: InProgressExecutionResult{
 			IsWellSpecified:   false,
 			NeedsInputSummary: "- acceptance criteria",
+			ExecutionContext:  "Issue identifier: COL-1",
 			ThreadID:          "thr_1",
 		},
 	}
@@ -781,6 +782,12 @@ func TestRunnerInProgressNotWellSpecifiedMovesToRefineAndComments(t *testing.T) 
 	if !strings.Contains(comments[0], "Moved to **Refine**") {
 		t.Fatalf("unexpected comment body: %q", comments[0])
 	}
+	if !strings.Contains(comments[0], "## Turn Execution Context") {
+		t.Fatalf("unexpected comment body: %q", comments[0])
+	}
+	if !strings.Contains(comments[0], "Issue identifier: COL-1") {
+		t.Fatalf("unexpected comment body: %q", comments[0])
+	}
 	if got := state.issues["1"].Metadata[workflow.MetaThreadID]; got != "thr_1" {
 		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaThreadID, got, "thr_1")
 	}
@@ -807,6 +814,7 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 		result: InProgressExecutionResult{
 			IsWellSpecified:  true,
 			ExecutionSummary: "implemented the requested change",
+			ExecutionContext: "Issue identifier: COL-1",
 			ThreadID:         "thr_2",
 		},
 	}
@@ -833,7 +841,7 @@ func TestRunnerInProgressWellSpecifiedMovesToReviewAndComments(t *testing.T) {
 	if len(comments) != 1 {
 		t.Fatalf("comment count = %d, want 1", len(comments))
 	}
-	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Turn Execution Context\n````text\nIssue identifier: COL-1\n````"
 	if comments[0] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
 	}
@@ -874,6 +882,7 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 		result: InProgressExecutionResult{
 			IsWellSpecified:  true,
 			ExecutionSummary: "implemented the requested change",
+			ExecutionContext: "Issue identifier: COL-1",
 			ThreadID:         "thr_2",
 			TranscriptRef:    "terminal://logs/COL-1.txt",
 			ScreenshotRef:    "https://example.invalid/screenshot.png",
@@ -898,7 +907,7 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	if len(comments) != 1 {
 		t.Fatalf("comment count = %d, want 1", len(comments))
 	}
-	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`\n\n## Turn Execution Context\n````text\nIssue identifier: COL-1\n````\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
 	if comments[0] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantComment)
 	}

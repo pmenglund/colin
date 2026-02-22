@@ -88,6 +88,127 @@ func TestGetIssueReadsMetadataFromAttachment(t *testing.T) {
 	}
 }
 
+func TestGetIssueByIdentifierReadsMetadataFromAttachment(t *testing.T) {
+	var requestedTeamKey string
+	var requestedIdentifier string
+	var issueLookupQuery string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(req.Query, "query GetIssueByIdentifier"):
+			issueLookupQuery = req.Query
+			requestedTeamKey = stringVariable(req.Variables, "teamKey")
+			requestedIdentifier = stringVariable(req.Variables, "identifier")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{
+							{"id": "1"},
+						},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query GetIssue"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"id":          "1",
+						"identifier":  "COL-42",
+						"title":       "x",
+						"description": "spec",
+						"updatedAt":   "2026-02-11T00:00:00Z",
+						"state":       map[string]any{"name": "Todo"},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "a-1",
+								"updatedAt": "2026-02-11T00:00:00Z",
+								"metadata":  map[string]any{"colin.branch_name": "colin/COL-42"},
+								"issue":     map[string]any{"id": "1"},
+							},
+						},
+					},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "COLIN", srv.Client())
+	issue, err := client.GetIssueByIdentifier(context.Background(), "COL-42")
+	if err != nil {
+		t.Fatalf("GetIssueByIdentifier() error = %v", err)
+	}
+	if requestedTeamKey != "COLIN" {
+		t.Fatalf("teamKey variable = %q, want %q", requestedTeamKey, "COLIN")
+	}
+	if requestedIdentifier != "COL-42" {
+		t.Fatalf("identifier variable = %q, want %q", requestedIdentifier, "COL-42")
+	}
+	if !strings.Contains(issueLookupQuery, "id: { eq: $identifier }") {
+		t.Fatalf("issue lookup query missing id filter: %q", issueLookupQuery)
+	}
+	if strings.Contains(issueLookupQuery, "identifier: { eq: $identifier }") {
+		t.Fatalf("issue lookup query should not filter by identifier field: %q", issueLookupQuery)
+	}
+	if issue.ID != "1" {
+		t.Fatalf("issue ID = %q, want %q", issue.ID, "1")
+	}
+	if issue.Metadata["colin.branch_name"] != "colin/COL-42" {
+		t.Fatalf("Metadata[colin.branch_name] = %q", issue.Metadata["colin.branch_name"])
+	}
+}
+
+func TestGetIssueByIdentifierReturnsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if strings.Contains(req.Query, "query GetIssueByIdentifier") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{},
+					},
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "COLIN", srv.Client())
+	_, err := client.GetIssueByIdentifier(context.Background(), "COL-404")
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+	if got := err.Error(); got != "issue COL-404 not found" {
+		t.Fatalf("error = %q", got)
+	}
+}
+
 func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

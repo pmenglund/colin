@@ -368,9 +368,10 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 			needsInput = "Provide clear scope, acceptance criteria, and implementation constraints."
 		}
 		comment := fmt.Sprintf(
-			"Moved to **%s** because this task is not specified enough for autonomous execution.\n\nWhat is needed:\n%s",
+			"Moved to **%s** because this task is not specified enough for autonomous execution.\n\nWhat is needed:\n%s\n\n## Turn Execution Context\n%s",
 			states.Refine,
 			needsInput,
+			formatExecutionContext(result.ExecutionContext),
 		)
 		if err := r.applyInProgressOutcome(ctx, issue, states.Refine, comment, now, map[string]string{
 			workflow.MetaNeedsRefine: "true",
@@ -395,6 +396,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary: result.ExecutionSummary,
 		ReviewStateName:  states.Review,
+		ExecutionContext: result.ExecutionContext,
 		ThreadID:         threadID,
 		BranchName:       issue.Metadata[workflow.MetaBranchName],
 		WorktreePath:     issue.Metadata[workflow.MetaWorktreePath],

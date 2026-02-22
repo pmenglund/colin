@@ -29,6 +29,7 @@ func NewRootCommand() *cobra.Command {
 
 	rootCmd.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath, "Path to config file")
+	rootCmd.AddCommand(newMetadataCommand(opts))
 	rootCmd.AddCommand(newSetupCommand(opts))
 	rootCmd.AddCommand(newWorkerCommand(opts))
 

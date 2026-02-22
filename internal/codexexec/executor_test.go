@@ -85,6 +85,12 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 	if result.ThreadID != "thr_1" {
 		t.Fatalf("ThreadID = %q", result.ThreadID)
 	}
+	if !strings.Contains(result.ExecutionContext, "Issue identifier: COLIN-1") {
+		t.Fatalf("ExecutionContext missing issue identifier: %q", result.ExecutionContext)
+	}
+	if strings.Contains(result.ExecutionContext, "colin:metadata") {
+		t.Fatalf("ExecutionContext should strip metadata block, got %q", result.ExecutionContext)
+	}
 	if !client.closed {
 		t.Fatal("expected client.Close() to be called")
 	}
@@ -120,6 +126,9 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	}
 	if result.ExecutionSummary != "Implemented tests" {
 		t.Fatalf("ExecutionSummary = %q", result.ExecutionSummary)
+	}
+	if !strings.Contains(result.ExecutionContext, "Issue identifier: COLIN-1") {
+		t.Fatalf("ExecutionContext missing issue identifier: %q", result.ExecutionContext)
 	}
 	if result.TranscriptRef != "terminal://logs/COLIN-1.txt" {
 		t.Fatalf("TranscriptRef = %q", result.TranscriptRef)

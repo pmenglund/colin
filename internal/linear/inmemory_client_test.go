@@ -141,6 +141,42 @@ func TestInMemoryClientUpdates(t *testing.T) {
 	}
 }
 
+func TestInMemoryClientGetIssueByIdentifier(t *testing.T) {
+	client := NewInMemoryClient([]Issue{
+		{
+			ID:         "1",
+			Identifier: "COL-1",
+			StateName:  "Todo",
+			Metadata: map[string]string{
+				"colin.branch_name": "colin/COL-1",
+			},
+		},
+	})
+
+	issue, err := client.GetIssueByIdentifier(context.Background(), " col-1 ")
+	if err != nil {
+		t.Fatalf("GetIssueByIdentifier() error = %v", err)
+	}
+	if issue.ID != "1" {
+		t.Fatalf("issue ID = %q, want %q", issue.ID, "1")
+	}
+	if issue.Metadata["colin.branch_name"] != "colin/COL-1" {
+		t.Fatalf("metadata colin.branch_name = %q", issue.Metadata["colin.branch_name"])
+	}
+}
+
+func TestInMemoryClientGetIssueByIdentifierNotFound(t *testing.T) {
+	client := NewInMemoryClient(nil)
+
+	_, err := client.GetIssueByIdentifier(context.Background(), "COL-404")
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+	if got := err.Error(); got != "issue COL-404 not found" {
+		t.Fatalf("error = %q", got)
+	}
+}
+
 func TestNewDefaultInMemoryClientHasSeedIssue(t *testing.T) {
 	client := NewDefaultInMemoryClient()
 	issues, err := client.ListCandidateIssues(context.Background(), "")

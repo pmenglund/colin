@@ -5,6 +5,7 @@ import "strings"
 type reviewCommentInput struct {
 	ExecutionSummary string
 	ReviewStateName  string
+	ExecutionContext string
 	ThreadID         string
 	BranchName       string
 	WorktreePath     string
@@ -35,6 +36,8 @@ func buildReviewComment(input reviewCommentInput) string {
 	b.WriteString(formatContextValue(input.BranchName))
 	b.WriteString("\n- Worktree: ")
 	b.WriteString(formatContextValue(input.WorktreePath))
+	b.WriteString("\n\n## Turn Execution Context\n")
+	b.WriteString(formatExecutionContext(input.ExecutionContext))
 
 	transcriptRef := strings.TrimSpace(input.TranscriptRef)
 	screenshotRef := strings.TrimSpace(input.ScreenshotRef)
@@ -62,4 +65,17 @@ func formatContextValue(value string) string {
 		return "_not recorded_"
 	}
 	return "`" + trimmed + "`"
+}
+
+func formatExecutionContext(context string) string {
+	trimmed := strings.TrimSpace(context)
+	if trimmed == "" {
+		return "_not recorded_"
+	}
+
+	var b strings.Builder
+	b.WriteString("````text\n")
+	b.WriteString(trimmed)
+	b.WriteString("\n````")
+	return b.String()
 }

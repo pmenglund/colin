@@ -252,6 +252,50 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 	}, nil
 }
 
+// GetIssueByIdentifier returns one issue snapshot by identifier.
+func (c *HTTPClient) GetIssueByIdentifier(ctx context.Context, issueIdentifier string) (Issue, error) {
+	identifier := strings.TrimSpace(issueIdentifier)
+	if identifier == "" {
+		return Issue{}, errors.New("issue identifier is required")
+	}
+
+	query := `query GetIssueByIdentifier($teamKey: String!, $identifier: ID!) {
+  issues(
+    filter: {
+      team: { key: { eq: $teamKey } }
+      id: { eq: $identifier }
+    }
+    first: 1
+  ) {
+    nodes {
+      id
+    }
+  }
+}`
+
+	var resp struct {
+		Issues struct {
+			Nodes []struct {
+				ID string `json:"id"`
+			} `json:"nodes"`
+		} `json:"issues"`
+	}
+
+	if err := c.graphQL(ctx, query, map[string]any{
+		"teamKey":    c.teamID,
+		"identifier": identifier,
+	}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
+		return Issue{}, err
+	}
+	if len(resp.Issues.Nodes) == 0 {
+		return Issue{}, fmt.Errorf("issue %s not found", identifier)
+	}
+
+	return c.GetIssue(ctx, resp.Issues.Nodes[0].ID)
+}
+
 func (c *HTTPClient) UpdateIssueState(ctx context.Context, issueID string, toState string) error {
 	issue, err := c.GetIssue(ctx, issueID)
 	if err != nil {

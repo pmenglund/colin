@@ -42,6 +42,14 @@ Use this to inspect decisions without writing state or metadata.
 
 This is the standard operating mode.
 
+### Show issue metadata
+
+```bash
+./bin/colin --config ./colin.toml metadata COLIN-42
+```
+
+Use this to inspect Colin metadata values currently stored for an issue.
+
 ## Common options
 
 - `--config <path>`: use a specific TOML configuration file.
