@@ -77,6 +77,15 @@ func TestMergePreparerPrepareMergeUsesPromptTemplateFromMarkdown(t *testing.T) {
 	if !strings.Contains(prompt, "Preparation mode for this run") {
 		t.Fatalf("prompt missing preparation mode instructions: %q", prompt)
 	}
+	if !strings.Contains(prompt, "Do not run `git checkout main` in the issue worktree.") {
+		t.Fatalf("prompt missing base checkout guardrail: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not run `git pull` in the issue worktree.") {
+		t.Fatalf("prompt missing pull guardrail: %q", prompt)
+	}
+	if !strings.Contains(prompt, "If local `main` is behind `origin/main`") {
+		t.Fatalf("prompt missing local/remote divergence guardrail: %q", prompt)
+	}
 	if !strings.Contains(prompt, "Validation applicability") {
 		t.Fatalf("prompt missing validation applicability instructions: %q", prompt)
 	}
@@ -220,6 +229,12 @@ func TestMergePreparerLoadPromptTemplateUsesEmbeddedTemplateWhenNoOverride(t *te
 	}
 	if !strings.Contains(template, "{{ SOURCE_BRANCH }}") {
 		t.Fatalf("template missing expected placeholders: %q", template)
+	}
+	if !strings.Contains(template, "git rebase {{ BASE_BRANCH }}") {
+		t.Fatalf("template missing local-base rebase instruction: %q", template)
+	}
+	if strings.Contains(template, "git pull --ff-only {{ REMOTE_NAME }} {{ BASE_BRANCH }}") {
+		t.Fatalf("template should not include pull-based base sync instruction: %q", template)
 	}
 }
 

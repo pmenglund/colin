@@ -7,20 +7,21 @@ import (
 )
 
 const (
-	MetaLeaseOwner          = "colin.lease_owner"
-	MetaLeaseExecutionID    = "colin.execution_id"
-	MetaLeaseExpiresAtUTC   = "colin.lease_expires_at"
-	MetaReason              = "colin.reason"
-	MetaNeedsRefine         = "colin.needs_refine"
-	MetaReadyForHumanReview = "colin.ready_for_human_review"
-	MetaMergeReady          = "colin.merge_ready"
-	MetaSpecReady           = "colin.spec_ready"
-	MetaLastHeartbeatUTC    = "colin.last_heartbeat"
-	MetaInProgressOutcome   = "colin.in_progress_outcome"
-	MetaInProgressCommentID = "colin.in_progress_comment_id"
-	MetaWorktreePath        = "colin.worktree_path"
-	MetaBranchName          = "colin.branch_name"
-	MetaThreadID            = "colin.thread_id"
+	MetaLeaseOwner                 = "colin.lease_owner"
+	MetaLeaseExecutionID           = "colin.execution_id"
+	MetaLeaseExpiresAtUTC          = "colin.lease_expires_at"
+	MetaReason                     = "colin.reason"
+	MetaNeedsRefine                = "colin.needs_refine"
+	MetaReadyForHumanReview        = "colin.ready_for_human_review"
+	MetaMergeReady                 = "colin.merge_ready"
+	MetaSpecReady                  = "colin.spec_ready"
+	MetaLastHeartbeatUTC           = "colin.last_heartbeat"
+	MetaInProgressOutcome          = "colin.in_progress_outcome"
+	MetaInProgressCommentID        = "colin.in_progress_comment_id"
+	MetaInProgressContextCommentID = "colin.in_progress_context_comment_id"
+	MetaWorktreePath               = "colin.worktree_path"
+	MetaBranchName                 = "colin.branch_name"
+	MetaThreadID                   = "colin.thread_id"
 )
 
 // Lease coordinates exclusive work ownership on a Linear issue.
