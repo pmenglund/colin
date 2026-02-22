@@ -485,13 +485,16 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		}
 	}
 
-	if err := r.commentTurnExecutionContext(ctx, issue); err != nil {
-		return err
-	}
-
 	result, err := r.Executor.EvaluateAndExecute(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
+	}
+	threadID := strings.TrimSpace(result.ThreadID)
+	if threadID == "" {
+		threadID = strings.TrimSpace(issue.Metadata[workflow.MetaThreadID])
+	}
+	if err := r.commentTurnExecutionContext(ctx, issue, threadID); err != nil {
+		return err
 	}
 
 	states := r.runtimeStates()
@@ -508,7 +511,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		if err := r.applyInProgressOutcome(ctx, issue, states.Refine, comment, now, map[string]string{
 			workflow.MetaNeedsRefine: "true",
 			workflow.MetaReason:      "missing required specification for execution",
-		}, "refine", result.ThreadID); err != nil {
+		}, "refine", threadID); err != nil {
 			return err
 		}
 		r.Logger.Info("worker decision",
@@ -521,10 +524,6 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		return nil
 	}
 
-	threadID := strings.TrimSpace(result.ThreadID)
-	if threadID == "" {
-		threadID = strings.TrimSpace(issue.Metadata[workflow.MetaThreadID])
-	}
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary: result.ExecutionSummary,
 		ReviewStateName:  states.Review,
@@ -614,9 +613,9 @@ func (r *Runner) applyInProgressOutcome(
 	return r.Linear.UpdateIssueState(ctx, issue.ID, toState)
 }
 
-func (r *Runner) commentTurnExecutionContext(ctx context.Context, issue linear.Issue) error {
+func (r *Runner) commentTurnExecutionContext(ctx context.Context, issue linear.Issue, threadID string) error {
 	comment := buildExecutionContextComment(executionContextInput{
-		ThreadID:     issue.Metadata[workflow.MetaThreadID],
+		ThreadID:     threadID,
 		BranchName:   issue.Metadata[workflow.MetaBranchName],
 		WorktreePath: issue.Metadata[workflow.MetaWorktreePath],
 	})
