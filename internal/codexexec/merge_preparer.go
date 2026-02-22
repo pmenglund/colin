@@ -66,9 +66,10 @@ func (m *MergePreparer) PrepareMerge(
 	}
 	defer client.Close()
 
+	threadCWD := resolveThreadCWD(m.cwd, worktreePath)
 	thread, err := client.StartThread(ctx, codex.ThreadStartOptions{
 		Model:          m.model,
-		Cwd:            m.cwd,
+		Cwd:            threadCWD,
 		ApprovalPolicy: codex.ApprovalPolicyNever,
 		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
 	})
@@ -91,7 +92,7 @@ func (m *MergePreparer) PrepareMerge(
 		"additionalProperties": false,
 	})
 	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(prompt)}, &codex.TurnOptions{
-		Cwd:          m.cwd,
+		Cwd:          threadCWD,
 		Model:        m.model,
 		OutputSchema: responseSchema,
 	})

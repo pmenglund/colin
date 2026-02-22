@@ -17,12 +17,13 @@ func TestMergePreparerPrepareMergeUsesPromptTemplateFromMarkdown(t *testing.T) {
 		id:         "thr_merge_1",
 		turnResult: &codex.TurnResult{FinalResponse: `{"is_ready_to_merge":true,"preparation_summary":"prepared"}`},
 	}
+	client := &fakeClient{thread: thread}
 	preparer := &MergePreparer{
 		cwd:             "/workspace",
 		model:           "gpt-5",
 		mergePromptPath: "overrides/merge.md",
 		newClient: func(context.Context) (codexClient, error) {
-			return &fakeClient{thread: thread}, nil
+			return client, nil
 		},
 		readFile: func(path string) ([]byte, error) {
 			if path != "/workspace/overrides/merge.md" {
@@ -82,6 +83,15 @@ func TestMergePreparerPrepareMergeUsesPromptTemplateFromMarkdown(t *testing.T) {
 	if thread.lastTurnOpts == nil {
 		t.Fatal("expected turn options to be set")
 	}
+	if client.lastStartThreadOpts == nil {
+		t.Fatal("expected start thread options to be set")
+	}
+	if client.lastStartThreadOpts.Cwd != "/tmp/worktree/COLIN-88" {
+		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp/worktree/COLIN-88")
+	}
+	if thread.lastTurnOpts.Cwd != "/tmp/worktree/COLIN-88" {
+		t.Fatalf("turn cwd = %q, want %q", thread.lastTurnOpts.Cwd, "/tmp/worktree/COLIN-88")
+	}
 	outputSchemaBytes, err := json.Marshal(thread.lastTurnOpts.OutputSchema)
 	if err != nil {
 		t.Fatalf("marshal output schema: %v", err)
@@ -100,11 +110,12 @@ func TestMergePreparerPrepareMergeFailsWhenNotReady(t *testing.T) {
 		id:         "thr_merge_2",
 		turnResult: &codex.TurnResult{FinalResponse: `{"is_ready_to_merge":false,"preparation_summary":"rebase conflict on cmd/worker.go"}`},
 	}
+	client := &fakeClient{thread: thread}
 	preparer := &MergePreparer{
 		cwd:   "/tmp",
 		model: "gpt-5",
 		newClient: func(context.Context) (codexClient, error) {
-			return &fakeClient{thread: thread}, nil
+			return client, nil
 		},
 	}
 
@@ -124,6 +135,57 @@ func TestMergePreparerPrepareMergeFailsWhenNotReady(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rebase conflict on cmd/worker.go") {
 		t.Fatalf("error = %q, want preparation summary", err.Error())
+	}
+	if client.lastStartThreadOpts == nil {
+		t.Fatal("expected start thread options to be set")
+	}
+	if client.lastStartThreadOpts.Cwd != "/tmp/worktree/COLIN-89" {
+		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp/worktree/COLIN-89")
+	}
+	if thread.lastTurnOpts == nil {
+		t.Fatal("expected turn options to be set")
+	}
+	if thread.lastTurnOpts.Cwd != "/tmp/worktree/COLIN-89" {
+		t.Fatalf("turn cwd = %q, want %q", thread.lastTurnOpts.Cwd, "/tmp/worktree/COLIN-89")
+	}
+}
+
+func TestMergePreparerPrepareMergeFallsBackToConfiguredCWDWhenWorktreeMissing(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_merge_3",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_ready_to_merge":true,"preparation_summary":"prepared"}`},
+	}
+	client := &fakeClient{thread: thread}
+	preparer := &MergePreparer{
+		cwd:   "/tmp/fallback",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	err := preparer.PrepareMerge(
+		context.Background(),
+		linear.Issue{Identifier: "COLIN-90", Title: "Merge prep fallback"},
+		"colin/COLIN-90",
+		"",
+		"main",
+		"origin",
+	)
+	if err != nil {
+		t.Fatalf("PrepareMerge() error = %v", err)
+	}
+	if client.lastStartThreadOpts == nil {
+		t.Fatal("expected start thread options to be set")
+	}
+	if client.lastStartThreadOpts.Cwd != "/tmp/fallback" {
+		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp/fallback")
+	}
+	if thread.lastTurnOpts == nil {
+		t.Fatal("expected turn options to be set")
+	}
+	if thread.lastTurnOpts.Cwd != "/tmp/fallback" {
+		t.Fatalf("turn cwd = %q, want %q", thread.lastTurnOpts.Cwd, "/tmp/fallback")
 	}
 }
 

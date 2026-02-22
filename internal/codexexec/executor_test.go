@@ -10,6 +10,7 @@ import (
 
 	"github.com/pmenglund/codex-sdk-go"
 	"github.com/pmenglund/colin/internal/linear"
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 type fakeThread struct {
@@ -33,12 +34,15 @@ func (f *fakeThread) RunInputs(_ context.Context, inputs []codex.Input, opts *co
 }
 
 type fakeClient struct {
-	thread   *fakeThread
-	closed   bool
-	startErr error
+	thread              *fakeThread
+	closed              bool
+	startErr            error
+	lastStartThreadOpts *codex.ThreadStartOptions
 }
 
-func (f *fakeClient) StartThread(_ context.Context, _ codex.ThreadStartOptions) (codexThread, error) {
+func (f *fakeClient) StartThread(_ context.Context, opts codex.ThreadStartOptions) (codexThread, error) {
+	optsCopy := opts
+	f.lastStartThreadOpts = &optsCopy
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
@@ -70,6 +74,9 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 		Identifier:  "COLIN-1",
 		Title:       "Test",
 		Description: "<!-- colin:metadata {\"k\":\"v\"} -->",
+		Metadata: map[string]string{
+			workflow.MetaWorktreePath: "/tmp/colin/worktrees/COLIN-1",
+		},
 	}
 
 	result, err := executor.EvaluateAndExecute(context.Background(), issue)
@@ -97,6 +104,18 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 	if len(thread.lastInputs) != 1 {
 		t.Fatalf("expected exactly one input, got %d", len(thread.lastInputs))
 	}
+	if client.lastStartThreadOpts == nil {
+		t.Fatal("expected start thread options to be set")
+	}
+	if client.lastStartThreadOpts.Cwd != "/tmp/colin/worktrees/COLIN-1" {
+		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp/colin/worktrees/COLIN-1")
+	}
+	if thread.lastTurnOpts == nil {
+		t.Fatal("expected turn options to be set")
+	}
+	if thread.lastTurnOpts.Cwd != "/tmp/colin/worktrees/COLIN-1" {
+		t.Fatalf("turn cwd = %q, want %q", thread.lastTurnOpts.Cwd, "/tmp/colin/worktrees/COLIN-1")
+	}
 	text := thread.lastInputs[0].Text
 	if strings.Contains(text, "colin:metadata") {
 		t.Fatalf("prompt should strip metadata block, got %q", text)
@@ -108,12 +127,13 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 		id:         "thr_2",
 		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented tests","transcript_ref":"terminal://logs/COLIN-1.txt","screenshot_ref":"https://example.invalid/result.png"}`},
 	}
+	client := &fakeClient{thread: thread}
 
 	executor := &Executor{
 		cwd:   "/tmp",
 		model: "gpt-5",
 		newClient: func(context.Context) (codexClient, error) {
-			return &fakeClient{thread: thread}, nil
+			return client, nil
 		},
 	}
 
@@ -138,6 +158,15 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	}
 	if thread.lastTurnOpts == nil {
 		t.Fatal("expected turn options to be set")
+	}
+	if client.lastStartThreadOpts == nil {
+		t.Fatal("expected start thread options to be set")
+	}
+	if client.lastStartThreadOpts.Cwd != "/tmp" {
+		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp")
+	}
+	if thread.lastTurnOpts.Cwd != "/tmp" {
+		t.Fatalf("turn cwd = %q, want %q", thread.lastTurnOpts.Cwd, "/tmp")
 	}
 	outputSchemaBytes, err := json.Marshal(thread.lastTurnOpts.OutputSchema)
 	if err != nil {

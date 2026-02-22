@@ -14,6 +14,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/execution"
 	"github.com/pmenglund/colin/internal/linear"
+	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/prompts"
 )
 
@@ -75,7 +76,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 
 	thread, err := client.StartThread(ctx, codex.ThreadStartOptions{
 		Model:          e.model,
-		Cwd:            e.cwd,
+		Cwd:            e.resolveThreadCWD(issue),
 		ApprovalPolicy: codex.ApprovalPolicyNever,
 		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
 	})
@@ -102,7 +103,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 	}
 
 	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(prompt)}, &codex.TurnOptions{
-		Cwd:          e.cwd,
+		Cwd:          e.resolveThreadCWD(issue),
 		Model:        e.model,
 		OutputSchema: responseSchema,
 	})
@@ -210,6 +211,18 @@ func (e *Executor) loadPromptTemplate() (string, error) {
 
 func embeddedWorkPromptTemplate() string {
 	return strings.TrimSpace(prompts.WorkMarkdown)
+}
+
+func (e *Executor) resolveThreadCWD(issue linear.Issue) string {
+	worktreePath := strings.TrimSpace(issue.Metadata[workflow.MetaWorktreePath])
+	return resolveThreadCWD(e.cwd, worktreePath)
+}
+
+func resolveThreadCWD(defaultCWD string, worktreePath string) string {
+	if trimmed := strings.TrimSpace(worktreePath); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(defaultCWD)
 }
 
 type codexClient interface {
