@@ -1741,6 +1741,99 @@ func TestRunnerRunOnceLogsActiveCycleAtInfo(t *testing.T) {
 	}
 }
 
+func TestRunnerRunOnceSuppressesRepeatedCycleLogsWhenCountsAreUnchanged(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "ready",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	var logOutput bytes.Buffer
+	r := Runner{
+		Linear:   client,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(&logOutput, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if got := logOutput.String(); !strings.Contains(got, "action=issues_fetched") || !strings.Contains(got, "action=cycle_complete") {
+		t.Fatalf("expected first run to emit cycle logs, got %q", got)
+	}
+
+	logOutput.Reset()
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+
+	text := logOutput.String()
+	if strings.Contains(text, "action=issues_fetched") {
+		t.Fatalf("expected unchanged issues_fetched count log to be suppressed, got %q", text)
+	}
+	if strings.Contains(text, "action=cycle_complete") {
+		t.Fatalf("expected unchanged cycle_complete processed/conflicts log to be suppressed, got %q", text)
+	}
+}
+
+func TestRunnerRunOnceLogsAgainWhenCountsChange(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "ready",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	var logOutput bytes.Buffer
+	r := Runner{
+		Linear:   client,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger: slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+
+	state.mu.Lock()
+	state.issues = map[string]linear.Issue{}
+	state.mu.Unlock()
+
+	logOutput.Reset()
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+
+	text := logOutput.String()
+	if !strings.Contains(text, "action=issues_fetched") || !strings.Contains(text, "count=0") {
+		t.Fatalf("expected changed issues_fetched count log, got %q", text)
+	}
+	if !strings.Contains(text, "action=cycle_complete") || !strings.Contains(text, "processed=0") {
+		t.Fatalf("expected changed cycle_complete processed log, got %q", text)
+	}
+}
+
 func TestRunnerRunRetriesAfterCycleFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

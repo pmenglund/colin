@@ -40,6 +40,13 @@ type Runner struct {
 	States         workflow.States
 	Clock          func() time.Time
 	Logger         *slog.Logger
+
+	cycleLogMu                sync.Mutex
+	lastIssuesFetchedCount    int
+	hasLastIssuesFetchedCount bool
+	lastCycleProcessedCount   int
+	lastCycleConflictsCount   int
+	hasLastCycleCompleteCount bool
 }
 
 // Validate reports whether the runner has the required dependencies and
@@ -103,20 +110,22 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		}
 		return issues[i].Identifier < issues[j].Identifier
 	})
-	if len(issues) == 0 {
-		r.Logger.Debug("worker cycle",
-			"worker", r.WorkerID,
-			"action", "issues_fetched",
-			"execution_id", executionID,
-			"count", len(issues),
-		)
-	} else {
-		r.Logger.Info("worker cycle",
-			"worker", r.WorkerID,
-			"action", "issues_fetched",
-			"execution_id", executionID,
-			"count", len(issues),
-		)
+	if r.shouldLogIssuesFetched(len(issues)) {
+		if len(issues) == 0 {
+			r.Logger.Debug("worker cycle",
+				"worker", r.WorkerID,
+				"action", "issues_fetched",
+				"execution_id", executionID,
+				"count", len(issues),
+			)
+		} else {
+			r.Logger.Info("worker cycle",
+				"worker", r.WorkerID,
+				"action", "issues_fetched",
+				"execution_id", executionID,
+				"count", len(issues),
+			)
+		}
 	}
 
 	type issueRunResult struct {
@@ -205,24 +214,26 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		)
 		return firstErr
 	}
-	if len(issues) == 0 {
-		r.Logger.Debug("worker cycle",
-			"worker", r.WorkerID,
-			"action", "cycle_complete",
-			"execution_id", executionID,
-			"processed", len(issues),
-			"conflicts", conflicts,
-			"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
-		)
-	} else {
-		r.Logger.Info("worker cycle",
-			"worker", r.WorkerID,
-			"action", "cycle_complete",
-			"execution_id", executionID,
-			"processed", len(issues),
-			"conflicts", conflicts,
-			"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
-		)
+	if r.shouldLogCycleComplete(len(issues), conflicts) {
+		if len(issues) == 0 {
+			r.Logger.Debug("worker cycle",
+				"worker", r.WorkerID,
+				"action", "cycle_complete",
+				"execution_id", executionID,
+				"processed", len(issues),
+				"conflicts", conflicts,
+				"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
+			)
+		} else {
+			r.Logger.Info("worker cycle",
+				"worker", r.WorkerID,
+				"action", "cycle_complete",
+				"execution_id", executionID,
+				"processed", len(issues),
+				"conflicts", conflicts,
+				"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
+			)
+		}
 	}
 
 	return nil
@@ -824,4 +835,33 @@ func waitWithContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (r *Runner) shouldLogIssuesFetched(count int) bool {
+	r.cycleLogMu.Lock()
+	defer r.cycleLogMu.Unlock()
+
+	if !r.hasLastIssuesFetchedCount || r.lastIssuesFetchedCount != count {
+		r.lastIssuesFetchedCount = count
+		r.hasLastIssuesFetchedCount = true
+		return true
+	}
+
+	return false
+}
+
+func (r *Runner) shouldLogCycleComplete(processed int, conflicts int) bool {
+	r.cycleLogMu.Lock()
+	defer r.cycleLogMu.Unlock()
+
+	if !r.hasLastCycleCompleteCount ||
+		r.lastCycleProcessedCount != processed ||
+		r.lastCycleConflictsCount != conflicts {
+		r.lastCycleProcessedCount = processed
+		r.lastCycleConflictsCount = conflicts
+		r.hasLastCycleCompleteCount = true
+		return true
+	}
+
+	return false
 }
