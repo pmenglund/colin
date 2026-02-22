@@ -26,6 +26,7 @@ type Options struct {
 	Model           string
 	Logger          *slog.Logger
 	WorkPromptPath  string
+	MergePromptPath string
 }
 
 // Executor runs in-progress issue work through a Codex thread.

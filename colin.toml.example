@@ -8,6 +8,9 @@ linear_api_token = ""
 linear_team_id = ""
 linear_base_url = "https://api.linear.app/graphql"
 linear_backend = "http"
+# Optional prompt overrides.
+# work_prompt_path = "/abs/path/to/work.md"
+# merge_prompt_path = "/abs/path/to/merge.md"
 # Root for Colin worktrees and task artifacts.
 colin_home = "~/.colin"
 # Recommended: set an explicit worker id in shared environments.

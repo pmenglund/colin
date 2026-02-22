@@ -14,6 +14,7 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
+	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
 	t.Setenv("COLIN_HOME", "")
 	t.Setenv("COLIN_WORKER_ID", "")
 	t.Setenv("COLIN_POLL_EVERY", "")
@@ -53,6 +54,9 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	if cfg.WorkPromptPath != "" {
 		t.Fatalf("WorkPromptPath = %q, want empty", cfg.WorkPromptPath)
 	}
+	if cfg.MergePromptPath != "" {
+		t.Fatalf("MergePromptPath = %q, want empty", cfg.MergePromptPath)
+	}
 	if cfg.WorkflowStates != DefaultWorkflowStates() {
 		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
 	}
@@ -64,6 +68,7 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("LINEAR_BASE_URL", "https://linear.invalid/graphql")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/custom-work-prompt.md")
+	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/custom-merge-prompt.md")
 	t.Setenv("COLIN_HOME", "/tmp/colin-home")
 	t.Setenv("COLIN_WORKER_ID", "worker-a")
 	t.Setenv("COLIN_POLL_EVERY", "45s")
@@ -102,6 +107,9 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.WorkPromptPath != "/tmp/custom-work-prompt.md" {
 		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
+	}
+	if cfg.MergePromptPath != "/tmp/custom-merge-prompt.md" {
+		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
 	}
 }
 
@@ -158,6 +166,7 @@ linear_team_id = "file-team"
 linear_base_url = "https://file.invalid/graphql"
 linear_backend = "http"
 work_prompt_path = "/tmp/file-work-prompt.md"
+merge_prompt_path = "/tmp/file-merge-prompt.md"
 colin_home = "/tmp/file-colin-home"
 worker_id = "file-worker"
 poll_every = "15s"
@@ -175,6 +184,7 @@ poll_every = "15s"
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
+	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
 	t.Setenv("COLIN_HOME", "")
 	t.Setenv("COLIN_WORKER_ID", "")
 	t.Setenv("COLIN_POLL_EVERY", "")
@@ -220,6 +230,9 @@ poll_every = "15s"
 	if cfg.WorkPromptPath != "/tmp/file-work-prompt.md" {
 		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
 	}
+	if cfg.MergePromptPath != "/tmp/file-merge-prompt.md" {
+		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
+	}
 	if cfg.WorkflowStates != DefaultWorkflowStates() {
 		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
 	}
@@ -236,6 +249,7 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	t.Setenv("LINEAR_TEAM_ID", "env-team")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/env-work-prompt.md")
+	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/env-merge-prompt.md")
 	t.Setenv("COLIN_HOME", "/tmp/env-colin-home")
 	t.Setenv("COLIN_DRY_RUN", "true")
 
@@ -261,6 +275,9 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	}
 	if cfg.WorkPromptPath != "/tmp/env-work-prompt.md" {
 		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
+	}
+	if cfg.MergePromptPath != "/tmp/env-merge-prompt.md" {
+		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
 	}
 }
 

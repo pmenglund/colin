@@ -32,33 +32,35 @@ const (
 
 // Config is runtime configuration for the Linear worker.
 type Config struct {
-	LinearAPIToken string
-	LinearTeamID   string
-	LinearBaseURL  string
-	LinearBackend  string
-	WorkPromptPath string
-	ColinHome      string
-	WorkerID       string
-	PollEvery      time.Duration
-	LeaseTTL       time.Duration
-	MaxConcurrency int
-	DryRun         bool
-	WorkflowStates WorkflowStates
+	LinearAPIToken  string
+	LinearTeamID    string
+	LinearBaseURL   string
+	LinearBackend   string
+	WorkPromptPath  string
+	MergePromptPath string
+	ColinHome       string
+	WorkerID        string
+	PollEvery       time.Duration
+	LeaseTTL        time.Duration
+	MaxConcurrency  int
+	DryRun          bool
+	WorkflowStates  WorkflowStates
 }
 
 type fileConfig struct {
-	LinearAPIToken string         `toml:"linear_api_token"`
-	LinearTeamID   string         `toml:"linear_team_id"`
-	LinearBaseURL  string         `toml:"linear_base_url"`
-	LinearBackend  string         `toml:"linear_backend"`
-	WorkPromptPath string         `toml:"work_prompt_path"`
-	ColinHome      string         `toml:"colin_home"`
-	WorkerID       string         `toml:"worker_id"`
-	PollEvery      string         `toml:"poll_every"`
-	LeaseTTL       string         `toml:"lease_ttl"`
-	MaxConcurrency *int           `toml:"max_concurrency"`
-	DryRun         *bool          `toml:"dry_run"`
-	WorkflowStates WorkflowStates `toml:"workflow_states"`
+	LinearAPIToken  string         `toml:"linear_api_token"`
+	LinearTeamID    string         `toml:"linear_team_id"`
+	LinearBaseURL   string         `toml:"linear_base_url"`
+	LinearBackend   string         `toml:"linear_backend"`
+	WorkPromptPath  string         `toml:"work_prompt_path"`
+	MergePromptPath string         `toml:"merge_prompt_path"`
+	ColinHome       string         `toml:"colin_home"`
+	WorkerID        string         `toml:"worker_id"`
+	PollEvery       string         `toml:"poll_every"`
+	LeaseTTL        string         `toml:"lease_ttl"`
+	MaxConcurrency  *int           `toml:"max_concurrency"`
+	DryRun          *bool          `toml:"dry_run"`
+	WorkflowStates  WorkflowStates `toml:"workflow_states"`
 }
 
 // WorkflowStates configures canonical workflow states to actual Linear state names.
@@ -220,6 +222,9 @@ func applyFileConfig(cfg *Config, path string) error {
 	if strings.TrimSpace(parsed.WorkPromptPath) != "" {
 		cfg.WorkPromptPath = strings.TrimSpace(parsed.WorkPromptPath)
 	}
+	if strings.TrimSpace(parsed.MergePromptPath) != "" {
+		cfg.MergePromptPath = strings.TrimSpace(parsed.MergePromptPath)
+	}
 	if strings.TrimSpace(parsed.ColinHome) != "" {
 		cfg.ColinHome = strings.TrimSpace(parsed.ColinHome)
 	}
@@ -289,6 +294,9 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v, ok := readString("COLIN_WORK_PROMPT_PATH"); ok {
 		cfg.WorkPromptPath = v
+	}
+	if v, ok := readString("COLIN_MERGE_PROMPT_PATH"); ok {
+		cfg.MergePromptPath = v
 	}
 	if v, ok := readString("COLIN_HOME"); ok {
 		cfg.ColinHome = v

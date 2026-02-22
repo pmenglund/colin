@@ -20,18 +20,20 @@ const (
 
 // GitMergeExecutorOptions configures a git-backed MergeExecutor.
 type GitMergeExecutorOptions struct {
-	RepoRoot   string
-	BaseBranch string
-	RemoteName string
-	GitBinary  string
+	RepoRoot      string
+	BaseBranch    string
+	RemoteName    string
+	GitBinary     string
+	MergePreparer MergePreparer
 }
 
 // GitMergeExecutor executes merge queue steps using git.
 type GitMergeExecutor struct {
-	repoRoot   string
-	baseBranch string
-	remoteName string
-	gitBinary  string
+	repoRoot      string
+	baseBranch    string
+	remoteName    string
+	gitBinary     string
+	mergePreparer MergePreparer
 }
 
 // NewGitMergeExecutor builds a git-backed merge executor.
@@ -50,10 +52,11 @@ func NewGitMergeExecutor(opts GitMergeExecutorOptions) *GitMergeExecutor {
 	}
 
 	return &GitMergeExecutor{
-		repoRoot:   filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
-		baseBranch: baseBranch,
-		remoteName: remoteName,
-		gitBinary:  gitBinary,
+		repoRoot:      filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
+		baseBranch:    baseBranch,
+		remoteName:    remoteName,
+		gitBinary:     gitBinary,
+		mergePreparer: opts.MergePreparer,
 	}
 }
 
@@ -87,6 +90,15 @@ func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue)
 	if err := e.ensureBaseBranchExists(ctx); err != nil {
 		return err
 	}
+	exists, err := e.branchExists(ctx, branchName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := e.prepareMerge(ctx, issue, branchName, worktreePath); err != nil {
+			return err
+		}
+	}
 	if err := e.checkoutBaseBranch(ctx); err != nil {
 		return err
 	}
@@ -103,6 +115,28 @@ func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue)
 		return err
 	}
 
+	return nil
+}
+
+func (e *GitMergeExecutor) prepareMerge(
+	ctx context.Context,
+	issue linear.Issue,
+	branchName string,
+	worktreePath string,
+) error {
+	if e.mergePreparer == nil {
+		return nil
+	}
+	if err := e.mergePreparer.PrepareMerge(
+		ctx,
+		issue,
+		branchName,
+		worktreePath,
+		e.baseBranch,
+		e.remoteName,
+	); err != nil {
+		return fmt.Errorf("prepare merge for branch %q: %w", branchName, err)
+	}
 	return nil
 }
 
