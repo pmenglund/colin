@@ -89,6 +89,13 @@ func TestMergePreparerPrepareMergeUsesPromptTemplateFromMarkdown(t *testing.T) {
 	if client.lastStartThreadOpts.Cwd != "/tmp/worktree/COLIN-88" {
 		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp/worktree/COLIN-88")
 	}
+	if client.lastStartThreadOpts.SandboxPolicy != codex.SandboxModeDangerFullAccess {
+		t.Fatalf(
+			"thread start sandbox policy = %v, want %v",
+			client.lastStartThreadOpts.SandboxPolicy,
+			codex.SandboxModeDangerFullAccess,
+		)
+	}
 	if thread.lastTurnOpts.Cwd != "/tmp/worktree/COLIN-88" {
 		t.Fatalf("turn cwd = %q, want %q", thread.lastTurnOpts.Cwd, "/tmp/worktree/COLIN-88")
 	}
@@ -181,6 +188,13 @@ func TestMergePreparerPrepareMergeFallsBackToConfiguredCWDWhenWorktreeMissing(t 
 	if client.lastStartThreadOpts.Cwd != "/tmp/fallback" {
 		t.Fatalf("thread start cwd = %q, want %q", client.lastStartThreadOpts.Cwd, "/tmp/fallback")
 	}
+	if client.lastStartThreadOpts.SandboxPolicy != codex.SandboxModeWorkspaceWrite {
+		t.Fatalf(
+			"thread start sandbox policy = %v, want %v",
+			client.lastStartThreadOpts.SandboxPolicy,
+			codex.SandboxModeWorkspaceWrite,
+		)
+	}
 	if thread.lastTurnOpts == nil {
 		t.Fatal("expected turn options to be set")
 	}
@@ -224,5 +238,59 @@ func TestMergePreparerLoadPromptTemplateErrorsWhenOverrideFileMissing(t *testing
 	}
 	if !strings.Contains(err.Error(), "read prompt override") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMergePreparationSandboxPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		defaultCWD   string
+		worktreePath string
+		want         any
+	}{
+		{
+			name:         "external worktree escalates",
+			defaultCWD:   "/workspace/repo",
+			worktreePath: "/tmp/worktrees/COLIN-1",
+			want:         codex.SandboxModeDangerFullAccess,
+		},
+		{
+			name:         "worktree under repo root keeps workspace sandbox",
+			defaultCWD:   "/workspace/repo",
+			worktreePath: "/workspace/repo/.colin/COLIN-1",
+			want:         codex.SandboxModeWorkspaceWrite,
+		},
+		{
+			name:         "missing worktree keeps workspace sandbox",
+			defaultCWD:   "/workspace/repo",
+			worktreePath: "",
+			want:         codex.SandboxModeWorkspaceWrite,
+		},
+		{
+			name:         "missing repo root escalates",
+			defaultCWD:   "",
+			worktreePath: "/tmp/worktrees/COLIN-1",
+			want:         codex.SandboxModeDangerFullAccess,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mergePreparationSandboxPolicy(tc.defaultCWD, tc.worktreePath)
+			if got != tc.want {
+				t.Fatalf(
+					"mergePreparationSandboxPolicy(%q, %q) = %v, want %v",
+					tc.defaultCWD,
+					tc.worktreePath,
+					got,
+					tc.want,
+				)
+			}
+		})
 	}
 }

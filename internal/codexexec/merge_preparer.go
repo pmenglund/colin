@@ -67,11 +67,12 @@ func (m *MergePreparer) PrepareMerge(
 	defer client.Close()
 
 	threadCWD := resolveThreadCWD(m.cwd, worktreePath)
+	sandboxPolicy := mergePreparationSandboxPolicy(m.cwd, worktreePath)
 	thread, err := client.StartThread(ctx, codex.ThreadStartOptions{
 		Model:          m.model,
 		Cwd:            threadCWD,
 		ApprovalPolicy: codex.ApprovalPolicyNever,
-		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
+		SandboxPolicy:  sandboxPolicy,
 	})
 	if err != nil {
 		return fmt.Errorf("start thread: %w", err)
@@ -113,6 +114,55 @@ func (m *MergePreparer) PrepareMerge(
 	}
 
 	return nil
+}
+
+func mergePreparationSandboxPolicy(defaultCWD string, worktreePath string) any {
+	trimmedWorktree := strings.TrimSpace(worktreePath)
+	if trimmedWorktree == "" {
+		return codex.SandboxModeWorkspaceWrite
+	}
+
+	trimmedCWD := strings.TrimSpace(defaultCWD)
+	if trimmedCWD == "" {
+		return codex.SandboxModeDangerFullAccess
+	}
+
+	insideRepoRoot, err := pathWithin(trimmedWorktree, trimmedCWD)
+	if err != nil {
+		return codex.SandboxModeDangerFullAccess
+	}
+	if insideRepoRoot {
+		return codex.SandboxModeWorkspaceWrite
+	}
+
+	// Linked worktrees commonly live under COLIN_HOME while git metadata writes
+	// go through the main repository's .git/worktrees directory.
+	return codex.SandboxModeDangerFullAccess
+}
+
+func pathWithin(path string, root string) (bool, error) {
+	absPath, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return false, fmt.Errorf("resolve absolute path %q: %w", path, err)
+	}
+	absRoot, err := filepath.Abs(strings.TrimSpace(root))
+	if err != nil {
+		return false, fmt.Errorf("resolve absolute root %q: %w", root, err)
+	}
+
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false, fmt.Errorf("compute relative path from %q to %q: %w", absRoot, absPath, err)
+	}
+
+	if rel == "." {
+		return true, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (m *MergePreparer) buildPrompt(
