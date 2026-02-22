@@ -13,6 +13,8 @@ type Issue struct {
 	ID          string
 	Identifier  string
 	Title       string
+	ProjectID   string
+	ProjectName string
 	Description string
 	StateName   string
 	UpdatedAt   time.Time

@@ -36,6 +36,7 @@ type Config struct {
 	LinearTeamID    string
 	LinearBaseURL   string
 	LinearBackend   string
+	ProjectFilter   []string
 	WorkPromptPath  string
 	MergePromptPath string
 	ColinHome       string
@@ -52,6 +53,7 @@ type fileConfig struct {
 	LinearTeamID    string         `toml:"linear_team_id"`
 	LinearBaseURL   string         `toml:"linear_base_url"`
 	LinearBackend   string         `toml:"linear_backend"`
+	ProjectFilter   string         `toml:"project_filter"`
 	WorkPromptPath  string         `toml:"work_prompt_path"`
 	MergePromptPath string         `toml:"merge_prompt_path"`
 	ColinHome       string         `toml:"colin_home"`
@@ -219,6 +221,9 @@ func applyFileConfig(cfg *Config, path string) error {
 	if strings.TrimSpace(parsed.LinearBackend) != "" {
 		cfg.LinearBackend = strings.TrimSpace(parsed.LinearBackend)
 	}
+	if strings.TrimSpace(parsed.ProjectFilter) != "" {
+		cfg.ProjectFilter = parseCSVList(parsed.ProjectFilter)
+	}
 	if strings.TrimSpace(parsed.WorkPromptPath) != "" {
 		cfg.WorkPromptPath = strings.TrimSpace(parsed.WorkPromptPath)
 	}
@@ -291,6 +296,9 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v, ok := readString("COLIN_LINEAR_BACKEND"); ok {
 		cfg.LinearBackend = v
+	}
+	if raw, ok := readString("COLIN_PROJECT_FILTER"); ok {
+		cfg.ProjectFilter = parseCSVList(raw)
 	}
 	if v, ok := readString("COLIN_WORK_PROMPT_PATH"); ok {
 		cfg.WorkPromptPath = v
@@ -397,6 +405,33 @@ func readString(key string) (string, bool) {
 func readRaw(key string) (string, bool) {
 	v, ok := os.LookupEnv(key)
 	return v, ok
+}
+
+func parseCSVList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	tokens := strings.Split(raw, ",")
+	out := make([]string, 0, len(tokens))
+	seen := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		trimmed := strings.TrimSpace(token)
+		if trimmed == "" {
+			continue
+		}
+		normalized := strings.ToLower(trimmed)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func defaultWorkerID() string {

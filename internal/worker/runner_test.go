@@ -297,6 +297,80 @@ func TestRunnerRunOnceIsIdempotentForTodoClaim(t *testing.T) {
 	}
 }
 
+func TestRunnerRunOnceFiltersByProjectIDOrName(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				ProjectID:   "project-alpha",
+				ProjectName: "Alpha",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+			"2": {
+				ID:          "2",
+				Identifier:  "COL-2",
+				ProjectID:   "project-beta",
+				ProjectName: "Project Beta",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+			"3": {
+				ID:          "3",
+				Identifier:  "COL-3",
+				ProjectID:   "project-gamma",
+				ProjectName: "Project Gamma",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+			"4": {
+				ID:          "4",
+				Identifier:  "COL-4",
+				StateName:   workflow.StateTodo,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	r := Runner{
+		Linear:        client,
+		TeamID:        "team-1",
+		ProjectFilter: []string{" PROJECT-ALPHA ", "project beta"},
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:     time.Second,
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("issue 1 state = %q, want %q", got, workflow.StateInProgress)
+	}
+	if got := state.issues["2"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("issue 2 state = %q, want %q", got, workflow.StateInProgress)
+	}
+	if got := state.issues["3"].StateName; got != workflow.StateTodo {
+		t.Fatalf("issue 3 state = %q, want %q", got, workflow.StateTodo)
+	}
+	if got := state.issues["4"].StateName; got != workflow.StateTodo {
+		t.Fatalf("issue 4 state = %q, want %q", got, workflow.StateTodo)
+	}
+	if state.stateUpdates != 2 {
+		t.Fatalf("stateUpdates = %d, want 2", state.stateUpdates)
+	}
+}
+
 func TestRunnerRunOnceBootstrapsTodoTransition(t *testing.T) {
 	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
 	state := &fakeClientState{

@@ -44,6 +44,7 @@ Edit `colin.toml` and set:
 - `linear_api_token`
 - `linear_team_id`
 - `worker_id` (recommended)
+- Optional: `project_filter` (comma-separated project IDs/names to scope candidate issues)
 
 ### 4) Validate setup
 
@@ -73,6 +74,8 @@ colin --config ./colin.toml worker run
 - `colin worker run --once`: run a single reconciliation cycle and exit.
 - `colin worker run --dry-run`: compute decisions without writing to Linear.
 - `colin worker run`: run continuously on the configured poll interval.
+
+`project_filter` can also be set from `COLIN_PROJECT_FILTER` as a comma-separated list. Matching is exact (case-insensitive) against project ID or project name.
 
 ## Detailed documentation
 

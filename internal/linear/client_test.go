@@ -104,7 +104,7 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 				"data": map[string]any{
 					"issues": map[string]any{
 						"nodes": []map[string]any{
-							{"id": "1", "identifier": "COL-1", "title": "todo-unblocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
+							{"id": "1", "identifier": "COL-1", "title": "todo-unblocked", "project": map[string]any{"id": "project-1", "name": "Alpha"}, "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
 							{"id": "2", "identifier": "COL-2", "title": "todo-blocked", "description": "x", "updatedAt": "2026-02-11T00:00:00Z", "state": map[string]any{"name": "Todo"}, "inverseRelations": map[string]any{"nodes": []map[string]any{
 								{"type": "blocks", "issue": map[string]any{"id": "dep-2", "state": map[string]any{"name": "In Progress"}}, "relatedIssue": map[string]any{"id": "2", "state": map[string]any{"name": "Todo"}}},
 							}}},
@@ -162,6 +162,18 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	}
 	if issues[0].Metadata[workflow.MetaThreadID] != "thread-1" {
 		t.Fatalf("issues[0] metadata thread id = %q", issues[0].Metadata[workflow.MetaThreadID])
+	}
+	if issues[0].ProjectID != "project-1" {
+		t.Fatalf("issues[0] project id = %q, want %q", issues[0].ProjectID, "project-1")
+	}
+	if issues[0].ProjectName != "Alpha" {
+		t.Fatalf("issues[0] project name = %q, want %q", issues[0].ProjectName, "Alpha")
+	}
+	if issues[1].ProjectID != "" {
+		t.Fatalf("issues[1] project id = %q, want empty", issues[1].ProjectID)
+	}
+	if issues[1].ProjectName != "" {
+		t.Fatalf("issues[1] project name = %q, want empty", issues[1].ProjectName)
 	}
 }
 

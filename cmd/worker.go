@@ -68,6 +68,7 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				MergeExecutor:  mergeExecutor,
 				Bootstrapper:   bootstrapper,
 				TeamID:         cfg.LinearTeamID,
+				ProjectFilter:  cfg.ProjectFilter,
 				WorkerID:       cfg.WorkerID,
 				PollEvery:      cfg.PollEvery,
 				LeaseTTL:       cfg.LeaseTTL,

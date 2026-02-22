@@ -33,6 +33,7 @@ Set at minimum:
 Optional but common:
 
 - `colin_home` (defaults to `~/.colin`)
+- `project_filter` (optional comma-separated project IDs/names)
 - `poll_every`
 - `lease_ttl`
 - `max_concurrency`

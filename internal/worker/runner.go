@@ -24,6 +24,7 @@ type Runner struct {
 	MergeExecutor  MergeExecutor
 	Bootstrapper   TaskBootstrapper
 	TeamID         string
+	ProjectFilter  []string
 	WorkerID       string
 	PollEvery      time.Duration
 	LeaseTTL       time.Duration
@@ -86,6 +87,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		)
 		return err
 	}
+	issues = filterIssuesByProject(issues, r.ProjectFilter)
 	sort.Slice(issues, func(i, j int) bool {
 		if issues[i].Identifier == issues[j].Identifier {
 			return issues[i].ID < issues[j].ID
@@ -553,4 +555,64 @@ func (r *Runner) recordBranchSessionMetadata(ctx context.Context, issue linear.I
 
 func (r *Runner) runtimeStates() workflow.States {
 	return r.States.WithDefaults()
+}
+
+func filterIssuesByProject(issues []linear.Issue, rawFilter []string) []linear.Issue {
+	filterSet := normalizeProjectFilter(rawFilter)
+	if len(filterSet) == 0 {
+		return issues
+	}
+
+	out := make([]linear.Issue, 0, len(issues))
+	for _, issue := range issues {
+		if issueMatchesProjectFilter(issue, filterSet) {
+			out = append(out, issue)
+		}
+	}
+	return out
+}
+
+func normalizeProjectFilter(rawFilter []string) map[string]struct{} {
+	if len(rawFilter) == 0 {
+		return nil
+	}
+
+	out := make(map[string]struct{}, len(rawFilter))
+	for _, raw := range rawFilter {
+		normalized := normalizeProjectFilterValue(raw)
+		if normalized == "" {
+			continue
+		}
+		out[normalized] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func issueMatchesProjectFilter(issue linear.Issue, filterSet map[string]struct{}) bool {
+	if len(filterSet) == 0 {
+		return true
+	}
+
+	projectID := normalizeProjectFilterValue(issue.ProjectID)
+	if projectID != "" {
+		if _, ok := filterSet[projectID]; ok {
+			return true
+		}
+	}
+
+	projectName := normalizeProjectFilterValue(issue.ProjectName)
+	if projectName != "" {
+		if _, ok := filterSet[projectName]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeProjectFilterValue(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
 }

@@ -65,9 +65,12 @@ Most important values:
 - `linear_team_id`
 - `worker_id`
 - `linear_backend` (`http` or `fake`)
+- `project_filter` (optional comma-separated project IDs/names)
 - `poll_every`
 - `lease_ttl`
 - `max_concurrency`
+
+Environment variables override config file values. To scope processing to specific projects at runtime, set `COLIN_PROJECT_FILTER` (comma-separated IDs/names).
 
 ## When to use the runbook and troubleshooting docs
 

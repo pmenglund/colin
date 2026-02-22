@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	t.Setenv("LINEAR_TEAM_ID", "team")
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
 	t.Setenv("COLIN_HOME", "")
@@ -57,6 +59,9 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	if cfg.MergePromptPath != "" {
 		t.Fatalf("MergePromptPath = %q, want empty", cfg.MergePromptPath)
 	}
+	if len(cfg.ProjectFilter) != 0 {
+		t.Fatalf("ProjectFilter = %#v, want empty", cfg.ProjectFilter)
+	}
 	if cfg.WorkflowStates != DefaultWorkflowStates() {
 		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
 	}
@@ -67,6 +72,7 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("LINEAR_TEAM_ID", "team")
 	t.Setenv("LINEAR_BASE_URL", "https://linear.invalid/graphql")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_PROJECT_FILTER", "proj-a, Project One,proj-a,project one")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/custom-work-prompt.md")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/custom-merge-prompt.md")
 	t.Setenv("COLIN_HOME", "/tmp/colin-home")
@@ -111,12 +117,16 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	if cfg.MergePromptPath != "/tmp/custom-merge-prompt.md" {
 		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
 	}
+	if want := []string{"proj-a", "Project One"}; !slices.Equal(cfg.ProjectFilter, want) {
+		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
+	}
 }
 
 func TestLoadFromEnvRequiresTokenAndTeam(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("expected error for missing required env vars")
@@ -127,6 +137,7 @@ func TestLoadFromEnvFakeBackendDoesNotRequireTokenAndTeam(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -141,6 +152,7 @@ func TestLoadFromEnvRejectsInvalidBackend(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
 	t.Setenv("COLIN_LINEAR_BACKEND", "unknown")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("expected error for invalid COLIN_LINEAR_BACKEND")
@@ -151,6 +163,7 @@ func TestLoadFromEnvRejectsInvalidMaxConcurrency(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
 	t.Setenv("COLIN_MAX_CONCURRENCY", "0")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("expected error for invalid COLIN_MAX_CONCURRENCY")
@@ -165,6 +178,7 @@ linear_api_token = "file-token"
 linear_team_id = "file-team"
 linear_base_url = "https://file.invalid/graphql"
 linear_backend = "http"
+project_filter = "PROJ-123, Website Revamp , proj-123"
 work_prompt_path = "/tmp/file-work-prompt.md"
 merge_prompt_path = "/tmp/file-merge-prompt.md"
 colin_home = "/tmp/file-colin-home"
@@ -183,6 +197,7 @@ poll_every = "15s"
 	t.Setenv("LINEAR_TEAM_ID", "")
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
 	t.Setenv("COLIN_HOME", "")
@@ -233,6 +248,9 @@ poll_every = "15s"
 	if cfg.MergePromptPath != "/tmp/file-merge-prompt.md" {
 		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
 	}
+	if want := []string{"PROJ-123", "Website Revamp"}; !slices.Equal(cfg.ProjectFilter, want) {
+		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
+	}
 	if cfg.WorkflowStates != DefaultWorkflowStates() {
 		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
 	}
@@ -248,6 +266,7 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "env-token")
 	t.Setenv("LINEAR_TEAM_ID", "env-team")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_PROJECT_FILTER", "env-project,ENV-PROJECT, release train")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/env-work-prompt.md")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/env-merge-prompt.md")
 	t.Setenv("COLIN_HOME", "/tmp/env-colin-home")
@@ -279,11 +298,15 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	if cfg.MergePromptPath != "/tmp/env-merge-prompt.md" {
 		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
 	}
+	if want := []string{"env-project", "release train"}; !slices.Equal(cfg.ProjectFilter, want) {
+		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
+	}
 }
 
 func TestLoadWithoutFileFallsBackToEnv(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	if _, err := LoadFromPath(filepath.Join(t.TempDir(), "missing.toml")); err != nil {
 		t.Fatalf("LoadFromPath() error = %v", err)
@@ -300,6 +323,7 @@ func TestLoadFromFileFakeBackendWithoutCredentials(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	cfg, err := LoadFromPath(configPath)
 	if err != nil {
@@ -320,6 +344,7 @@ func TestLoadUsesCOLIN_CONFIGByDefault(t *testing.T) {
 	t.Setenv("COLIN_CONFIG", configPath)
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -349,6 +374,7 @@ refine = "Needs Spec"
 
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	cfg, err := LoadFromPath(configPath)
 	if err != nil {
@@ -379,6 +405,7 @@ in_progress = "todo"
 
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	_, err := LoadFromPath(configPath)
 	if err == nil {

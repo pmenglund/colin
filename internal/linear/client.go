@@ -107,6 +107,10 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
       id
       identifier
       title
+      project {
+        id
+        name
+      }
       description
       updatedAt
       state { name }
@@ -134,9 +138,13 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 	var resp struct {
 		Issues struct {
 			Nodes []struct {
-				ID          string `json:"id"`
-				Identifier  string `json:"identifier"`
-				Title       string `json:"title"`
+				ID         string `json:"id"`
+				Identifier string `json:"identifier"`
+				Title      string `json:"title"`
+				Project    *struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"project"`
 				Description string `json:"description"`
 				UpdatedAt   string `json:"updatedAt"`
 				State       struct {
@@ -177,6 +185,8 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 			ID:          n.ID,
 			Identifier:  n.Identifier,
 			Title:       n.Title,
+			ProjectID:   projectID(n.Project),
+			ProjectName: projectName(n.Project),
 			Description: n.Description,
 			StateName:   n.State.Name,
 			UpdatedAt:   updatedAt,
@@ -661,4 +671,24 @@ func relationBlockerIssue(issueID string, relation inverseRelation) *inverseRela
 		}
 	}
 	return nil
+}
+
+func projectID(project *struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}) string {
+	if project == nil {
+		return ""
+	}
+	return strings.TrimSpace(project.ID)
+}
+
+func projectName(project *struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}) string {
+	if project == nil {
+		return ""
+	}
+	return strings.TrimSpace(project.Name)
 }

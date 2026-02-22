@@ -110,7 +110,7 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 	}
 	configPath := filepath.Join(t.TempDir(), "colin-live-e2e.toml")
 	workerID := "live-e2e-" + suffix
-	if err := writeLiveWorkerConfig(configPath, env, workerID, colinHome, promptPath, workflow.States{
+	if err := writeLiveWorkerConfig(configPath, env, workerID, colinHome, promptPath, project.ID, workflow.States{
 		Todo:       todoStateName,
 		InProgress: inProgressStateName,
 		Refine:     refineStateName,
@@ -443,12 +443,13 @@ func liveRunSuffix() (string, error) {
 	return time.Now().UTC().Format("20060102-150405") + "-" + strings.ToLower(hex.EncodeToString(random)), nil
 }
 
-func writeLiveWorkerConfig(path string, env liveHarnessEnv, workerID string, colinHome string, promptPath string, states workflow.States) error {
+func writeLiveWorkerConfig(path string, env liveHarnessEnv, workerID string, colinHome string, promptPath string, projectFilter string, states workflow.States) error {
 	states = states.WithDefaults()
 	content := fmt.Sprintf(`linear_api_token = %q
 linear_team_id = %q
 linear_base_url = %q
 linear_backend = "http"
+project_filter = %q
 work_prompt_path = %q
 colin_home = %q
 worker_id = %q
@@ -464,7 +465,7 @@ refine = %q
 review = %q
 merge = %q
 done = %q
-`, env.LinearToken, env.LinearTeam, liveLinearEndpoint, promptPath, colinHome, workerID, states.Todo, states.InProgress, states.Refine, states.Review, states.Merge, states.Done)
+`, env.LinearToken, env.LinearTeam, liveLinearEndpoint, projectFilter, promptPath, colinHome, workerID, states.Todo, states.InProgress, states.Refine, states.Review, states.Merge, states.Done)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
@@ -488,6 +489,7 @@ func runLiveWorkerOnce(binaryPath string, sandboxRepoRoot string, configPath str
 		"CODEX_HOME="+codexHome,
 		"COLIN_CONFIG=",
 		"COLIN_LINEAR_BACKEND=",
+		"COLIN_PROJECT_FILTER=",
 		"COLIN_WORK_PROMPT_PATH=",
 		"COLIN_HOME=",
 		"COLIN_WORKER_ID=",
