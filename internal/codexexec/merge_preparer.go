@@ -195,6 +195,24 @@ func (m *MergePreparer) buildPrompt(
 	prompt += "\n\nPreparation mode for this run:\n"
 	prompt += "- Execute only preparation steps before the final merge operation.\n"
 	prompt += "- Do not run `git merge`, `git push`, `git branch -d`, or `git worktree remove`.\n"
+	prompt += fmt.Sprintf("- Do not run `git checkout %s` in the issue worktree.\n", strings.TrimSpace(baseBranch))
+	prompt += "- Do not run `git pull` in the issue worktree.\n"
+	prompt += fmt.Sprintf("- Treat local `%s` as the canonical rebase target.\n", strings.TrimSpace(baseBranch))
+	prompt += fmt.Sprintf(
+		"- Before rebasing, verify local `%s` includes `%s/%s` using `git merge-base --is-ancestor %s/%s %s`.\n",
+		strings.TrimSpace(baseBranch),
+		strings.TrimSpace(remoteName),
+		strings.TrimSpace(baseBranch),
+		strings.TrimSpace(remoteName),
+		strings.TrimSpace(baseBranch),
+		strings.TrimSpace(baseBranch),
+	)
+	prompt += fmt.Sprintf(
+		"- If local `%s` is behind `%s/%s`, stop preparation, set `is_ready_to_merge` to false, and explain the sync blocker in `preparation_summary`.\n",
+		strings.TrimSpace(baseBranch),
+		strings.TrimSpace(remoteName),
+		strings.TrimSpace(baseBranch),
+	)
 	prompt += "- Validation applicability: if `go test ./...` fails only because there is no Go module (for example, missing `go.mod`), mark validation as not applicable and continue.\n"
 	prompt += "- If preparation cannot be completed, explain why in `preparation_summary` and set `is_ready_to_merge` to false.\n"
 
