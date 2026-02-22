@@ -21,6 +21,8 @@ Current automation scope (as implemented in code):
 
 Available docs:
 
+- `getting-started.md`: first-time setup, initial validation, and first continuous run.
+- `usage.md`: day-to-day CLI usage patterns and command quick reference.
 - `operator-runbook.md`: startup, ongoing operations, logs, merge queue behavior, fake-backend/offline mode, and disaster recovery.
 - `troubleshooting.md`: symptom-driven recovery for config, runtime, workflow, and git/worktree failures.
 - `review-state-evidence.md`: deterministic `In Progress -> Review` comment format and reviewer verification checklist.

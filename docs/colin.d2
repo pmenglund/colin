@@ -1,0 +1,75 @@
+vars: {
+  d2-config: {
+    theme-overrides: {
+      N7: "transparent"
+    }
+  }
+}
+
+direction: down
+
+backlog:{
+  label: Backlog
+  shape: hexagon
+  style: {
+    fill: "#E6F0FF"
+    stroke: "#2B6CB0"
+  }
+}
+todo:{
+  label: Todo
+  style: {
+    stroke: "#2F855A"
+  }
+}
+review: {
+  label: Review
+  shape: hexagon
+  style: {
+    fill: "#E6F0FF"
+    stroke: "#2B6CB0"
+  }
+}
+in_progress:{
+  label: In Progress
+  style: {
+    fill: "#D9F2E3"
+    stroke: "#2F855A"
+  }
+}
+refine: {
+  label: Refine
+  shape: hexagon
+  style: {
+    fill: "#E6F0FF"
+    stroke: "#2B6CB0"
+  }
+}
+merge:{
+  label: Merge
+  style: {
+    fill: "#D9F2E3"
+    stroke: "#2F855A"
+  }
+}
+done:{
+  label: Done
+  style: {
+    stroke: "#2F855A"
+  }
+}
+
+backlog -> todo: "Ready for work"
+
+todo -> in_progress: "Claim + Start"
+todo -> refine: "Spec Missing"
+
+in_progress -> review: "Execution Complete"
+in_progress -> refine: "Needs Clarification"
+
+review -> todo: "Human Rework"
+review -> merge: "Human Approved"
+
+refine -> todo: "Spec Added"
+
+merge -> done: "Merged Successfully"
