@@ -90,10 +90,6 @@ func runMetadataWithLookup(ctx context.Context, w io.Writer, lookup metadataIssu
 	}
 
 	trimmedIdentifier := strings.TrimSpace(issueIdentifier)
-	if trimmedIdentifier == "" {
-		return errors.New("issue identifier is required")
-	}
-
 	issue, err := lookup.GetIssueByIdentifier(ctx, trimmedIdentifier)
 	if err != nil {
 		return err

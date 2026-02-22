@@ -61,6 +61,24 @@ func TestDecideTodoNoopWhenLeaseOwnedByOther(t *testing.T) {
 	}
 }
 
+func TestDecideTodoNoopWhenBlocked(t *testing.T) {
+	d := Decide(IssueSnapshot{
+		State:       StateTodo,
+		Description: "spec",
+		Blocked:     true,
+		WorkerID:    "worker-1",
+		ExecutionID: "exec-1",
+		LeaseTTL:    time.Minute,
+	}, time.Now())
+
+	if d.Action != ActionNoop {
+		t.Fatalf("Action = %q", d.Action)
+	}
+	if d.Reason != "blocked by dependency" {
+		t.Fatalf("Reason = %q", d.Reason)
+	}
+}
+
 func TestDecideTodoRecoversFromInvalidLeaseMetadata(t *testing.T) {
 	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
 	d := Decide(IssueSnapshot{
@@ -123,6 +141,24 @@ func TestDecideInProgressToRefine(t *testing.T) {
 
 	if d.ToState != StateRefine {
 		t.Fatalf("ToState = %q", d.ToState)
+	}
+}
+
+func TestDecideInProgressNoopWhenBlocked(t *testing.T) {
+	d := Decide(IssueSnapshot{
+		State:       StateInProgress,
+		Description: "spec",
+		Blocked:     true,
+		WorkerID:    "worker-1",
+		ExecutionID: "exec-1",
+		LeaseTTL:    time.Minute,
+	}, time.Now())
+
+	if d.Action != ActionNoop {
+		t.Fatalf("Action = %q", d.Action)
+	}
+	if d.Reason != "blocked by dependency" {
+		t.Fatalf("Reason = %q", d.Reason)
 	}
 }
 

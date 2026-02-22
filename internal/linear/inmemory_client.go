@@ -63,7 +63,7 @@ func (c *InMemoryClient) SetWorkflowStates(states workflow.States) error {
 	return nil
 }
 
-// ListCandidateIssues returns all issues in states Colin can process automatically.
+// ListCandidateIssues returns team issues annotated with dependency-blocking status.
 func (c *InMemoryClient) ListCandidateIssues(ctx context.Context, _ string) ([]Issue, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -75,13 +75,9 @@ func (c *InMemoryClient) ListCandidateIssues(ctx context.Context, _ string) ([]I
 
 	out := make([]Issue, 0, len(c.issues))
 	for _, issue := range c.issues {
-		if !states.IsCandidate(issue.StateName) {
-			continue
-		}
-		if issueHasBlockingDependency(issue, c.issues, states) {
-			continue
-		}
-		out = append(out, cloneInMemoryIssue(issue))
+		issueCopy := cloneInMemoryIssue(issue)
+		issueCopy.Blocked = issueHasBlockingDependency(issue, c.issues, states)
+		out = append(out, issueCopy)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Identifier < out[j].Identifier
@@ -102,7 +98,9 @@ func (c *InMemoryClient) GetIssue(ctx context.Context, issueID string) (Issue, e
 	if !ok {
 		return Issue{}, fmt.Errorf("issue %s not found", issueID)
 	}
-	return cloneInMemoryIssue(issue), nil
+	issueCopy := cloneInMemoryIssue(issue)
+	issueCopy.Blocked = issueHasBlockingDependency(issue, c.issues, c.states.WithDefaults())
+	return issueCopy, nil
 }
 
 // GetIssueByIdentifier returns one issue snapshot by identifier.
@@ -125,6 +123,7 @@ func (c *InMemoryClient) GetIssueByIdentifier(ctx context.Context, issueIdentifi
 			continue
 		}
 		issueCopy := cloneInMemoryIssue(issue)
+		issueCopy.Blocked = issueHasBlockingDependency(issue, c.issues, c.states.WithDefaults())
 		if selected == nil || strings.Compare(issueCopy.ID, selected.ID) < 0 {
 			selected = &issueCopy
 		}

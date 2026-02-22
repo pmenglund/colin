@@ -20,6 +20,7 @@ type IssueSnapshot struct {
 	Identifier  string
 	State       string
 	Description string
+	Blocked     bool
 	Metadata    map[string]string
 	WorkerID    string
 	ExecutionID string
@@ -52,6 +53,9 @@ func DecideWithStates(snapshot IssueSnapshot, now time.Time, states States) Deci
 
 	switch snapshot.State {
 	case states.Todo:
+		if snapshot.Blocked {
+			return Decision{Action: ActionNoop, Reason: "blocked by dependency"}
+		}
 		if !specReady {
 			return Decision{
 				Action:  ActionTransition,
@@ -84,6 +88,9 @@ func DecideWithStates(snapshot IssueSnapshot, now time.Time, states States) Deci
 		}
 
 	case states.InProgress:
+		if snapshot.Blocked {
+			return Decision{Action: ActionNoop, Reason: "blocked by dependency"}
+		}
 		if activeLeaseByOther {
 			return Decision{Action: ActionNoop, Reason: "active lease owned by another worker"}
 		}

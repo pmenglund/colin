@@ -7,7 +7,7 @@ import (
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
-func TestInMemoryClientListCandidateIssuesFiltersStates(t *testing.T) {
+func TestInMemoryClientListCandidateIssuesReturnsAllStates(t *testing.T) {
 	client := NewInMemoryClient([]Issue{
 		{ID: "1", Identifier: "COL-1", StateName: "Todo", Description: "spec"},
 		{ID: "2", Identifier: "COL-2", StateName: "In Progress", Description: "spec"},
@@ -20,8 +20,8 @@ func TestInMemoryClientListCandidateIssuesFiltersStates(t *testing.T) {
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
 
-	if len(issues) != 3 {
-		t.Fatalf("candidate issue count = %d, want 3", len(issues))
+	if len(issues) != 4 {
+		t.Fatalf("issue count = %d, want 4", len(issues))
 	}
 	if issues[0].Identifier != "COL-1" {
 		t.Fatalf("first issue = %q, want COL-1", issues[0].Identifier)
@@ -32,9 +32,12 @@ func TestInMemoryClientListCandidateIssuesFiltersStates(t *testing.T) {
 	if issues[2].Identifier != "COL-3" {
 		t.Fatalf("third issue = %q, want COL-3", issues[2].Identifier)
 	}
+	if issues[3].Identifier != "COL-4" {
+		t.Fatalf("fourth issue = %q, want COL-4", issues[3].Identifier)
+	}
 }
 
-func TestInMemoryClientListCandidateIssuesSkipsBlockedUntilDependencyDone(t *testing.T) {
+func TestInMemoryClientListCandidateIssuesTracksBlockedUntilDependencyDone(t *testing.T) {
 	client := NewInMemoryClient([]Issue{
 		{ID: "dep", Identifier: "COL-DEP", StateName: "Todo", Description: "dep"},
 		{ID: "blocked", Identifier: "COL-BLOCKED", StateName: "Todo", Description: "blocked", BlockedBy: []string{"dep"}},
@@ -45,11 +48,17 @@ func TestInMemoryClientListCandidateIssuesSkipsBlockedUntilDependencyDone(t *tes
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
 
-	if len(issues) != 1 {
-		t.Fatalf("candidate issue count = %d, want 1", len(issues))
+	if len(issues) != 2 {
+		t.Fatalf("issue count = %d, want 2", len(issues))
 	}
-	if issues[0].Identifier != "COL-DEP" {
-		t.Fatalf("first issue = %q, want COL-DEP", issues[0].Identifier)
+	if issues[0].Identifier != "COL-BLOCKED" {
+		t.Fatalf("first issue = %q, want COL-BLOCKED", issues[0].Identifier)
+	}
+	if !issues[0].Blocked {
+		t.Fatal("blocked issue should be marked blocked")
+	}
+	if issues[1].Identifier != "COL-DEP" {
+		t.Fatalf("second issue = %q, want COL-DEP", issues[1].Identifier)
 	}
 
 	if err := client.UpdateIssueState(context.Background(), "dep", "Done"); err != nil {
@@ -60,15 +69,18 @@ func TestInMemoryClientListCandidateIssuesSkipsBlockedUntilDependencyDone(t *tes
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() after unblocking error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("candidate issue count after unblocking = %d, want 1", len(issues))
+	if len(issues) != 2 {
+		t.Fatalf("issue count after unblocking = %d, want 2", len(issues))
 	}
 	if issues[0].Identifier != "COL-BLOCKED" {
 		t.Fatalf("first issue after unblocking = %q, want COL-BLOCKED", issues[0].Identifier)
 	}
+	if issues[0].Blocked {
+		t.Fatal("blocked issue should be unblocked after dependency is done")
+	}
 }
 
-func TestInMemoryClientListCandidateIssuesSkipsBlockedInProgressUntilDependencyDone(t *testing.T) {
+func TestInMemoryClientListCandidateIssuesTracksBlockedInProgressUntilDependencyDone(t *testing.T) {
 	client := NewInMemoryClient([]Issue{
 		{ID: "dep", Identifier: "COL-DEP", StateName: "Todo", Description: "dep"},
 		{ID: "blocked", Identifier: "COL-BLOCKED", StateName: "In Progress", Description: "blocked", BlockedBy: []string{"dep"}},
@@ -78,11 +90,17 @@ func TestInMemoryClientListCandidateIssuesSkipsBlockedInProgressUntilDependencyD
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("candidate issue count = %d, want 1", len(issues))
+	if len(issues) != 2 {
+		t.Fatalf("issue count = %d, want 2", len(issues))
 	}
-	if issues[0].Identifier != "COL-DEP" {
-		t.Fatalf("first issue = %q, want COL-DEP", issues[0].Identifier)
+	if issues[0].Identifier != "COL-BLOCKED" {
+		t.Fatalf("first issue = %q, want COL-BLOCKED", issues[0].Identifier)
+	}
+	if !issues[0].Blocked {
+		t.Fatal("blocked issue should be marked blocked")
+	}
+	if issues[1].Identifier != "COL-DEP" {
+		t.Fatalf("second issue = %q, want COL-DEP", issues[1].Identifier)
 	}
 
 	if err := client.UpdateIssueState(context.Background(), "dep", "Done"); err != nil {
@@ -93,11 +111,14 @@ func TestInMemoryClientListCandidateIssuesSkipsBlockedInProgressUntilDependencyD
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() after unblocking error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("candidate issue count after unblocking = %d, want 1", len(issues))
+	if len(issues) != 2 {
+		t.Fatalf("issue count after unblocking = %d, want 2", len(issues))
 	}
 	if issues[0].Identifier != "COL-BLOCKED" {
 		t.Fatalf("first issue after unblocking = %q, want COL-BLOCKED", issues[0].Identifier)
+	}
+	if issues[0].Blocked {
+		t.Fatal("blocked issue should be unblocked after dependency is done")
 	}
 }
 
@@ -188,11 +209,11 @@ func TestNewDefaultInMemoryClientHasSeedIssue(t *testing.T) {
 	}
 }
 
-func TestInMemoryClientUsesConfiguredRuntimeStates(t *testing.T) {
+func TestInMemoryClientUsesConfiguredRuntimeStatesForBlockedCalculation(t *testing.T) {
 	client := NewInMemoryClient([]Issue{
 		{ID: "1", Identifier: "COL-1", StateName: "Backlog", Description: "spec"},
 		{ID: "2", Identifier: "COL-2", StateName: "Blocked", Description: "blocked", BlockedBy: []string{"3"}},
-		{ID: "3", Identifier: "COL-3", StateName: "Closed", Description: "done"},
+		{ID: "3", Identifier: "COL-3", StateName: "Review", Description: "not done"},
 	})
 	if err := client.SetWorkflowStates(workflow.States{
 		Todo:       "Backlog",
@@ -209,7 +230,10 @@ func TestInMemoryClientUsesConfiguredRuntimeStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
-	if len(issues) != 2 {
-		t.Fatalf("candidate issue count = %d, want 2", len(issues))
+	if len(issues) != 3 {
+		t.Fatalf("issue count = %d, want 3", len(issues))
+	}
+	if !issues[1].Blocked {
+		t.Fatal("blocked issue should be marked blocked with configured done state")
 	}
 }

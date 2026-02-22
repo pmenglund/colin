@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -164,12 +165,7 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 
 	issues := make([]Issue, 0, len(resp.Issues.Nodes))
 	for _, n := range resp.Issues.Nodes {
-		if !states.IsCandidate(n.State.Name) {
-			continue
-		}
-		if hasActiveBlockingInverseRelation(n.ID, n.InverseRelations.Nodes, states) {
-			continue
-		}
+		blocked := hasActiveBlockingInverseRelation(n.ID, n.InverseRelations.Nodes, states)
 
 		meta, err := c.getIssueMetadata(ctx, n.ID)
 		if err != nil {
@@ -190,6 +186,7 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 			Description: n.Description,
 			StateName:   n.State.Name,
 			UpdatedAt:   updatedAt,
+			Blocked:     blocked,
 			Metadata:    meta,
 		})
 	}
@@ -206,6 +203,19 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
     description
     updatedAt
     state { name }
+    inverseRelations(first: 20) {
+      nodes {
+        type
+        issue {
+          id
+          state { name }
+        }
+        relatedIssue {
+          id
+          state { name }
+        }
+      }
+    }
   }
 }`
 
@@ -219,6 +229,9 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 			State       struct {
 				Name string `json:"name"`
 			} `json:"state"`
+			InverseRelations struct {
+				Nodes []inverseRelation `json:"nodes"`
+			} `json:"inverseRelations"`
 		} `json:"issue"`
 	}
 
@@ -248,6 +261,7 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 		Description: resp.Issue.Description,
 		StateName:   resp.Issue.State.Name,
 		UpdatedAt:   updatedAt,
+		Blocked:     hasActiveBlockingInverseRelation(resp.Issue.ID, resp.Issue.InverseRelations.Nodes, c.runtimeStates()),
 		Metadata:    meta,
 	}, nil
 }
@@ -341,7 +355,7 @@ func (c *HTTPClient) UpdateIssueMetadata(ctx context.Context, issueID string, pa
 	}
 
 	nextMetadata := applyMetadataPatch(observed.Metadata, patch)
-	if metadataMapsEqual(nextMetadata, observed.Metadata) {
+	if maps.Equal(nextMetadata, observed.Metadata) {
 		return nil
 	}
 
@@ -350,7 +364,7 @@ func (c *HTTPClient) UpdateIssueMetadata(ctx context.Context, issueID string, pa
 	if err != nil {
 		return err
 	}
-	if !metadataMapsEqual(current.Metadata, observed.Metadata) || current.StateName != observed.StateName {
+	if !maps.Equal(current.Metadata, observed.Metadata) || current.StateName != observed.StateName {
 		return fmt.Errorf("update issue metadata: %w", ErrConflict)
 	}
 	return c.upsertIssueMetadataAttachment(ctx, issueID, nextMetadata)
@@ -477,9 +491,9 @@ func (c *HTTPClient) getIssueMetadata(ctx context.Context, issueID string) (map[
 	var resp struct {
 		AttachmentsForURL struct {
 			Nodes []struct {
-				ID        string `json:"id"`
-				UpdatedAt string `json:"updatedAt"`
-				Metadata  any    `json:"metadata"`
+				ID        string                     `json:"id"`
+				UpdatedAt string                     `json:"updatedAt"`
+				Metadata  map[string]json.RawMessage `json:"metadata"`
 				Issue     *struct {
 					ID string `json:"id"`
 				} `json:"issue"`
@@ -501,7 +515,10 @@ func (c *HTTPClient) getIssueMetadata(ctx context.Context, issueID string) (map[
 		if node.Issue == nil || strings.TrimSpace(node.Issue.ID) != trimmedIssueID {
 			continue
 		}
-		nodeMetadata := metadataObjectToStringMap(node.Metadata)
+		nodeMetadata, err := metadataObjectToStringMap(node.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("decode metadata attachment %q: %w", strings.TrimSpace(node.ID), err)
+		}
 		if selected == nil {
 			selected = nodeMetadata
 			selectedTimeUTC = parseRFC3339OrZero(node.UpdatedAt)
@@ -527,21 +544,25 @@ func parseRFC3339OrZero(raw string) time.Time {
 	return parsed
 }
 
-func metadataObjectToStringMap(raw any) map[string]string {
-	object, ok := raw.(map[string]any)
-	if !ok || len(object) == 0 {
-		return map[string]string{}
+func metadataObjectToStringMap(raw map[string]json.RawMessage) (map[string]string, error) {
+	if len(raw) == 0 {
+		return map[string]string{}, nil
 	}
 
-	out := make(map[string]string, len(object))
-	for rawKey, rawValue := range object {
+	out := make(map[string]string, len(raw))
+	for rawKey, rawValue := range raw {
 		key := strings.TrimSpace(rawKey)
-		if key == "" || rawValue == nil {
+		if key == "" || len(rawValue) == 0 || string(rawValue) == "null" {
 			continue
 		}
-		out[key] = fmt.Sprint(rawValue)
+
+		var value string
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return nil, fmt.Errorf("metadata key %q must be a string", key)
+		}
+		out[key] = value
 	}
-	return out
+	return out, nil
 }
 
 func metadataStringMapToObject(metadata map[string]string) map[string]any {

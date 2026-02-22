@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -413,20 +415,34 @@ func parseCSVList(raw string) []string {
 		return nil
 	}
 
-	tokens := strings.Split(raw, ",")
-	out := make([]string, 0, len(tokens))
-	seen := make(map[string]struct{}, len(tokens))
-	for _, token := range tokens {
-		trimmed := strings.TrimSpace(token)
-		if trimmed == "" {
-			continue
+	reader := csv.NewReader(strings.NewReader(raw))
+	reader.FieldsPerRecord = -1
+	reader.TrimLeadingSpace = true
+
+	records, err := reader.ReadAll()
+	if err != nil && !errors.Is(err, io.EOF) {
+		records = [][]string{strings.Split(raw, ",")}
+	}
+
+	tokenCount := 0
+	for _, record := range records {
+		tokenCount += len(record)
+	}
+	out := make([]string, 0, tokenCount)
+	seen := make(map[string]struct{}, tokenCount)
+	for _, record := range records {
+		for _, token := range record {
+			trimmed := strings.TrimSpace(token)
+			if trimmed == "" {
+				continue
+			}
+			normalized := strings.ToLower(trimmed)
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			out = append(out, trimmed)
 		}
-		normalized := strings.ToLower(trimmed)
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		out = append(out, trimmed)
 	}
 	if len(out) == 0 {
 		return nil

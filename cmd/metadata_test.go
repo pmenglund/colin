@@ -97,8 +97,8 @@ func TestRunMetadataWithLookupPrintsEmptyMetadata(t *testing.T) {
 	}
 }
 
-func TestRunMetadataWithLookupRequiresIdentifier(t *testing.T) {
-	err := runMetadataWithLookup(context.Background(), &bytes.Buffer{}, metadataLookupStub{}, "   ")
+func TestRunMetadataWithLookupPropagatesLookupIdentifierValidation(t *testing.T) {
+	err := runMetadataWithLookup(context.Background(), &bytes.Buffer{}, linear.NewDefaultInMemoryClient(), "   ")
 	if err == nil {
 		t.Fatal("expected error for empty identifier")
 	}

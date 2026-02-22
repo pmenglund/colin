@@ -1,6 +1,7 @@
 package linear
 
 import (
+	"maps"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type Issue struct {
 	Description string
 	StateName   string
 	UpdatedAt   time.Time
+	Blocked     bool
 	Metadata    map[string]string
 	BlockedBy   []string
 }
@@ -39,7 +41,10 @@ func StripMetadataBlock(description string) string {
 }
 
 func applyMetadataPatch(metadata map[string]string, patch MetadataPatch) map[string]string {
-	out := copyMetadataMap(metadata)
+	out := maps.Clone(metadata)
+	if out == nil {
+		out = map[string]string{}
+	}
 	for k, v := range patch.Set {
 		trimmedKey := strings.TrimSpace(k)
 		if trimmedKey == "" {
@@ -53,29 +58,6 @@ func applyMetadataPatch(metadata map[string]string, patch MetadataPatch) map[str
 			continue
 		}
 		delete(out, trimmedKey)
-	}
-	return out
-}
-
-func metadataMapsEqual(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, leftValue := range left {
-		if rightValue, ok := right[key]; !ok || rightValue != leftValue {
-			return false
-		}
-	}
-	return true
-}
-
-func copyMetadataMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return map[string]string{}
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
 	}
 	return out
 }

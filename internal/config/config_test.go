@@ -122,6 +122,22 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvParsesQuotedProjectFilterCSV(t *testing.T) {
+	t.Setenv("LINEAR_API_TOKEN", "token")
+	t.Setenv("LINEAR_TEAM_ID", "team")
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_PROJECT_FILTER", "\"Project, One\", project-two")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if want := []string{"Project, One", "project-two"}; !slices.Equal(cfg.ProjectFilter, want) {
+		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
+	}
+}
+
 func TestLoadFromEnvRequiresTokenAndTeam(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")

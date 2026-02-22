@@ -209,7 +209,7 @@ func TestGetIssueByIdentifierReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestListCandidateIssuesFiltersStates(t *testing.T) {
+func TestListCandidateIssuesReturnsBlockedStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query     string         `json:"query"`
@@ -272,17 +272,44 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
-	if len(issues) != 2 {
-		t.Fatalf("expected 2 candidate issues, got %d", len(issues))
+	if len(issues) != 5 {
+		t.Fatalf("expected 5 issues, got %d", len(issues))
 	}
 	if issues[0].Identifier != "COL-1" {
 		t.Fatalf("unexpected first issue identifier: %q", issues[0].Identifier)
 	}
-	if issues[1].Identifier != "COL-3" {
+	if issues[1].Identifier != "COL-2" {
 		t.Fatalf("unexpected second issue identifier: %q", issues[1].Identifier)
+	}
+	if issues[2].Identifier != "COL-3" {
+		t.Fatalf("unexpected third issue identifier: %q", issues[2].Identifier)
+	}
+	if issues[3].Identifier != "COL-4" {
+		t.Fatalf("unexpected fourth issue identifier: %q", issues[3].Identifier)
+	}
+	if issues[4].Identifier != "COL-5" {
+		t.Fatalf("unexpected fifth issue identifier: %q", issues[4].Identifier)
 	}
 	if issues[0].Metadata[workflow.MetaThreadID] != "thread-1" {
 		t.Fatalf("issues[0] metadata thread id = %q", issues[0].Metadata[workflow.MetaThreadID])
+	}
+	if issues[2].Metadata[workflow.MetaThreadID] != "thread-3" {
+		t.Fatalf("issues[2] metadata thread id = %q", issues[2].Metadata[workflow.MetaThreadID])
+	}
+	if issues[0].Blocked {
+		t.Fatal("issues[0] blocked = true, want false")
+	}
+	if !issues[1].Blocked {
+		t.Fatal("issues[1] blocked = false, want true")
+	}
+	if issues[2].Blocked {
+		t.Fatal("issues[2] blocked = true, want false")
+	}
+	if !issues[3].Blocked {
+		t.Fatal("issues[3] blocked = false, want true")
+	}
+	if issues[4].Blocked {
+		t.Fatal("issues[4] blocked = true, want false")
 	}
 	if issues[0].ProjectID != "project-1" {
 		t.Fatalf("issues[0] project id = %q, want %q", issues[0].ProjectID, "project-1")
@@ -290,11 +317,70 @@ func TestListCandidateIssuesFiltersStates(t *testing.T) {
 	if issues[0].ProjectName != "Alpha" {
 		t.Fatalf("issues[0] project name = %q, want %q", issues[0].ProjectName, "Alpha")
 	}
-	if issues[1].ProjectID != "" {
-		t.Fatalf("issues[1] project id = %q, want empty", issues[1].ProjectID)
+	if issues[2].ProjectID != "" {
+		t.Fatalf("issues[2] project id = %q, want empty", issues[2].ProjectID)
 	}
-	if issues[1].ProjectName != "" {
-		t.Fatalf("issues[1] project name = %q, want empty", issues[1].ProjectName)
+	if issues[2].ProjectName != "" {
+		t.Fatalf("issues[2] project name = %q, want empty", issues[2].ProjectName)
+	}
+}
+
+func TestListCandidateIssuesRejectsNonStringMetadataValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch {
+		case strings.Contains(req.Query, "query ListIssues"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":               "1",
+								"identifier":       "COL-1",
+								"title":            "todo",
+								"description":      "x",
+								"updatedAt":        "2026-02-11T00:00:00Z",
+								"state":            map[string]any{"name": "Todo"},
+								"inverseRelations": map[string]any{"nodes": []map[string]any{}},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "att-1",
+								"updatedAt": "2026-02-11T00:00:00Z",
+								"metadata":  map[string]any{"colin.thread_id": 42},
+								"issue":     map[string]any{"id": "1"},
+							},
+						},
+					},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	_, err := client.ListCandidateIssues(context.Background(), "team")
+	if err == nil {
+		t.Fatal("expected metadata decoding error")
+	}
+	if !strings.Contains(err.Error(), `metadata key "colin.thread_id" must be a string`) {
+		t.Fatalf("error = %q", err.Error())
 	}
 }
 
@@ -613,11 +699,14 @@ func TestListCandidateIssuesUsesConfiguredRuntimeStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCandidateIssues() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("candidate issue count = %d, want 1", len(issues))
+	if len(issues) != 2 {
+		t.Fatalf("issue count = %d, want 2", len(issues))
 	}
 	if issues[0].Identifier != "COL-1" {
 		t.Fatalf("issue identifier = %q, want %q", issues[0].Identifier, "COL-1")
+	}
+	if issues[1].Identifier != "COL-2" {
+		t.Fatalf("issue identifier = %q, want %q", issues[1].Identifier, "COL-2")
 	}
 }
 

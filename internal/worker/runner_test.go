@@ -598,6 +598,55 @@ func TestRunnerInProgressSkipsExecutionWhenLeaseOwnedByOtherWorker(t *testing.T)
 	}
 }
 
+func TestRunnerInProgressDryRunSkipsExecution(t *testing.T) {
+	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "spec present",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "done",
+		},
+	}
+
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		DryRun:   true,
+		Clock:    func() time.Time { return now },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if executor.callCnt != 0 {
+		t.Fatalf("executor call count = %d, want 0", executor.callCnt)
+	}
+	if state.stateUpdates != 0 {
+		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+	if state.metadataUpdates != 0 {
+		t.Fatalf("metadataUpdates = %d, want 0", state.metadataUpdates)
+	}
+	if got := len(state.comments["1"]); got != 0 {
+		t.Fatalf("comment count = %d, want 0", got)
+	}
+}
+
 func TestRunnerInProgressExecutionErrorClaimsLeaseForRecovery(t *testing.T) {
 	now := time.Date(2026, 2, 11, 0, 0, 0, 0, time.UTC)
 	state := &fakeClientState{
@@ -1484,8 +1533,8 @@ func TestRunnerRunOnceLogsActiveCycleAtInfo(t *testing.T) {
 			"1": {
 				ID:          "1",
 				Identifier:  "COL-1",
-				StateName:   workflow.StateDone,
-				Description: "already done",
+				StateName:   workflow.StateTodo,
+				Description: "ready",
 				Metadata:    map[string]string{},
 			},
 		},

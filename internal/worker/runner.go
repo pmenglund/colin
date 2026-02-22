@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"sort"
 	"strings"
@@ -94,6 +95,8 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		return err
 	}
 	issues = filterIssuesByProject(issues, r.ProjectFilter)
+	states := r.runtimeStates()
+	issues = filterIssuesByState(issues, states)
 	sort.Slice(issues, func(i, j int) bool {
 		if issues[i].Identifier == issues[j].Identifier {
 			return issues[i].ID < issues[j].ID
@@ -120,7 +123,6 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		issueID string
 		err     error
 	}
-	states := r.runtimeStates()
 	mergeIssueToProcess := ""
 	for _, issue := range issues {
 		if issue.StateName == states.Merge {
@@ -280,7 +282,17 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		return err
 	}
 	states := r.runtimeStates()
-	if issue.StateName == states.InProgress && r.Executor != nil {
+	if issue.StateName == states.InProgress && r.Executor != nil && !issue.Blocked {
+		if r.DryRun {
+			r.Logger.Info("worker decision",
+				"execution_id", executionID,
+				"issue", issue.Identifier,
+				"state", issue.StateName,
+				"action", "noop",
+				"reason", "dry-run enabled; skipping in-progress execution",
+			)
+			return nil
+		}
 		return r.processInProgressIssue(ctx, issue, executionID, now)
 	}
 
@@ -289,6 +301,7 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		Identifier:  issue.Identifier,
 		State:       issue.StateName,
 		Description: issue.Description,
+		Blocked:     issue.Blocked,
 		Metadata:    copyMetadata(issue.Metadata),
 		WorkerID:    r.WorkerID,
 		ExecutionID: executionID,
@@ -338,10 +351,8 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	}
 
 	patch := toMetadataPatch(decision, now)
-	if patch.HasChanges() {
-		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
-			return err
-		}
+	if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+		return err
 	}
 
 	if decision.Action != workflow.ActionNoop && decision.ToState != "" {
@@ -499,10 +510,8 @@ func (r *Runner) applyInProgressOutcome(
 		patch.Set[workflow.MetaThreadID] = trimmedThreadID
 	}
 
-	if patch.HasChanges() {
-		if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
-			return err
-		}
+	if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+		return err
 	}
 	if !r.DryRun && trimmedThreadID != "" {
 		if err := r.recordBranchSessionMetadata(ctx, issue, trimmedThreadID); err != nil {
@@ -584,12 +593,19 @@ func toMetadataPatch(decision workflow.Decision, now time.Time) linear.MetadataP
 }
 
 func copyMetadata(in map[string]string) map[string]string {
-	if len(in) == 0 {
+	out := maps.Clone(in)
+	if out == nil {
 		return map[string]string{}
 	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
+	return out
+}
+
+func filterIssuesByState(issues []linear.Issue, states workflow.States) []linear.Issue {
+	out := make([]linear.Issue, 0, len(issues))
+	for _, issue := range issues {
+		if states.IsCandidate(issue.StateName) {
+			out = append(out, issue)
+		}
 	}
 	return out
 }

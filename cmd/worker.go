@@ -154,11 +154,17 @@ func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper 
 }
 
 func configureLinearRuntimeState(client linear.Client, states workflow.States, stateIDs map[string]string) {
-	switch c := client.(type) {
-	case *linear.HTTPClient:
-		_ = c.SetWorkflowStates(states)
-		c.SetStateIDs(stateIDs)
-	case *linear.InMemoryClient:
-		_ = c.SetWorkflowStates(states)
+	type workflowStateSetter interface {
+		SetWorkflowStates(states workflow.States) error
+	}
+	type stateIDSetter interface {
+		SetStateIDs(stateIDs map[string]string)
+	}
+
+	if stateful, ok := client.(workflowStateSetter); ok {
+		_ = stateful.SetWorkflowStates(states)
+	}
+	if cached, ok := client.(stateIDSetter); ok {
+		cached.SetStateIDs(stateIDs)
 	}
 }
