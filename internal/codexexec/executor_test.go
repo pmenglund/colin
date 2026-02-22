@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -181,6 +184,79 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	}
 }
 
+func TestExecutorEvaluateAndExecuteWellSpecifiedCommitsWorktreeChanges(t *testing.T) {
+	repoRoot := initExecutorTestGitRepo(t)
+	changePath := filepath.Join(repoRoot, "turn-change.txt")
+	if err := os.WriteFile(changePath, []byte("from codex turn\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", changePath, err)
+	}
+
+	thread := &fakeThread{
+		id:         "thr_commit_1",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented update","transcript_ref":"","screenshot_ref":""}`},
+	}
+	client := &fakeClient{thread: thread}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
+		Identifier: "COLIN-101",
+		Metadata: map[string]string{
+			workflow.MetaWorktreePath: repoRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
+	}
+
+	status := runGit(t, "-C", repoRoot, "status", "--porcelain=v1")
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("worktree should be clean after auto-commit, status = %q", status)
+	}
+	subject := runGit(t, "-C", repoRoot, "log", "-1", "--pretty=%s")
+	if subject != "COLIN-101: apply Codex turn changes" {
+		t.Fatalf("last commit subject = %q, want %q", subject, "COLIN-101: apply Codex turn changes")
+	}
+}
+
+func TestExecutorEvaluateAndExecuteWellSpecifiedSkipsCommitWhenNoChanges(t *testing.T) {
+	repoRoot := initExecutorTestGitRepo(t)
+	headBefore := runGit(t, "-C", repoRoot, "rev-parse", "HEAD")
+
+	thread := &fakeThread{
+		id:         "thr_commit_2",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"No-op turn","transcript_ref":"","screenshot_ref":""}`},
+	}
+	client := &fakeClient{thread: thread}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
+		Identifier: "COLIN-102",
+		Metadata: map[string]string{
+			workflow.MetaWorktreePath: repoRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
+	}
+
+	headAfter := runGit(t, "-C", repoRoot, "rev-parse", "HEAD")
+	if headAfter != headBefore {
+		t.Fatalf("HEAD changed from %q to %q for clean worktree", headBefore, headAfter)
+	}
+}
+
 func TestExecutorEvaluateAndExecuteStartThreadError(t *testing.T) {
 	executor := &Executor{
 		newClient: func(context.Context) (codexClient, error) {
@@ -278,4 +354,34 @@ func TestLoadPromptTemplateErrorsWhenOverrideFileMissing(t *testing.T) {
 	if !strings.Contains(err.Error(), "read prompt override") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func initExecutorTestGitRepo(t *testing.T) string {
+	t.Helper()
+
+	repoRoot := t.TempDir()
+	runGit(t, "init", repoRoot)
+	runGit(t, "-C", repoRoot, "config", "user.email", "colin-tests@example.com")
+	runGit(t, "-C", repoRoot, "config", "user.name", "Colin Tests")
+
+	readmePath := filepath.Join(repoRoot, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# test repo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", readmePath, err)
+	}
+	runGit(t, "-C", repoRoot, "add", "README.md")
+	runGit(t, "-C", repoRoot, "commit", "-m", "seed")
+	runGit(t, "-C", repoRoot, "branch", "-M", "main")
+
+	return repoRoot
+}
+
+func runGit(t *testing.T, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output))
 }

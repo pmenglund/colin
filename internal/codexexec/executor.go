@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -121,6 +122,11 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 	if payload.IsWellSpecified && strings.TrimSpace(payload.ExecutionSummary) == "" {
 		payload.ExecutionSummary = "Execution completed without a summary from Codex."
 	}
+	if payload.IsWellSpecified {
+		if err := e.commitTurnChanges(ctx, issue); err != nil {
+			return execution.InProgressExecutionResult{}, fmt.Errorf("commit turn changes: %w", err)
+		}
+	}
 
 	return execution.InProgressExecutionResult{
 		IsWellSpecified:   payload.IsWellSpecified,
@@ -131,6 +137,38 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		TranscriptRef:     strings.TrimSpace(payload.TranscriptRef),
 		ScreenshotRef:     strings.TrimSpace(payload.ScreenshotRef),
 	}, nil
+}
+
+func (e *Executor) commitTurnChanges(ctx context.Context, issue linear.Issue) error {
+	worktreePath := strings.TrimSpace(issue.Metadata[workflow.MetaWorktreePath])
+	if worktreePath == "" {
+		return nil
+	}
+
+	status, err := gitOutput(ctx, "git", "-C", worktreePath, "status", "--porcelain=v1")
+	if err != nil {
+		return fmt.Errorf("inspect git status in %q: %w", worktreePath, err)
+	}
+	if strings.TrimSpace(status) == "" {
+		return nil
+	}
+
+	if err := gitRun(ctx, "git", "-C", worktreePath, "add", "-A"); err != nil {
+		return fmt.Errorf("stage changes in %q: %w", worktreePath, err)
+	}
+	if err := gitRun(ctx, "git", "-C", worktreePath, "commit", "-m", turnCommitMessage(issue.Identifier)); err != nil {
+		return fmt.Errorf("commit changes in %q: %w", worktreePath, err)
+	}
+
+	return nil
+}
+
+func turnCommitMessage(issueIdentifier string) string {
+	trimmed := strings.TrimSpace(issueIdentifier)
+	if trimmed == "" {
+		return "Apply Codex turn changes"
+	}
+	return trimmed + ": apply Codex turn changes"
 }
 
 type codexResponse struct {
@@ -261,4 +299,22 @@ func (t realCodexThread) ID() string {
 
 func (t realCodexThread) RunInputs(ctx context.Context, inputs []codex.Input, opts *codex.TurnOptions) (*codex.TurnResult, error) {
 	return t.thread.RunInputs(ctx, inputs, opts)
+}
+
+func gitRun(ctx context.Context, gitBinary string, args ...string) error {
+	cmd := exec.CommandContext(ctx, gitBinary, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+func gitOutput(ctx context.Context, gitBinary string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, gitBinary, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
