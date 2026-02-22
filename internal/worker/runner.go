@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +16,11 @@ import (
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/logging"
 	"github.com/pmenglund/colin/internal/workflow"
+)
+
+const (
+	defaultRunRetryBaseDelay = time.Second
+	defaultRunRetryMaxDelay  = 30 * time.Second
 )
 
 // Runner executes deterministic state transitions for Linear issues.
@@ -238,12 +244,26 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
+	runRetryAttempt := 0
 
 	for {
 		if err := r.RunOnce(ctx); err != nil {
-			r.Logger.Error("worker run failed", "worker", r.WorkerID, "action", "run_error", "detail", err)
-			return err
+			runRetryAttempt++
+			retryIn := runRetryDelay(runRetryAttempt, defaultRunRetryBaseDelay, defaultRunRetryMaxDelay)
+			r.Logger.Error("worker run failed",
+				"worker", r.WorkerID,
+				"action", "run_error",
+				"attempt", runRetryAttempt,
+				"retry_in", retryIn.String(),
+				"detail", err,
+			)
+			if waitErr := waitWithContext(ctx, retryIn); waitErr != nil {
+				r.Logger.Info("worker run", "worker", r.WorkerID, "action", "run_stop", "reason", waitErr)
+				return waitErr
+			}
+			continue
 		}
+		runRetryAttempt = 0
 
 		select {
 		case <-ctx.Done():
@@ -637,4 +657,51 @@ func issueMatchesProjectFilter(issue linear.Issue, filterSet map[string]struct{}
 
 func normalizeProjectFilterValue(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func runRetryDelay(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
+	if baseDelay <= 0 {
+		baseDelay = defaultRunRetryBaseDelay
+	}
+	if maxDelay <= 0 || maxDelay < baseDelay {
+		maxDelay = defaultRunRetryMaxDelay
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	backoff := baseDelay
+	for i := 1; i < attempt; i++ {
+		if backoff >= maxDelay/2 {
+			backoff = maxDelay
+			break
+		}
+		backoff *= 2
+	}
+	if backoff > maxDelay {
+		backoff = maxDelay
+	}
+	if backoff <= 0 {
+		return baseDelay
+	}
+
+	half := backoff / 2
+	if half <= 0 {
+		return backoff
+	}
+
+	// Equal-jitter keeps retries bounded while avoiding synchronized retries.
+	return half + time.Duration(rand.Int64N(int64(half)+1))
+}
+
+func waitWithContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

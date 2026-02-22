@@ -1427,3 +1427,89 @@ func TestRunnerRunOnceLogsActiveCycleAtInfo(t *testing.T) {
 		t.Fatalf("expected cycle_complete processed=1 info log entry, got %q", text)
 	}
 }
+
+func TestRunnerRunRetriesAfterCycleFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		client := &fakes.FakeClient{}
+		callCount := 0
+		client.ListCandidateIssuesCalls(func(context.Context, string) ([]linear.Issue, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, errors.New("graphql status 500: internal server error")
+			}
+			cancel()
+			return nil, nil
+		})
+
+		var logOutput bytes.Buffer
+		r := Runner{
+			Linear:    client,
+			TeamID:    "team-1",
+			WorkerID:  "worker-1",
+			LeaseTTL:  5 * time.Minute,
+			PollEvery: time.Hour,
+			Clock:     time.Now,
+			Logger:    slog.New(slog.NewTextHandler(&logOutput, nil)),
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- r.Run(ctx)
+		}()
+
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run() error = %v, want context canceled", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run() did not finish after retry")
+		}
+
+		if callCount < 2 {
+			t.Fatalf("ListCandidateIssues() calls = %d, want at least 2", callCount)
+		}
+
+		text := logOutput.String()
+		if !strings.Contains(text, "action=run_error") {
+			t.Fatalf("expected run_error log entry, got %q", text)
+		}
+		if !strings.Contains(text, "attempt=1") {
+			t.Fatalf("expected retry attempt metadata in log output, got %q", text)
+		}
+		if !strings.Contains(text, "retry_in=") {
+			t.Fatalf("expected retry_in metadata in log output, got %q", text)
+		}
+	})
+}
+
+func TestRunRetryDelayUsesJitteredExponentialBackoff(t *testing.T) {
+	baseDelay := 100 * time.Millisecond
+	maxDelay := 1600 * time.Millisecond
+
+	tests := []struct {
+		attempt int
+		min     time.Duration
+		max     time.Duration
+	}{
+		{attempt: 1, min: 50 * time.Millisecond, max: 100 * time.Millisecond},
+		{attempt: 2, min: 100 * time.Millisecond, max: 200 * time.Millisecond},
+		{attempt: 3, min: 200 * time.Millisecond, max: 400 * time.Millisecond},
+		{attempt: 4, min: 400 * time.Millisecond, max: 800 * time.Millisecond},
+		{attempt: 5, min: 800 * time.Millisecond, max: 1600 * time.Millisecond},
+		{attempt: 6, min: 800 * time.Millisecond, max: 1600 * time.Millisecond},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(fmt.Sprintf("attempt_%d", tc.attempt), func(t *testing.T) {
+			got := runRetryDelay(tc.attempt, baseDelay, maxDelay)
+			if got < tc.min || got > tc.max {
+				t.Fatalf("runRetryDelay(%d) = %s, want range [%s, %s]", tc.attempt, got, tc.min, tc.max)
+			}
+		})
+	}
+}
