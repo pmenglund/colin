@@ -173,13 +173,25 @@ Fix:
 
 Cause:
 
-- Merge execution failed (for example: merge conflict, push failure, missing branch/worktree metadata).
+- Merge execution failed (for example: merge conflict, push failure, missing source branch, missing/stale worktree path).
 
 Fix:
 
 1. Check worker logs for `execute merge for issue <ID>` errors.
 2. Resolve the reported git/worktree issue.
 3. Re-run one worker cycle.
+
+### Issue reached `Done` but branch/worktree still exists
+
+Cause:
+
+- Workflow bypassed merge queue (for example: manual `Review -> Done` transition), or prior cleanup failed.
+
+Fix:
+
+1. Run one worker cycle. Colin now auto-detects unresolved task branches on `Done` issues and reopens them to `Merge`.
+2. Confirm the issue was moved back to `Merge` with a recovery comment.
+3. Re-run another cycle after resolving any reported merge precondition errors.
 
 ### Missing or malformed metadata attachment values
 

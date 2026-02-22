@@ -186,9 +186,13 @@ func (f *fakeTaskBootstrapper) RecordBranchSession(_ context.Context, worktreePa
 }
 
 type fakeMergeExecutor struct {
-	callCnt   int
-	lastIssue linear.Issue
-	err       error
+	callCnt        int
+	lastIssue      linear.Issue
+	err            error
+	recoveryCalls  int
+	recoveryNeeds  bool
+	recoveryReason string
+	recoveryErr    error
 }
 
 func (f *fakeMergeExecutor) ExecuteMerge(_ context.Context, issue linear.Issue) error {
@@ -198,6 +202,15 @@ func (f *fakeMergeExecutor) ExecuteMerge(_ context.Context, issue linear.Issue) 
 		return f.err
 	}
 	return nil
+}
+
+func (f *fakeMergeExecutor) NeedsMergeRecovery(_ context.Context, issue linear.Issue) (bool, string, error) {
+	f.recoveryCalls++
+	f.lastIssue = issue
+	if f.recoveryErr != nil {
+		return false, "", f.recoveryErr
+	}
+	return f.recoveryNeeds, f.recoveryReason, nil
 }
 
 func TestRunnerValidate(t *testing.T) {
@@ -1458,6 +1471,167 @@ func TestRunnerRunOnceMergeExecutionFailureKeepsIssueInMerge(t *testing.T) {
 	}
 	if _, ok := state.issues["1"].Metadata[workflow.MetaMergeReady]; ok {
 		t.Fatalf("merge_ready should remain untouched on merge failure when not pre-set")
+	}
+}
+
+func TestRunnerRunOnceDoneIssueWithMergeRecoveryReopensToMergeAndComments(t *testing.T) {
+	now := time.Date(2026, 2, 22, 20, 20, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-71",
+				StateName:   workflow.StateDone,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaBranchName:   "colin/COL-71",
+					workflow.MetaWorktreePath: "/Users/pme/.colin/worktrees/COLIN-71",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{
+		recoveryNeeds:  true,
+		recoveryReason: `branch "colin/COL-71" is not merged into "main"`,
+	}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if mergeExecutor.callCnt != 0 {
+		t.Fatalf("merge execute call count = %d, want 0", mergeExecutor.callCnt)
+	}
+	if mergeExecutor.recoveryCalls != 1 {
+		t.Fatalf("merge recovery probe call count = %d, want 1", mergeExecutor.recoveryCalls)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateMerge {
+		t.Fatalf("issue state after recovery = %q, want %q", got, workflow.StateMerge)
+	}
+	comments := state.comments["1"]
+	if len(comments) != 1 {
+		t.Fatalf("comment count = %d, want 1", len(comments))
+	}
+	if !strings.Contains(comments[0], "Reopened to **Merge** from **Done**") {
+		t.Fatalf("comment body = %q, want recovery header", comments[0])
+	}
+	if !strings.Contains(comments[0], mergeExecutor.recoveryReason) {
+		t.Fatalf("comment body = %q, want recovery reason", comments[0])
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaReason]; got != mergeExecutor.recoveryReason {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaReason, got, mergeExecutor.recoveryReason)
+	}
+	if got := strings.TrimSpace(state.issues["1"].Metadata[workflow.MetaDoneRecoveryCommentID]); got == "" {
+		t.Fatalf("Metadata[%s] = empty, want comment fingerprint", workflow.MetaDoneRecoveryCommentID)
+	}
+}
+
+func TestRunnerRunOnceDoneRecoveryRetryAfterConflictDoesNotDuplicateComment(t *testing.T) {
+	now := time.Date(2026, 2, 22, 20, 25, 0, 0, time.UTC)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-71",
+				StateName:   workflow.StateDone,
+				Description: "ready",
+				Metadata: map[string]string{
+					workflow.MetaBranchName:   "colin/COL-71",
+					workflow.MetaWorktreePath: "/Users/pme/.colin/worktrees/COLIN-71",
+				},
+			},
+		},
+		conflictOnNextStateWrite: true,
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{
+		recoveryNeeds:  true,
+		recoveryReason: `branch "colin/COL-71" is not merged into "main"`,
+	}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         func() time.Time { return now },
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("first run state = %q, want %q", got, workflow.StateDone)
+	}
+	if got := len(state.comments["1"]); got != 1 {
+		t.Fatalf("first run comment count = %d, want 1", got)
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateMerge {
+		t.Fatalf("second run state = %q, want %q", got, workflow.StateMerge)
+	}
+	if got := len(state.comments["1"]); got != 1 {
+		t.Fatalf("second run comment count = %d, want 1", got)
+	}
+}
+
+func TestRunnerRunOnceDoneIssueWithoutMergeRecoveryRemainsDone(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateDone,
+				Description: "already complete",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	mergeExecutor := &fakeMergeExecutor{
+		recoveryNeeds: false,
+	}
+
+	r := Runner{
+		Linear:        client,
+		MergeExecutor: mergeExecutor,
+		TeamID:        "team-1",
+		WorkerID:      "worker-1",
+		LeaseTTL:      5 * time.Minute,
+		Clock:         time.Now,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateDone {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateDone)
+	}
+	if got := len(state.comments["1"]); got != 0 {
+		t.Fatalf("comment count = %d, want 0", got)
+	}
+	if state.stateUpdates != 0 {
+		t.Fatalf("stateUpdates = %d, want 0", state.stateUpdates)
+	}
+	if state.metadataUpdates != 0 {
+		t.Fatalf("metadataUpdates = %d, want 0", state.metadataUpdates)
 	}
 }
 

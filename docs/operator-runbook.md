@@ -4,7 +4,7 @@ This runbook is for operating Colin in production-like environments. It is writt
 
 ## What Colin Automates
 
-Colin continuously polls Linear and processes only the configured candidate states (`workflow_states.todo`, `workflow_states.in_progress`, `workflow_states.merge`). At startup, Colin resolves those configured names against the team’s real Linear workflow states and fails fast if any mapped state is missing.
+Colin continuously polls Linear and processes only the configured candidate states (`workflow_states.todo`, `workflow_states.in_progress`, `workflow_states.merge`, `workflow_states.done`). At startup, Colin resolves those configured names against the team’s real Linear workflow states and fails fast if any mapped state is missing.
 
 A `todo` issue with required specification is moved to `in_progress` and receives lease metadata. `in_progress` issues are evaluated by Codex and moved to `review` or `refine`. `merge` issues move to `done` when merge metadata says they are ready.
 
@@ -123,6 +123,9 @@ If a worktree already exists, Colin reuses it.
 
 Colin treats `Merge` as a candidate state and attempts merge execution automatically.
 When merge execution succeeds, Colin transitions `Merge -> Done`.
+Merge execution is strict fail-fast: missing source branch or missing/stale worktree path aborts execution and keeps the issue in `Merge`.
+
+Colin also reconciles `Done` issues. If a Colin task branch still exists for an issue in `Done`, Colin reopens it to `Merge` and adds a recovery comment so merge cleanup can be completed.
 
 Operational guidance:
 

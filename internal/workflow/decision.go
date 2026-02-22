@@ -134,6 +134,12 @@ func DecideWithStates(snapshot IssueSnapshot, now time.Time, states States) Deci
 				MetaMergeReady: "false",
 			},
 		}
+
+	case states.Done:
+		return Decision{
+			Action: ActionNoop,
+			Reason: "done state requires no transition",
+		}
 	}
 
 	return Decision{Action: ActionNoop, Reason: "state not automated in milestone 1"}

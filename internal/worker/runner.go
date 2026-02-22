@@ -282,6 +282,9 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 		return err
 	}
 	states := r.runtimeStates()
+	if issue.StateName == states.Done {
+		return r.processDoneIssue(ctx, issue, executionID, now, states)
+	}
 	if issue.StateName == states.InProgress && r.Executor != nil && !issue.Blocked {
 		if r.DryRun {
 			r.Logger.Info("worker decision",
@@ -367,6 +370,70 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 	}
 
 	return nil
+}
+
+func (r *Runner) processDoneIssue(
+	ctx context.Context,
+	issue linear.Issue,
+	executionID string,
+	now time.Time,
+	states workflow.States,
+) error {
+	probe, ok := r.MergeExecutor.(MergeRecoveryProbe)
+	if !ok || probe == nil {
+		return nil
+	}
+
+	needsRecovery, reason, err := probe.NeedsMergeRecovery(ctx, issue)
+	if err != nil {
+		return fmt.Errorf("inspect merge recovery for issue %s: %w", issue.Identifier, err)
+	}
+	if !needsRecovery {
+		return nil
+	}
+
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "detected unresolved merge branch state"
+	}
+	r.Logger.Info("worker decision",
+		"execution_id", executionID,
+		"issue", issue.Identifier,
+		"state", issue.StateName,
+		"action", "transition",
+		"to", states.Merge,
+		"reason", reason,
+	)
+	if r.DryRun {
+		return nil
+	}
+
+	comment := buildDoneRecoveryComment(states.Merge, reason)
+	commentID := commentFingerprint(comment)
+	if issue.Metadata[workflow.MetaDoneRecoveryCommentID] != commentID {
+		if err := r.Linear.CreateIssueComment(ctx, issue.ID, comment); err != nil {
+			return err
+		}
+	}
+
+	patch := linear.MetadataPatch{
+		Set: map[string]string{
+			workflow.MetaLastHeartbeatUTC:      now.UTC().Format(time.RFC3339),
+			workflow.MetaReason:                reason,
+			workflow.MetaDoneRecoveryCommentID: commentID,
+		},
+	}
+	if err := r.Linear.UpdateIssueMetadata(ctx, issue.ID, patch); err != nil {
+		return err
+	}
+
+	if !states.CanTransition(issue.StateName, states.Merge) {
+		return fmt.Errorf("invalid transition %q -> %q", issue.StateName, states.Merge)
+	}
+	if issue.StateName == states.Merge {
+		return nil
+	}
+	return r.Linear.UpdateIssueState(ctx, issue.ID, states.Merge)
 }
 
 func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue, executionID string, now time.Time) error {
@@ -566,6 +633,14 @@ func (r *Runner) commentTurnExecutionContext(ctx context.Context, issue linear.I
 func commentFingerprint(comment string) string {
 	sum := sha256.Sum256([]byte(comment))
 	return hex.EncodeToString(sum[:8])
+}
+
+func buildDoneRecoveryComment(mergeStateName string, reason string) string {
+	return fmt.Sprintf(
+		"Reopened to **%s** from **Done** because merge recovery is required.\n\n## Recovery Reason\n%s",
+		strings.TrimSpace(mergeStateName),
+		strings.TrimSpace(reason),
+	)
 }
 
 func toMetadataPatch(decision workflow.Decision, now time.Time) linear.MetadataPatch {

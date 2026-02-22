@@ -43,11 +43,13 @@ If the task is done, a human moves the task to `Merge` so it can be merged into 
 
 This state is used as a merge queue. Colin automatically attempts merge execution for issues in `Merge` and transitions `Merge -> Done` when merge execution succeeds.
 
-Transition to `Done` now happens only after merge execution succeeds end-to-end (merge branch, push main, delete branch, delete worktree). If any step fails, the issue stays in `Merge` and is retried on the next worker cycle.
+Transition to `Done` happens only after merge execution succeeds end-to-end (merge branch, push main, delete branch, delete worktree).
+Merge execution is strict fail-fast: if source branch or worktree path is missing/stale, merge fails and the issue stays in `Merge`.
 
 ### Done
 
 The task has been merged into the main branch.
+Colin also reconciles `Done` for stale merge state: if a `colin/*` source branch still exists, Colin reopens the issue to `Merge` with a recovery comment so merge/cleanup can run.
 
 ## Starting a Task
 
@@ -79,6 +81,7 @@ Steps to merge a task
 4. verify the issue transitioned to `Done`
 
 Merge coordinates are read from issue metadata keys `colin.branch_name` and `colin.worktree_path` when available. If branch metadata is missing, Colin falls back to `colin/<issue-identifier>`.
+If merge coordinates are inconsistent (for example: missing branch or missing worktree path), Colin fails the merge cycle and retries after the underlying git state is repaired.
 
 ## System Boundaries
 

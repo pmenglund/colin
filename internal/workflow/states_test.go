@@ -35,8 +35,8 @@ func TestStatesIsCandidateAndDoneWithCustomNames(t *testing.T) {
 	if !states.IsCandidate("Merge Queue") {
 		t.Fatal("IsCandidate(Merge Queue) = false, want true")
 	}
-	if states.IsCandidate("Closed") {
-		t.Fatal("IsCandidate(Closed) = true, want false")
+	if !states.IsCandidate("Closed") {
+		t.Fatal("IsCandidate(Closed) = false, want true")
 	}
 	if !states.IsDone("Closed") {
 		t.Fatal("IsDone(Closed) = false, want true")
@@ -58,6 +58,9 @@ func TestStatesCanTransitionWithCustomNames(t *testing.T) {
 	}
 	if !states.CanTransition("Human Review", "Merge Queue") {
 		t.Fatal("CanTransition(Human Review, Merge Queue) = false, want true")
+	}
+	if !states.CanTransition("Closed", "Merge Queue") {
+		t.Fatal("CanTransition(Closed, Merge Queue) = false, want true")
 	}
 	if states.CanTransition("Backlog", "Closed") {
 		t.Fatal("CanTransition(Backlog, Closed) = true, want false")

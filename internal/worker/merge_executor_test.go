@@ -40,7 +40,7 @@ func (f *fakeMergePreparer) PrepareMerge(
 	return f.err
 }
 
-func TestGitMergeExecutorExecuteMergeHappyPathAndIdempotent(t *testing.T) {
+func TestGitMergeExecutorExecuteMergeHappyPathAndStrictRetryFailure(t *testing.T) {
 	repoRoot := initTestGitRepo(t)
 	remotePath := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, "init", "--bare", remotePath)
@@ -92,9 +92,13 @@ func TestGitMergeExecutorExecuteMergeHappyPathAndIdempotent(t *testing.T) {
 		t.Fatalf("remote main %q != local main %q", remoteMain, localMain)
 	}
 
-	// Re-running after cleanup should be safe.
-	if err := executor.ExecuteMerge(context.Background(), issue); err != nil {
-		t.Fatalf("ExecuteMerge() second run error = %v", err)
+	// Re-running after cleanup should fail fast because branch/worktree no longer exist.
+	err = executor.ExecuteMerge(context.Background(), issue)
+	if err == nil {
+		t.Fatal("ExecuteMerge() second run error = nil, want missing source branch error")
+	}
+	if !strings.Contains(err.Error(), "source branch") {
+		t.Fatalf("second run error = %q, want source branch context", err.Error())
 	}
 }
 
@@ -254,6 +258,146 @@ func TestGitMergeExecutorExecuteMergePreparationFailureStopsMerge(t *testing.T) 
 	}
 	if _, statErr := os.Stat(workspace.WorktreePath); statErr != nil {
 		t.Fatalf("worktree path should still exist after preparation failure: %v", statErr)
+	}
+}
+
+func TestGitMergeExecutorExecuteMergeFailsWhenSourceBranchMissing(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:  repoRoot,
+		ColinHome: filepath.Join(t.TempDir(), "colin-home"),
+	})
+	workspace, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-10")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	runGit(t, "-C", workspace.WorktreePath, "checkout", "--detach")
+	runGit(t, "-C", repoRoot, "branch", "-D", workspace.BranchName)
+
+	executor := NewGitMergeExecutor(GitMergeExecutorOptions{RepoRoot: repoRoot})
+	issue := linear.Issue{
+		Identifier: "COLIN-10",
+		Metadata: map[string]string{
+			workflow.MetaBranchName:   workspace.BranchName,
+			workflow.MetaWorktreePath: workspace.WorktreePath,
+		},
+	}
+
+	err = executor.ExecuteMerge(context.Background(), issue)
+	if err == nil {
+		t.Fatal("ExecuteMerge() error = nil, want missing source branch error")
+	}
+	if !strings.Contains(err.Error(), "source branch") {
+		t.Fatalf("error = %q, want missing source branch context", err.Error())
+	}
+}
+
+func TestGitMergeExecutorNeedsMergeRecoveryWhenBranchUnmerged(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:  repoRoot,
+		ColinHome: filepath.Join(t.TempDir(), "colin-home"),
+	})
+	workspace, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-11")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	changePath := filepath.Join(workspace.WorktreePath, "needs-recovery-unmerged.txt")
+	if err := os.WriteFile(changePath, []byte("unmerged branch\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", changePath, err)
+	}
+	runGit(t, "-C", workspace.WorktreePath, "add", "needs-recovery-unmerged.txt")
+	runGit(t, "-C", workspace.WorktreePath, "commit", "-m", "unmerged change")
+
+	executor := NewGitMergeExecutor(GitMergeExecutorOptions{RepoRoot: repoRoot})
+	needsRecovery, reason, err := executor.NeedsMergeRecovery(context.Background(), linear.Issue{
+		Identifier: "COLIN-11",
+		Metadata: map[string]string{
+			workflow.MetaBranchName:   workspace.BranchName,
+			workflow.MetaWorktreePath: workspace.WorktreePath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NeedsMergeRecovery() error = %v", err)
+	}
+	if !needsRecovery {
+		t.Fatal("NeedsMergeRecovery() = false, want true")
+	}
+	if !strings.Contains(reason, "not merged") {
+		t.Fatalf("NeedsMergeRecovery() reason = %q, want not merged context", reason)
+	}
+}
+
+func TestGitMergeExecutorNeedsMergeRecoveryWhenBranchMergedButNotCleaned(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:  repoRoot,
+		ColinHome: filepath.Join(t.TempDir(), "colin-home"),
+	})
+	workspace, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-12")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	changePath := filepath.Join(workspace.WorktreePath, "needs-recovery-cleanup.txt")
+	if err := os.WriteFile(changePath, []byte("merged but not cleaned\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", changePath, err)
+	}
+	runGit(t, "-C", workspace.WorktreePath, "add", "needs-recovery-cleanup.txt")
+	runGit(t, "-C", workspace.WorktreePath, "commit", "-m", "cleanup pending")
+	runGit(t, "-C", repoRoot, "merge", "--no-ff", "--no-edit", workspace.BranchName)
+
+	executor := NewGitMergeExecutor(GitMergeExecutorOptions{RepoRoot: repoRoot})
+	needsRecovery, reason, err := executor.NeedsMergeRecovery(context.Background(), linear.Issue{
+		Identifier: "COLIN-12",
+		Metadata: map[string]string{
+			workflow.MetaBranchName:   workspace.BranchName,
+			workflow.MetaWorktreePath: workspace.WorktreePath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NeedsMergeRecovery() error = %v", err)
+	}
+	if !needsRecovery {
+		t.Fatal("NeedsMergeRecovery() = false, want true")
+	}
+	if !strings.Contains(reason, "cleanup is incomplete") {
+		t.Fatalf("NeedsMergeRecovery() reason = %q, want cleanup context", reason)
+	}
+}
+
+func TestGitMergeExecutorNeedsMergeRecoveryFalseWhenBranchMissing(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:  repoRoot,
+		ColinHome: filepath.Join(t.TempDir(), "colin-home"),
+	})
+	workspace, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-13")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	runGit(t, "-C", workspace.WorktreePath, "checkout", "--detach")
+	runGit(t, "-C", repoRoot, "branch", "-D", workspace.BranchName)
+
+	executor := NewGitMergeExecutor(GitMergeExecutorOptions{RepoRoot: repoRoot})
+	needsRecovery, reason, err := executor.NeedsMergeRecovery(context.Background(), linear.Issue{
+		Identifier: "COLIN-13",
+		Metadata: map[string]string{
+			workflow.MetaBranchName:   workspace.BranchName,
+			workflow.MetaWorktreePath: workspace.WorktreePath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NeedsMergeRecovery() error = %v", err)
+	}
+	if needsRecovery {
+		t.Fatal("NeedsMergeRecovery() = true, want false")
+	}
+	if strings.TrimSpace(reason) != "" {
+		t.Fatalf("NeedsMergeRecovery() reason = %q, want empty", reason)
 	}
 }
 

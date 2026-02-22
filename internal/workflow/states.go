@@ -94,7 +94,7 @@ func (s States) Validate() error {
 func (s States) IsCandidate(state string) bool {
 	s = s.WithDefaults()
 	switch strings.TrimSpace(state) {
-	case s.Todo, s.InProgress, s.Merge:
+	case s.Todo, s.InProgress, s.Merge, s.Done:
 		return true
 	default:
 		return false
@@ -126,6 +126,9 @@ func (s States) CanTransition(from, to string) bool {
 		},
 		s.Merge: {
 			s.Done: {},
+		},
+		s.Done: {
+			s.Merge: {},
 		},
 	}
 

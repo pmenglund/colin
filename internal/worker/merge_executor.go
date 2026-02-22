@@ -69,35 +69,26 @@ func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue)
 		return errors.New("repo root is required")
 	}
 
-	branchName := strings.TrimSpace(issue.Metadata[workflow.MetaBranchName])
-	if branchName == "" {
-		identifier := strings.TrimSpace(issue.Identifier)
-		if identifier == "" {
-			return errors.New("issue identifier is required when metadata branch name is empty")
-		}
-		branchName = issueBranchPrefix + identifier
-	}
-
-	worktreePath := strings.TrimSpace(issue.Metadata[workflow.MetaWorktreePath])
-	if worktreePath == "" {
-		discovered, err := e.findWorktreePathByBranch(ctx, branchName)
-		if err != nil {
-			return fmt.Errorf("resolve worktree path for branch %q: %w", branchName, err)
-		}
-		worktreePath = discovered
-	}
-
-	if err := e.ensureBaseBranchExists(ctx); err != nil {
+	branchName, err := e.resolveBranchName(issue)
+	if err != nil {
 		return err
 	}
 	exists, err := e.branchExists(ctx, branchName)
 	if err != nil {
 		return err
 	}
-	if exists {
-		if err := e.prepareMerge(ctx, issue, branchName, worktreePath); err != nil {
-			return err
-		}
+	if !exists {
+		return fmt.Errorf("source branch %q does not exist in %q", branchName, e.repoRoot)
+	}
+	worktreePath, err := e.resolveWorktreePath(ctx, issue, branchName)
+	if err != nil {
+		return err
+	}
+	if err := e.ensureBaseBranchExists(ctx); err != nil {
+		return err
+	}
+	if err := e.prepareMerge(ctx, issue, branchName, worktreePath); err != nil {
+		return err
 	}
 	if err := e.checkoutBaseBranch(ctx); err != nil {
 		return err
@@ -116,6 +107,48 @@ func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue)
 	}
 
 	return nil
+}
+
+// NeedsMergeRecovery reports whether a done issue should be moved back to merge.
+func (e *GitMergeExecutor) NeedsMergeRecovery(ctx context.Context, issue linear.Issue) (bool, string, error) {
+	if e == nil {
+		return false, "", errors.New("git merge executor is nil")
+	}
+	if e.repoRoot == "." || e.repoRoot == "" {
+		return false, "", errors.New("repo root is required")
+	}
+
+	branchName, err := e.resolveBranchName(issue)
+	if err != nil {
+		return false, "", err
+	}
+	exists, err := e.branchExists(ctx, branchName)
+	if err != nil {
+		return false, "", err
+	}
+	if !exists {
+		return false, "", nil
+	}
+	if err := e.ensureBaseBranchExists(ctx); err != nil {
+		return false, "", err
+	}
+
+	merged, err := e.isAncestor(ctx, branchName, e.baseBranch)
+	if err != nil {
+		return false, "", err
+	}
+	if merged {
+		return true, fmt.Sprintf(
+			"branch %q is already merged into %q but still exists; cleanup is incomplete",
+			branchName,
+			e.baseBranch,
+		), nil
+	}
+	return true, fmt.Sprintf(
+		"branch %q is not merged into %q",
+		branchName,
+		e.baseBranch,
+	), nil
 }
 
 func (e *GitMergeExecutor) prepareMerge(
@@ -160,8 +193,7 @@ func (e *GitMergeExecutor) mergeTaskBranch(ctx context.Context, branchName strin
 		return err
 	}
 	if !exists {
-		// Branch already gone is treated as already merged/cleaned up.
-		return nil
+		return fmt.Errorf("source branch %q does not exist in %q", branchName, e.repoRoot)
 	}
 
 	merged, err := e.isAncestor(ctx, branchName, e.baseBranch)
@@ -268,6 +300,42 @@ func (e *GitMergeExecutor) findWorktreePathByBranch(ctx context.Context, branchN
 	}
 
 	return "", nil
+}
+
+func (e *GitMergeExecutor) resolveBranchName(issue linear.Issue) (string, error) {
+	branchName := strings.TrimSpace(issue.Metadata[workflow.MetaBranchName])
+	if branchName != "" {
+		return branchName, nil
+	}
+
+	identifier := strings.TrimSpace(issue.Identifier)
+	if identifier == "" {
+		return "", errors.New("issue identifier is required when metadata branch name is empty")
+	}
+	return issueBranchPrefix + identifier, nil
+}
+
+func (e *GitMergeExecutor) resolveWorktreePath(ctx context.Context, issue linear.Issue, branchName string) (string, error) {
+	worktreePath := strings.TrimSpace(issue.Metadata[workflow.MetaWorktreePath])
+	if worktreePath == "" {
+		discovered, err := e.findWorktreePathByBranch(ctx, branchName)
+		if err != nil {
+			return "", fmt.Errorf("resolve worktree path for branch %q: %w", branchName, err)
+		}
+		worktreePath = discovered
+	}
+	worktreePath = strings.TrimSpace(worktreePath)
+	if worktreePath == "" {
+		return "", fmt.Errorf("worktree path for branch %q is required", branchName)
+	}
+
+	if _, err := os.Stat(worktreePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("worktree path %q for branch %q does not exist", worktreePath, branchName)
+		}
+		return "", fmt.Errorf("stat worktree path %q: %w", worktreePath, err)
+	}
+	return worktreePath, nil
 }
 
 func (e *GitMergeExecutor) branchExists(ctx context.Context, branchName string) (bool, error) {

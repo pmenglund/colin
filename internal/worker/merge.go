@@ -11,6 +11,11 @@ type MergeExecutor interface {
 	ExecuteMerge(ctx context.Context, issue linear.Issue) error
 }
 
+// MergeRecoveryProbe reports whether a done issue should be moved back to merge.
+type MergeRecoveryProbe interface {
+	NeedsMergeRecovery(ctx context.Context, issue linear.Issue) (needsRecovery bool, reason string, err error)
+}
+
 // MergePreparer performs pre-merge preparation work before git-side merge execution.
 type MergePreparer interface {
 	PrepareMerge(
