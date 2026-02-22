@@ -3,12 +3,12 @@ package cmd
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 
 	"github.com/pmenglund/colin/internal/codexexec"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/linear"
+	"github.com/pmenglund/colin/internal/logging"
 	"github.com/pmenglund/colin/internal/worker"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/spf13/cobra"
@@ -75,7 +75,7 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 				MaxConcurrency: cfg.MaxConcurrency,
 				DryRun:         cfg.DryRun,
 				States:         runtimeStates,
-				Logger:         slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo})),
+				Logger:         logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
 			}
 
 			if once {
@@ -115,7 +115,7 @@ func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) work
 		return nil
 	}
 
-	codexLogger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	codexLogger := logging.NewSlog(stderr, logging.LevelInfo)
 	return codexexec.New(codexexec.Options{
 		Cwd:            cwd,
 		Logger:         codexLogger,
@@ -128,7 +128,7 @@ func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.Me
 		return worker.NoopMergeExecutor{}
 	}
 
-	codexLogger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	codexLogger := logging.NewSlog(stderr, logging.LevelInfo)
 	mergePreparer := codexexec.NewMergePreparer(codexexec.Options{
 		Cwd:             cwd,
 		Logger:          codexLogger,

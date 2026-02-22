@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pmenglund/colin/internal/linear"
+	"github.com/pmenglund/colin/internal/logging"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -62,7 +62,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		r.Clock = time.Now
 	}
 	if r.Logger == nil {
-		r.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		r.Logger = logging.NewSlog(nil, logging.LevelInfo)
 	}
 
 	cycleStartedAt := time.Now()
@@ -211,7 +211,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		pollEvery = 30 * time.Second
 	}
 	if r.Logger == nil {
-		r.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		r.Logger = logging.NewSlog(nil, logging.LevelInfo)
 	}
 
 	r.Logger.Info("worker run", "worker", r.WorkerID, "action", "run_start", "poll_every", pollEvery.String())

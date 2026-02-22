@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,8 +37,14 @@ dry_run = true
 		t.Fatalf("command failed: %v\noutput:\n%s", err, string(output))
 	}
 
-	outputText := string(output)
+	outputText := stripANSIEscapeCodes(string(output))
 	if !strings.Contains(outputText, `action=claim_and_transition to="In Progress"`) {
 		t.Fatalf("expected transition log in output, got:\n%s", outputText)
 	}
+}
+
+var ansiEscapeCodePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSIEscapeCodes(text string) string {
+	return ansiEscapeCodePattern.ReplaceAllString(text, "")
 }
