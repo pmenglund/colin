@@ -173,15 +173,13 @@ Fix:
 
 Cause:
 
-- `colin.merge_ready` is missing or not `"true"`.
+- Merge execution failed (for example: merge conflict, push failure, missing branch/worktree metadata).
 
 Fix:
 
-1. Add/update metadata attachment `https://github.com/pmenglund/colin/blob/main/docs/metadata.md` with:
-
-       {"colin.merge_ready":"true"}
-
-2. Run one worker cycle.
+1. Check worker logs for `execute merge for issue <ID>` errors.
+2. Resolve the reported git/worktree issue.
+3. Re-run one worker cycle.
 
 ### Missing or malformed metadata attachment values
 

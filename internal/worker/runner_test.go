@@ -1226,18 +1226,14 @@ func TestRunnerRunOnceSerializesMergeQueue(t *testing.T) {
 				Identifier:  "COL-1",
 				StateName:   workflow.StateMerge,
 				Description: "ready",
-				Metadata: map[string]string{
-					workflow.MetaMergeReady: "true",
-				},
+				Metadata:    map[string]string{},
 			},
 			"2": {
 				ID:          "2",
 				Identifier:  "COL-2",
 				StateName:   workflow.StateMerge,
 				Description: "ready",
-				Metadata: map[string]string{
-					workflow.MetaMergeReady: "true",
-				},
+				Metadata:    map[string]string{},
 			},
 		},
 	}
@@ -1285,9 +1281,7 @@ func TestRunnerRunOnceMergeExecutionFailureKeepsIssueInMerge(t *testing.T) {
 				Identifier:  "COL-1",
 				StateName:   workflow.StateMerge,
 				Description: "ready",
-				Metadata: map[string]string{
-					workflow.MetaMergeReady: "true",
-				},
+				Metadata:    map[string]string{},
 			},
 		},
 	}
@@ -1314,8 +1308,8 @@ func TestRunnerRunOnceMergeExecutionFailureKeepsIssueInMerge(t *testing.T) {
 	if got := state.issues["1"].StateName; got != workflow.StateMerge {
 		t.Fatalf("issue state after merge failure = %q, want %q", got, workflow.StateMerge)
 	}
-	if got := state.issues["1"].Metadata[workflow.MetaMergeReady]; got != "true" {
-		t.Fatalf("merge_ready after merge failure = %q, want %q", got, "true")
+	if _, ok := state.issues["1"].Metadata[workflow.MetaMergeReady]; ok {
+		t.Fatalf("merge_ready should remain untouched on merge failure when not pre-set")
 	}
 }
 

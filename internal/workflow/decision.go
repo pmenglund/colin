@@ -118,18 +118,15 @@ func DecideWithStates(snapshot IssueSnapshot, now time.Time, states States) Deci
 		return Decision{Action: ActionNoop, Reason: "no state change required"}
 
 	case states.Merge:
-		if parseBool(snapshot.Metadata[MetaMergeReady]) {
-			return Decision{
-				Action:  ActionTransition,
-				ToState: states.Done,
-				Reason:  "merge-ready metadata set",
-				MetadataPatch: map[string]string{
-					MetaReason:     "",
-					MetaMergeReady: "false",
-				},
-			}
+		return Decision{
+			Action:  ActionTransition,
+			ToState: states.Done,
+			Reason:  "issue queued in merge state",
+			MetadataPatch: map[string]string{
+				MetaReason:     "",
+				MetaMergeReady: "false",
+			},
 		}
-		return Decision{Action: ActionNoop, Reason: "waiting for merge-ready metadata"}
 	}
 
 	return Decision{Action: ActionNoop, Reason: "state not automated in milestone 1"}

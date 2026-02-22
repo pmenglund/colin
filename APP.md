@@ -41,9 +41,7 @@ If the task is done, a human moves the task to `Merge` so it can be merged into 
 
 ### Merge
 
-This state is used as a merge queue. In the current implementation, Colin transitions issues from `Merge` to `Done` when issue metadata contains `colin.merge_ready = "true"`.
-
-To preserve one-at-a-time merge queue semantics operationally, only set `colin.merge_ready` for one issue at a time.
+This state is used as a merge queue. Colin automatically attempts merge execution for issues in `Merge` and transitions `Merge -> Done` when merge execution succeeds.
 
 Transition to `Done` now happens only after merge execution succeeds end-to-end (merge branch, push main, delete branch, delete worktree). If any step fails, the issue stays in `Merge` and is retried on the next worker cycle.
 
@@ -76,10 +74,9 @@ Colin stores startup execution metadata using these canonical keys:
 Steps to merge a task
 
 1. ensure the change has passed human review and is ready to merge
-2. merge the git branch into main branch
-3. push the main branch upstream
-4. set issue metadata `colin.merge_ready = "true"` so Colin can transition `Merge -> Done`
-5. delete the git branch and git worktree once merge is confirmed
+2. move the issue to `Merge`
+3. Colin merges the git branch into the base branch, pushes upstream, and cleans up branch/worktree
+4. verify the issue transitioned to `Done`
 
 Merge coordinates are read from issue metadata keys `colin.branch_name` and `colin.worktree_path` when available. If branch metadata is missing, Colin falls back to `colin/<issue-identifier>`.
 

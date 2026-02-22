@@ -121,22 +121,19 @@ If a worktree already exists, Colin reuses it.
 
 ## Merge Queue Runbook
 
-Colin treats `Merge` as a candidate state and transitions `Merge -> Done` when issue metadata contains:
-
-- `colin.merge_ready = "true"`
+Colin treats `Merge` as a candidate state and attempts merge execution automatically.
+When merge execution succeeds, Colin transitions `Merge -> Done`.
 
 Operational guidance:
 
-- Set merge-ready metadata for only one issue at a time to preserve queue semantics.
-- After an issue moves to `Done`, set the next issue in `Merge` to merge-ready.
+- Merge queue processing is serialized: only one `Merge` issue is processed per cycle.
+- Place issues in `Merge` in the order you want them merged.
 
 Metadata is stored in a per-issue Linear attachment with URL:
 
     https://github.com/pmenglund/colin/blob/main/docs/metadata.md
 
-Set `colin.merge_ready = "true"` in that attachment metadata object to allow `Merge -> Done`.
-
-If metadata is missing or set to false, Colin leaves the issue in `Merge`.
+If merge execution fails, Colin leaves the issue in `Merge` and retries on the next cycle.
 
 ## Disaster Recovery Runbook
 

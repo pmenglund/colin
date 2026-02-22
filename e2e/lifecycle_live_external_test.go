@@ -153,11 +153,17 @@ func TestLifecycleLiveExternalSystems(t *testing.T) {
 
 	mergeFixture := sandbox.createMergeFixture(t, issueMerge.Identifier, colinHome)
 	if err := admin.upsertIssueMetadata(ctx, issueMerge.ID, map[string]string{
-		workflow.MetaMergeReady:   "true",
 		workflow.MetaBranchName:   mergeFixture.BranchName,
 		workflow.MetaWorktreePath: mergeFixture.WorktreePath,
 	}); err != nil {
 		t.Fatalf("upsert merge issue metadata attachment: %v", err)
+	}
+	mergeBeforeRun, err := admin.getIssue(ctx, issueMerge.ID)
+	if err != nil {
+		t.Fatalf("get merge issue before worker cycles: %v", err)
+	}
+	if _, ok := mergeBeforeRun.Metadata[workflow.MetaMergeReady]; ok {
+		t.Fatalf("merge issue should not require %s before worker cycles", workflow.MetaMergeReady)
 	}
 
 	binaryPath := buildColinBinary(t, repoRoot)

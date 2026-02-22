@@ -22,7 +22,7 @@ Colin expects the attachment `metadata` object to contain string key/value pairs
 - `colin.in_progress_outcome`: In-progress outcome label (`refine` or `human_review`).
 - `colin.in_progress_comment_id`: Fingerprint for the generated in-progress comment, used for idempotence.
 - `colin.spec_ready`: `"true"` or `"false"` flag indicating whether spec gating is satisfied for `Todo` processing.
-- `colin.merge_ready`: `"true"` or `"false"` flag enabling `Merge -> Done` transition.
+- `colin.merge_ready`: Legacy merge queue flag retained for backward compatibility. `Merge -> Done` no longer depends on this key.
 - `colin.worktree_path`: Absolute filesystem path to the task worktree.
 - `colin.branch_name`: Git branch used for the task.
 - `colin.thread_id`: Codex thread identifier associated with task execution.

@@ -30,7 +30,7 @@ The following tests run offline without real Linear or Codex network calls:
 
 ## Known Gaps
 
-- The suite does not validate real git-side merge/cleanup operations (`merge branch`, `push main`, `delete branch`, `delete worktree`) because current automated merge behavior in this branch is metadata-driven (`colin.merge_ready`) and uses fake Linear/test doubles.
+- The suite does not validate real git-side merge/cleanup operations (`merge branch`, `push main`, `delete branch`, `delete worktree`) and instead relies on fake Linear/test doubles for merge-path coverage.
 - The suite validates thread metadata persistence using test doubles, but does not execute real Codex sessions in e2e tests.
 - Branch-level git metadata persistence is not directly validated by the e2e suite.
 

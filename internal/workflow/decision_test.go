@@ -126,12 +126,10 @@ func TestDecideInProgressToRefine(t *testing.T) {
 	}
 }
 
-func TestDecideMergeToDone(t *testing.T) {
+func TestDecideMergeToDoneWithoutMergeReadyMetadata(t *testing.T) {
 	d := Decide(IssueSnapshot{
-		State: StateMerge,
-		Metadata: map[string]string{
-			MetaMergeReady: "true",
-		},
+		State:    StateMerge,
+		Metadata: map[string]string{},
 	}, time.Now())
 
 	if d.ToState != StateDone {

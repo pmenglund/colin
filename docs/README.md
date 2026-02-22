@@ -14,7 +14,7 @@ Current automation scope (as implemented in code):
 - Candidate states are `Todo`, `In Progress`, and `Merge`.
 - `Todo` moves to `In Progress` when specification is present; otherwise to `Refine`.
 - `In Progress` is handled by Codex execution when the HTTP Linear backend is enabled, and can transition to `Review` or `Refine`.
-- `Merge` moves to `Done` when metadata `colin.merge_ready` is `true`.
+- `Merge` is processed automatically; Colin attempts merge execution and moves to `Done` on success.
 - Merge queue processing is serialized: the runner processes at most one `Merge` issue per cycle.
 - Candidate filtering skips issues with active blocking dependencies (HTTP backend via inverse relations; fake backend via `BlockedBy` references).
 - Default work prompt is embedded from `prompts/work.md`; it can be overridden with `work_prompt_path` / `COLIN_WORK_PROMPT_PATH`.
