@@ -18,6 +18,7 @@ import (
 const (
 	defaultLinearBaseURL  = "https://api.linear.app/graphql"
 	defaultLinearBackend  = LinearBackendHTTP
+	defaultBaseBranch     = "main"
 	defaultPollEvery      = 30 * time.Second
 	defaultLeaseTTL       = 5 * time.Minute
 	defaultMaxConcurrency = 8
@@ -38,6 +39,7 @@ type Config struct {
 	LinearTeamID    string
 	LinearBaseURL   string
 	LinearBackend   string
+	BaseBranch      string
 	ProjectFilter   []string
 	WorkPromptPath  string
 	MergePromptPath string
@@ -55,6 +57,7 @@ type fileConfig struct {
 	LinearTeamID    string         `toml:"linear_team_id"`
 	LinearBaseURL   string         `toml:"linear_base_url"`
 	LinearBackend   string         `toml:"linear_backend"`
+	BaseBranch      string         `toml:"base_branch"`
 	ProjectFilter   string         `toml:"project_filter"`
 	WorkPromptPath  string         `toml:"work_prompt_path"`
 	MergePromptPath string         `toml:"merge_prompt_path"`
@@ -144,6 +147,7 @@ func LoadFromPath(configPath string) (Config, error) {
 	cfg := Config{
 		LinearBaseURL:  defaultLinearBaseURL,
 		LinearBackend:  defaultLinearBackend,
+		BaseBranch:     defaultBaseBranch,
 		ColinHome:      defaultColinHome(),
 		WorkerID:       defaultWorkerID(),
 		PollEvery:      defaultPollEvery,
@@ -177,6 +181,7 @@ func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		LinearBaseURL:  defaultLinearBaseURL,
 		LinearBackend:  defaultLinearBackend,
+		BaseBranch:     defaultBaseBranch,
 		ColinHome:      defaultColinHome(),
 		WorkerID:       defaultWorkerID(),
 		PollEvery:      defaultPollEvery,
@@ -222,6 +227,9 @@ func applyFileConfig(cfg *Config, path string) error {
 	}
 	if strings.TrimSpace(parsed.LinearBackend) != "" {
 		cfg.LinearBackend = strings.TrimSpace(parsed.LinearBackend)
+	}
+	if strings.TrimSpace(parsed.BaseBranch) != "" {
+		cfg.BaseBranch = strings.TrimSpace(parsed.BaseBranch)
 	}
 	if strings.TrimSpace(parsed.ProjectFilter) != "" {
 		cfg.ProjectFilter = parseCSVList(parsed.ProjectFilter)
@@ -299,6 +307,9 @@ func applyEnvOverrides(cfg *Config) error {
 	if v, ok := readString("COLIN_LINEAR_BACKEND"); ok {
 		cfg.LinearBackend = v
 	}
+	if v, ok := readString("COLIN_BASE_BRANCH"); ok {
+		cfg.BaseBranch = v
+	}
 	if raw, ok := readString("COLIN_PROJECT_FILTER"); ok {
 		cfg.ProjectFilter = parseCSVList(raw)
 	}
@@ -371,6 +382,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxConcurrency <= 0 {
 		return fmt.Errorf("COLIN_MAX_CONCURRENCY must be > 0, got %d", c.MaxConcurrency)
+	}
+	if strings.TrimSpace(c.BaseBranch) == "" {
+		return errors.New("COLIN_BASE_BRANCH must not be empty")
 	}
 	if strings.TrimSpace(c.ColinHome) == "" {
 		return errors.New("COLIN_HOME must not be empty")

@@ -23,6 +23,7 @@ For `linear_backend = "http"` (default), these values are required:
 Common runtime controls:
 
 - `COLIN_HOME` / `colin_home`: root for worker artifacts and worktrees (default `~/.colin`)
+- `COLIN_BASE_BRANCH` / `base_branch`: branch used for task worktree bootstrap and merge target (default `main`)
 - `CODEX_HOME`: must be writable by Codex runtime (default `~/.codex`)
 - `COLIN_LINEAR_BACKEND` / `linear_backend`: `http` or `fake`
 - `COLIN_MAX_CONCURRENCY` / `max_concurrency`: number of concurrent issue workers

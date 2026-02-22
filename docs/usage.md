@@ -73,6 +73,7 @@ Most important values:
 - `linear_team_id`
 - `worker_id`
 - `linear_backend` (`http` or `fake`)
+- `base_branch` (branch used for worktree bootstrap and merge target)
 - `project_filter` (optional comma-separated project IDs/names)
 - `poll_every`
 - `lease_ttl`

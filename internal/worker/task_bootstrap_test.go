@@ -54,6 +54,30 @@ func TestGitTaskBootstrapperEnsureTaskWorkspaceCreatesAndReusesWorkspace(t *test
 	}
 }
 
+func TestGitTaskBootstrapperEnsureTaskWorkspaceUsesConfiguredBaseBranch(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	runGit(t, "-C", repoRoot, "checkout", "-b", "master")
+	runGit(t, "-C", repoRoot, "branch", "-D", "main")
+
+	colinHome := filepath.Join(t.TempDir(), "colin-home")
+	bootstrapper := NewGitTaskBootstrapper(GitTaskBootstrapperOptions{
+		RepoRoot:   repoRoot,
+		ColinHome:  colinHome,
+		BaseBranch: "master",
+	})
+
+	result, err := bootstrapper.EnsureTaskWorkspace(context.Background(), "COLIN-4")
+	if err != nil {
+		t.Fatalf("EnsureTaskWorkspace() error = %v", err)
+	}
+
+	masterHead := runGit(t, "-C", repoRoot, "rev-parse", "master")
+	branchHead := runGit(t, "-C", result.WorktreePath, "rev-parse", result.BranchName)
+	if branchHead != masterHead {
+		t.Fatalf("issue branch head = %q, want %q from base branch master", branchHead, masterHead)
+	}
+}
+
 func TestGitTaskBootstrapperEnsureTaskWorkspaceReturnsActionableError(t *testing.T) {
 	repoRoot := initTestGitRepo(t)
 	colinHome := filepath.Join(t.TempDir(), "colin-home")

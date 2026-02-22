@@ -44,6 +44,7 @@ Edit `colin.toml` and set:
 - `linear_api_token`
 - `linear_team_id`
 - `worker_id` (recommended)
+- Optional: `base_branch` (defaults to `main`; set to `master` or another branch when needed)
 - Optional: `project_filter` (comma-separated project IDs/names to scope candidate issues)
 
 ### 4) Validate setup
