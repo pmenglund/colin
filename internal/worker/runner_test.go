@@ -1322,7 +1322,7 @@ func TestRunnerRunOnceMergeExecutionFailureKeepsIssueInMerge(t *testing.T) {
 	}
 }
 
-func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {
+func TestRunnerRunOnceDoesNotEmitIdleCycleLogsAtInfo(t *testing.T) {
 	state := &fakeClientState{
 		issues: map[string]linear.Issue{},
 	}
@@ -1343,13 +1343,87 @@ func TestRunnerRunOnceLogsCycleEvenWhenNoIssues(t *testing.T) {
 	}
 
 	text := logOutput.String()
+	if strings.Contains(text, "action=cycle_start") {
+		t.Fatalf("expected cycle_start to remain at debug level, got %q", text)
+	}
+	if strings.Contains(text, "action=issues_fetched") {
+		t.Fatalf("expected issues_fetched count=0 to remain at debug level, got %q", text)
+	}
+	if strings.Contains(text, "action=cycle_complete") {
+		t.Fatalf("expected cycle_complete processed=0 to remain at debug level, got %q", text)
+	}
+}
+
+func TestRunnerRunOnceLogsIdleCycleAtDebug(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{},
+	}
+	client := newFakeLinearClient(state)
+
+	var logOutput bytes.Buffer
+	r := Runner{
+		Linear:   client,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger: slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	text := logOutput.String()
 	if !strings.Contains(text, "action=cycle_start") {
-		t.Fatalf("expected cycle_start log entry, got %q", text)
+		t.Fatalf("expected cycle_start debug log entry, got %q", text)
 	}
 	if !strings.Contains(text, "action=issues_fetched") || !strings.Contains(text, "count=0") {
-		t.Fatalf("expected issues_fetched count=0 log entry, got %q", text)
+		t.Fatalf("expected issues_fetched count=0 debug log entry, got %q", text)
 	}
 	if !strings.Contains(text, "action=cycle_complete") || !strings.Contains(text, "processed=0") {
-		t.Fatalf("expected cycle_complete processed=0 log entry, got %q", text)
+		t.Fatalf("expected cycle_complete processed=0 debug log entry, got %q", text)
+	}
+}
+
+func TestRunnerRunOnceLogsActiveCycleAtInfo(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateDone,
+				Description: "already done",
+				Metadata:    map[string]string{},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+
+	var logOutput bytes.Buffer
+	r := Runner{
+		Linear:   client,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(&logOutput, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	text := logOutput.String()
+	if strings.Contains(text, "action=cycle_start") {
+		t.Fatalf("expected cycle_start to remain at debug level, got %q", text)
+	}
+	if !strings.Contains(text, "action=issues_fetched") || !strings.Contains(text, "count=1") {
+		t.Fatalf("expected issues_fetched count=1 info log entry, got %q", text)
+	}
+	if !strings.Contains(text, "action=cycle_complete") || !strings.Contains(text, "processed=1") {
+		t.Fatalf("expected cycle_complete processed=1 info log entry, got %q", text)
 	}
 }

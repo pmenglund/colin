@@ -68,7 +68,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	cycleStartedAt := time.Now()
 	now := r.Clock().UTC()
 	executionID := fmt.Sprintf("%s-%d", r.WorkerID, now.UnixNano())
-	r.Logger.Info("worker cycle",
+	r.Logger.Debug("worker cycle",
 		"worker", r.WorkerID,
 		"action", "cycle_start",
 		"execution_id", executionID,
@@ -94,12 +94,21 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		}
 		return issues[i].Identifier < issues[j].Identifier
 	})
-	r.Logger.Info("worker cycle",
-		"worker", r.WorkerID,
-		"action", "issues_fetched",
-		"execution_id", executionID,
-		"count", len(issues),
-	)
+	if len(issues) == 0 {
+		r.Logger.Debug("worker cycle",
+			"worker", r.WorkerID,
+			"action", "issues_fetched",
+			"execution_id", executionID,
+			"count", len(issues),
+		)
+	} else {
+		r.Logger.Info("worker cycle",
+			"worker", r.WorkerID,
+			"action", "issues_fetched",
+			"execution_id", executionID,
+			"count", len(issues),
+		)
+	}
 
 	type issueRunResult struct {
 		issueID string
@@ -188,14 +197,25 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		)
 		return firstErr
 	}
-	r.Logger.Info("worker cycle",
-		"worker", r.WorkerID,
-		"action", "cycle_complete",
-		"execution_id", executionID,
-		"processed", len(issues),
-		"conflicts", conflicts,
-		"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
-	)
+	if len(issues) == 0 {
+		r.Logger.Debug("worker cycle",
+			"worker", r.WorkerID,
+			"action", "cycle_complete",
+			"execution_id", executionID,
+			"processed", len(issues),
+			"conflicts", conflicts,
+			"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
+		)
+	} else {
+		r.Logger.Info("worker cycle",
+			"worker", r.WorkerID,
+			"action", "cycle_complete",
+			"execution_id", executionID,
+			"processed", len(issues),
+			"conflicts", conflicts,
+			"duration_ms", time.Since(cycleStartedAt).Milliseconds(),
+		)
+	}
 
 	return nil
 }
