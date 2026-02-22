@@ -6,11 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/pmenglund/colin/internal/linear"
 )
+
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 type metadataLookupStub struct {
 	issue linear.Issue
@@ -56,13 +59,17 @@ func TestRunMetadataWithLookupPrintsSortedMetadata(t *testing.T) {
 		t.Fatalf("runMetadataWithLookup() error = %v", err)
 	}
 
+	if !strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("expected ANSI color codes in output, got %q", out.String())
+	}
+
 	want := "" +
 		"Issue: COLIN-42\n" +
 		"Metadata:\n" +
 		"colin.branch_name=colin/COLIN-42\n" +
 		"colin.worktree_path=/tmp/worktree\n"
-	if out.String() != want {
-		t.Fatalf("output = %q, want %q", out.String(), want)
+	if stripANSI(out.String()) != want {
+		t.Fatalf("output = %q, want %q", stripANSI(out.String()), want)
 	}
 }
 
@@ -78,11 +85,15 @@ func TestRunMetadataWithLookupPrintsEmptyMetadata(t *testing.T) {
 		t.Fatalf("runMetadataWithLookup() error = %v", err)
 	}
 
+	if !strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("expected ANSI color codes in output, got %q", out.String())
+	}
+
 	want := "" +
 		"Issue: COLIN-42\n" +
 		"Metadata: (empty)\n"
-	if out.String() != want {
-		t.Fatalf("output = %q, want %q", out.String(), want)
+	if stripANSI(out.String()) != want {
+		t.Fatalf("output = %q, want %q", stripANSI(out.String()), want)
 	}
 }
 
@@ -130,10 +141,15 @@ func TestMetadataCommandUsesFakeBackendConfig(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "Issue: COL-FAKE-1") {
+	plainOut := stripANSI(out)
+	if !strings.Contains(plainOut, "Issue: COL-FAKE-1") {
 		t.Fatalf("output missing issue header: %q", out)
 	}
-	if !strings.Contains(out, "Metadata: (empty)") {
+	if !strings.Contains(plainOut, "Metadata: (empty)") {
 		t.Fatalf("output missing empty metadata marker: %q", out)
 	}
+}
+
+func stripANSI(text string) string {
+	return ansiRegexp.ReplaceAllString(text, "")
 }
