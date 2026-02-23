@@ -527,9 +527,6 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary: result.ExecutionSummary,
 		ReviewStateName:  states.Review,
-		ThreadID:         threadID,
-		BranchName:       issue.Metadata[workflow.MetaBranchName],
-		WorktreePath:     issue.Metadata[workflow.MetaWorktreePath],
 		TranscriptRef:    result.TranscriptRef,
 		ScreenshotRef:    result.ScreenshotRef,
 	})
