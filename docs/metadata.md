@@ -27,7 +27,7 @@ Colin expects the attachment `metadata` object to contain string key/value pairs
 - `colin.worktree_path`: Absolute filesystem path to the task worktree.
 - `colin.branch_name`: Git branch used for the task.
 - `colin.thread_id`: Codex thread identifier associated with task execution.
-- `colin.pr_url`: Pull request URL used in deterministic review comments when available.
+- `colin.pr_url`: Pull request URL created/verified by Colin before transition to `Review`.
 
 ## Notes
 

@@ -21,7 +21,7 @@ The worker posts two deterministic markdown comments:
 
    Section order is:
    - `## Execution Summary`
-   - Optional `## Pull Request` (only when `colin.pr_url` metadata is present)
+   - `## Pull Request`
 
 `Execution Summary` for successful execution should describe:
 
@@ -40,7 +40,7 @@ When evidence is available, include reviewer-accessible attachment URLs directly
 2. Verify the earlier comment starts with `Starting Codex turn with current execution context.` and includes `## Execution Context`.
 3. Verify the review-transition comment starts with `Moved to **Review** after Codex execution.` and uses deterministic section order:
    - `Execution Summary`
-   - optional `Pull Request`
+   - `Pull Request`
 4. Verify `Execution Summary` includes clear `Before`, `After`, and `How verified` descriptions.
 5. If evidence attachment links are present in `Execution Summary`, open each pointer and confirm:
    - `Before evidence attachment` reflects the pre-change behavior/state.

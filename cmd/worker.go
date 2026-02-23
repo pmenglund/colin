@@ -60,22 +60,25 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
 			mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates)
+			pullRequestManager := newPullRequestManager(cfg, cwd)
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
 
 			runner := &worker.Runner{
-				Linear:         client,
-				Executor:       executor,
-				MergeExecutor:  mergeExecutor,
-				Bootstrapper:   bootstrapper,
-				TeamID:         cfg.LinearTeamID,
-				ProjectFilter:  cfg.ProjectFilter,
-				WorkerID:       cfg.WorkerID,
-				PollEvery:      cfg.PollEvery,
-				LeaseTTL:       cfg.LeaseTTL,
-				MaxConcurrency: cfg.MaxConcurrency,
-				DryRun:         cfg.DryRun,
-				States:         runtimeStates,
-				Logger:         logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
+				Linear:             client,
+				Executor:           executor,
+				MergeExecutor:      mergeExecutor,
+				PullRequestManager: pullRequestManager,
+				RequirePullRequest: cfg.LinearBackend == config.LinearBackendHTTP,
+				Bootstrapper:       bootstrapper,
+				TeamID:             cfg.LinearTeamID,
+				ProjectFilter:      cfg.ProjectFilter,
+				WorkerID:           cfg.WorkerID,
+				PollEvery:          cfg.PollEvery,
+				LeaseTTL:           cfg.LeaseTTL,
+				MaxConcurrency:     cfg.MaxConcurrency,
+				DryRun:             cfg.DryRun,
+				States:             runtimeStates,
+				Logger:             logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
 			}
 
 			if once {
@@ -142,6 +145,19 @@ func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer, states wo
 		PushBaseBranch: &pushBaseBranch,
 		MergePreparer:  mergePreparer,
 		States:         states,
+	})
+}
+
+func newPullRequestManager(cfg config.Config, cwd string) worker.PullRequestManager {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		return nil
+	}
+
+	return worker.NewGitPullRequestManager(worker.GitPullRequestManagerOptions{
+		RepoRoot:   cwd,
+		BaseBranch: cfg.BaseBranch,
+		RemoteName: "origin",
+		Binary:     "gh",
 	})
 }
 

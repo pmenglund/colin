@@ -34,7 +34,7 @@ This state means Colin needs a better specification of the task. Once provided, 
 
 ### Review
 
-This state means the work is complete, and a human should verify that the implementation matches intent. Tasks should ideally produce a screenshot or screen recording of a webpage, or terminal output of a CLI, to show before and after.
+This state means the work is complete, and a human should verify that the implementation matches intent. Colin must ensure a pull request exists before transitioning an issue to `Review`. Tasks should ideally produce a screenshot or screen recording of a webpage, or terminal output of a CLI, to show before and after.
 For expected `Review` comment payload structure and reviewer checks, use `docs/review-state-evidence.md`.
 
 If the task is done, a human moves the task to `Merge` so it can be merged into the main branch. If it needs more work, the changes are described in a Linear comment and a human moves the task back to `Todo`.

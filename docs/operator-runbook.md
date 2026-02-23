@@ -19,6 +19,7 @@ For `linear_backend = "http"` (default), these values are required:
 
 - `LINEAR_API_TOKEN`
 - `LINEAR_TEAM_ID`
+- `gh` CLI available on `PATH` and authenticated (used to create pull requests before `Review`)
 
 Common runtime controls:
 

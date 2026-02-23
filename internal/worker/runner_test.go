@@ -196,6 +196,22 @@ type fakeMergeExecutor struct {
 	recoveryErr    error
 }
 
+type fakePullRequestManager struct {
+	url       string
+	err       error
+	callCnt   int
+	lastIssue linear.Issue
+}
+
+func (f *fakePullRequestManager) EnsurePullRequest(_ context.Context, issue linear.Issue) (string, error) {
+	f.callCnt++
+	f.lastIssue = issue
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.url, nil
+}
+
 func (f *fakeMergeExecutor) ExecuteMerge(_ context.Context, issue linear.Issue) error {
 	f.callCnt++
 	f.lastIssue = issue
@@ -985,6 +1001,114 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n- Before evidence attachment: https://linear.app/example/attachment/COL-1-before\n- After evidence attachment: https://linear.app/example/attachment/COL-1-after"
 	if comments[1] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[1], wantComment)
+	}
+}
+
+func TestRunnerInProgressWellSpecifiedRequiresPullRequestWhenConfigured(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+
+	r := Runner{
+		Linear:             client,
+		Executor:           executor,
+		RequirePullRequest: true,
+		TeamID:             "team-1",
+		WorkerID:           "worker-1",
+		LeaseTTL:           5 * time.Minute,
+		Clock:              time.Now,
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want pull request requirement failure")
+	}
+	if !strings.Contains(err.Error(), "pull request manager is required for review transitions") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateInProgress {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateInProgress)
+	}
+}
+
+func TestRunnerInProgressWellSpecifiedIncludesPullRequestWhenConfigured(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+	prManager := &fakePullRequestManager{
+		url: "https://github.com/pmenglund/colin/pull/80",
+	}
+
+	r := Runner{
+		Linear:             client,
+		Executor:           executor,
+		PullRequestManager: prManager,
+		RequirePullRequest: true,
+		TeamID:             "team-1",
+		WorkerID:           "worker-1",
+		LeaseTTL:           5 * time.Minute,
+		Clock:              time.Now,
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if prManager.callCnt != 1 {
+		t.Fatalf("EnsurePullRequest() call count = %d, want 1", prManager.callCnt)
+	}
+	if got := state.issues["1"].StateName; got != workflow.StateReview {
+		t.Fatalf("StateName = %q, want %q", got, workflow.StateReview)
+	}
+	if got := state.issues["1"].Metadata[workflow.MetaPRURL]; got != "https://github.com/pmenglund/colin/pull/80" {
+		t.Fatalf("Metadata[%s] = %q, want %q", workflow.MetaPRURL, got, "https://github.com/pmenglund/colin/pull/80")
+	}
+	comments := state.comments["1"]
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
+	}
+	if !strings.Contains(comments[1], "## Pull Request\n- URL: https://github.com/pmenglund/colin/pull/80") {
+		t.Fatalf("review comment missing pull request section: %q", comments[1])
 	}
 }
 

@@ -7,6 +7,7 @@ This guide helps first-time users get Colin running end-to-end.
 - Go installed and available on `PATH`
 - Access to a Linear workspace
 - Linear API token and team ID
+- GitHub CLI (`gh`) installed and authenticated (required for automatic PR creation)
 
 ## 1. Build the binary
 

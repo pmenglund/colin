@@ -16,6 +16,7 @@ This lets the user decide to either accept the change, and move it to the `Merge
 
 - Go (latest stable)
 - A Linear API token and team ID (for the default HTTP backend)
+- GitHub CLI (`gh`) installed and authenticated for automatic PR creation before `Review`
 
 ### 2) Build the `colin` binary
 

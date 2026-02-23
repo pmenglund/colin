@@ -26,20 +26,22 @@ const (
 
 // Runner executes deterministic state transitions for Linear issues.
 type Runner struct {
-	Linear         linear.Client
-	Executor       InProgressExecutor
-	MergeExecutor  MergeExecutor
-	Bootstrapper   TaskBootstrapper
-	TeamID         string
-	ProjectFilter  []string
-	WorkerID       string
-	PollEvery      time.Duration
-	LeaseTTL       time.Duration
-	MaxConcurrency int
-	DryRun         bool
-	States         workflow.States
-	Clock          func() time.Time
-	Logger         *slog.Logger
+	Linear             linear.Client
+	Executor           InProgressExecutor
+	MergeExecutor      MergeExecutor
+	PullRequestManager PullRequestManager
+	RequirePullRequest bool
+	Bootstrapper       TaskBootstrapper
+	TeamID             string
+	ProjectFilter      []string
+	WorkerID           string
+	PollEvery          time.Duration
+	LeaseTTL           time.Duration
+	MaxConcurrency     int
+	DryRun             bool
+	States             workflow.States
+	Clock              func() time.Time
+	Logger             *slog.Logger
 
 	cycleLogMu                sync.Mutex
 	lastIssuesFetchedCount    int
@@ -543,18 +545,37 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		return nil
 	}
 
+	prURL := strings.TrimSpace(issue.Metadata[workflow.MetaPRURL])
+	if r.RequirePullRequest {
+		if r.PullRequestManager == nil {
+			return errors.New("runner pull request manager is required for review transitions")
+		}
+		resolvedPRURL, err := r.PullRequestManager.EnsurePullRequest(ctx, issue)
+		if err != nil {
+			return fmt.Errorf("ensure pull request for issue %s: %w", issue.Identifier, err)
+		}
+		prURL = strings.TrimSpace(resolvedPRURL)
+		if prURL == "" {
+			return fmt.Errorf("ensure pull request for issue %s: pull request URL is empty", issue.Identifier)
+		}
+	}
+
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary:  result.ExecutionSummary,
 		ReviewStateName:   states.Review,
-		PRURL:             issue.Metadata[workflow.MetaPRURL],
+		PRURL:             prURL,
 		BeforeEvidenceRef: result.BeforeEvidenceRef,
 		AfterEvidenceRef:  result.AfterEvidenceRef,
 	})
-	if err := r.applyInProgressOutcome(ctx, issue, states.Review, comment, now, map[string]string{
+	reviewMetadata := map[string]string{
 		workflow.MetaNeedsRefine:         "false",
 		workflow.MetaReadyForHumanReview: "true",
 		workflow.MetaReason:              "",
-	}, "human_review", threadID); err != nil {
+	}
+	if prURL != "" {
+		reviewMetadata[workflow.MetaPRURL] = prURL
+	}
+	if err := r.applyInProgressOutcome(ctx, issue, states.Review, comment, now, reviewMetadata, "human_review", threadID); err != nil {
 		return err
 	}
 	r.Logger.Info("worker decision",
