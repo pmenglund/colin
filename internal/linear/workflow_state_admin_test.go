@@ -3,10 +3,12 @@ package linear
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pmenglund/colin/internal/workflow"
 )
@@ -223,5 +225,38 @@ func TestWorkflowStateAdminEnsureWorkflowStatesValidatesType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "expected \"unstarted\"") {
 		t.Fatalf("error = %q, want expected unstarted", err.Error())
+	}
+}
+
+func TestWorkflowStateAdminResolveWorkflowStatesReturnsRateLimitErrorWithRetryIn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{
+			"errors": [{
+				"message": "Rate limit exceeded",
+				"extensions": {
+					"code": "RATELIMITED",
+					"statusCode": 429,
+					"retry_in": 6
+				}
+			}]
+		}`))
+	}))
+	defer srv.Close()
+
+	admin := NewWorkflowStateAdmin(srv.URL, "token", "COLIN", srv.Client())
+	_, err := admin.ResolveWorkflowStates(context.Background(), workflow.DefaultStates())
+	if err == nil {
+		t.Fatal("ResolveWorkflowStates() error = nil, want rate limit error")
+	}
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("errors.Is(err, ErrRateLimited) = false, err=%v", err)
+	}
+	retryIn, ok := RetryIn(err)
+	if !ok {
+		t.Fatal("RetryIn(err) ok = false, want true")
+	}
+	if retryIn != 6*time.Second {
+		t.Fatalf("RetryIn(err) = %s, want %s", retryIn, 6*time.Second)
 	}
 }

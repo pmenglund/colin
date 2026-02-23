@@ -262,7 +262,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	for {
 		if err := r.RunOnce(ctx); err != nil {
 			runRetryAttempt++
-			retryIn := runRetryDelay(runRetryAttempt, defaultRunRetryBaseDelay, defaultRunRetryMaxDelay)
+			retryIn := runRetryDelayForError(err, runRetryAttempt, defaultRunRetryBaseDelay, defaultRunRetryMaxDelay)
 			r.Logger.Error("worker run failed",
 				"worker", r.WorkerID,
 				"action", "run_error",
@@ -787,6 +787,13 @@ func issueMatchesProjectFilter(issue linear.Issue, filterSet map[string]struct{}
 
 func normalizeProjectFilterValue(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func runRetryDelayForError(err error, attempt int, baseDelay, maxDelay time.Duration) time.Duration {
+	if retryIn, ok := linear.RetryIn(err); ok && retryIn > 0 {
+		return retryIn
+	}
+	return runRetryDelay(attempt, baseDelay, maxDelay)
 }
 
 func runRetryDelay(attempt int, baseDelay, maxDelay time.Duration) time.Duration {

@@ -648,7 +648,7 @@ func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[st
 		return fmt.Errorf("read response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("graphql status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return newGraphQLStatusError(resp.StatusCode, resp.Header, respBody)
 	}
 
 	var envelope struct {
@@ -661,7 +661,7 @@ func (c *HTTPClient) graphQL(ctx context.Context, query string, variables map[st
 		return fmt.Errorf("decode response envelope: %w", err)
 	}
 	if len(envelope.Errors) > 0 {
-		return fmt.Errorf("graphql error: %s", envelope.Errors[0].Message)
+		return newGraphQLMessageError(envelope.Errors[0].Message, resp.Header, respBody)
 	}
 	if len(envelope.Data) == 0 {
 		return errors.New("graphql response missing data")

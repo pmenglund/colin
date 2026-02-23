@@ -1899,6 +1899,43 @@ func TestRunnerRunRetriesAfterCycleFailure(t *testing.T) {
 	})
 }
 
+type retryInError struct {
+	delay time.Duration
+}
+
+func (e retryInError) Error() string {
+	return "rate limited"
+}
+
+func (e retryInError) RetryIn() (time.Duration, bool) {
+	if e.delay <= 0 {
+		return 0, false
+	}
+	return e.delay, true
+}
+
+func TestRunRetryDelayForErrorUsesLinearRetryIn(t *testing.T) {
+	t.Parallel()
+
+	retryIn := 17 * time.Second
+	got := runRetryDelayForError(retryInError{delay: retryIn}, 5, time.Second, 30*time.Second)
+	if got != retryIn {
+		t.Fatalf("runRetryDelayForError() = %s, want %s", got, retryIn)
+	}
+}
+
+func TestRunRetryDelayForErrorFallsBackWhenRetryInMissing(t *testing.T) {
+	t.Parallel()
+
+	baseDelay := 100 * time.Millisecond
+	maxDelay := 100 * time.Millisecond
+
+	got := runRetryDelayForError(retryInError{}, 1, baseDelay, maxDelay)
+	if got < 50*time.Millisecond || got > 100*time.Millisecond {
+		t.Fatalf("runRetryDelayForError() = %s, want range [%s, %s]", got, 50*time.Millisecond, 100*time.Millisecond)
+	}
+}
+
 func TestRunRetryDelayUsesJitteredExponentialBackoff(t *testing.T) {
 	baseDelay := 100 * time.Millisecond
 	maxDelay := 1600 * time.Millisecond
