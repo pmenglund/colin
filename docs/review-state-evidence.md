@@ -22,7 +22,6 @@ The worker posts two deterministic markdown comments:
    Section order is:
    - `## Execution Summary`
    - Optional `## Pull Request` (only when `colin.pr_url` metadata is present)
-   - Optional `## Evidence` (only when evidence pointers are present)
 
 `Execution Summary` for successful execution should describe:
 
@@ -30,12 +29,10 @@ The worker posts two deterministic markdown comments:
 - `After` (what changed)
 - `How verified` (how the change was validated)
 
-`Evidence` may include:
+When evidence is available, include reviewer-accessible attachment URLs directly in `Execution Summary`:
 
-- `Before evidence` (for example a screenshot/recording/path/URL)
-- `After evidence` (for example a screenshot/recording/path/URL)
-
-If no evidence pointers are provided, the `## Evidence` section is omitted from the review comment.
+- `Before evidence attachment` (Linear attachment URL)
+- `After evidence attachment` (Linear attachment URL)
 
 ## Reviewer Verification Steps
 
@@ -44,11 +41,10 @@ If no evidence pointers are provided, the `## Evidence` section is omitted from 
 3. Verify the review-transition comment starts with `Moved to **Review** after Codex execution.` and uses deterministic section order:
    - `Execution Summary`
    - optional `Pull Request`
-   - optional `Evidence`
 4. Verify `Execution Summary` includes clear `Before`, `After`, and `How verified` descriptions.
-5. If an `Evidence` section is present, open each pointer and confirm:
-   - `Before evidence` reflects the pre-change behavior/state.
-   - `After evidence` reflects the post-change behavior/state.
+5. If evidence attachment links are present in `Execution Summary`, open each pointer and confirm:
+   - `Before evidence attachment` reflects the pre-change behavior/state.
+   - `After evidence attachment` reflects the post-change behavior/state.
 6. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
 
 ## Troubleshooting

@@ -128,7 +128,7 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_2",
-		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Before: old behavior. After: new behavior. How verified: go test ./...","before_evidence_ref":"terminal://logs/COLIN-1-before.txt","after_evidence_ref":"https://example.invalid/result-after.png"}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Before: old behavior. After: new behavior. How verified: go test ./...","before_evidence_ref":"https://linear.app/example/attachment/COLIN-1-before","after_evidence_ref":"https://linear.app/example/attachment/COLIN-1-after"}`},
 	}
 	client := &fakeClient{thread: thread}
 
@@ -153,10 +153,10 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	if !strings.Contains(result.ExecutionContext, "Issue identifier: COLIN-1") {
 		t.Fatalf("ExecutionContext missing issue identifier: %q", result.ExecutionContext)
 	}
-	if result.BeforeEvidenceRef != "terminal://logs/COLIN-1-before.txt" {
+	if result.BeforeEvidenceRef != "https://linear.app/example/attachment/COLIN-1-before" {
 		t.Fatalf("BeforeEvidenceRef = %q", result.BeforeEvidenceRef)
 	}
-	if result.AfterEvidenceRef != "https://example.invalid/result-after.png" {
+	if result.AfterEvidenceRef != "https://linear.app/example/attachment/COLIN-1-after" {
 		t.Fatalf("AfterEvidenceRef = %q", result.AfterEvidenceRef)
 	}
 	if thread.lastTurnOpts == nil {
@@ -337,6 +337,29 @@ func TestExecutorEvaluateAndExecuteRejectsLegacyEvidenceFields(t *testing.T) {
 		t.Fatal("EvaluateAndExecute() error = nil, want strict schema failure")
 	}
 	if !strings.Contains(err.Error(), "response is missing required field \"before_evidence_ref\"") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExecutorEvaluateAndExecuteRejectsLocalEvidencePaths(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_local_path",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented tests","before_evidence_ref":"/tmp/COLIN-80-before.hex","after_evidence_ref":"https://linear.app/example/attachment/COLIN-80-after"}`},
+	}
+	client := &fakeClient{thread: thread}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{Identifier: "COLIN-80", Title: "Title", Description: "Spec"})
+	if err == nil {
+		t.Fatal("EvaluateAndExecute() error = nil, want invalid evidence URL failure")
+	}
+	if !strings.Contains(err.Error(), "response field \"before_evidence_ref\" must be a reviewer-accessible URL") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

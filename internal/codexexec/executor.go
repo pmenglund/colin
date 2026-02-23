@@ -255,7 +255,24 @@ func decodeResponse(raw []byte, out *codexResponse) error {
 	if err := json.Unmarshal(raw, out); err != nil {
 		return err
 	}
+	if err := validateEvidenceURL(out.BeforeEvidenceRef, "before_evidence_ref"); err != nil {
+		return err
+	}
+	if err := validateEvidenceURL(out.AfterEvidenceRef, "after_evidence_ref"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateEvidenceURL(raw string, field string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return nil
+	}
+	return fmt.Errorf("response field %q must be a reviewer-accessible URL when provided", field)
 }
 
 func (e *Executor) buildPrompt(issue linear.Issue) (string, error) {

@@ -18,8 +18,10 @@ Follow this workflow:
    - `Before: ...`
    - `After: ...`
    - `How verified: ...`
-7. When observable UI or CLI behavior changed, set both `before_evidence_ref` and `after_evidence_ref` to artifact pointers (for example screenshots, screen recordings, terminal captures).
-8. When no observable UI or CLI behavior changed, set both evidence fields to an empty string and explicitly say that in `How verified`, including what validation was performed (for example tests or logs).
+7. When observable UI or CLI behavior changed, create Linear issue attachments for before/after artifacts and set both `before_evidence_ref` and `after_evidence_ref` to those attachment URLs.
+8. Never return local filesystem paths (for example `/tmp/...`) or `file://` links in evidence fields. Evidence must be reviewer-accessible URLs.
+9. Include evidence links in `execution_summary` itself (for example `Before evidence: <url>` and `After evidence: <url>`) so reviewers can verify from the summary section.
+10. When no observable UI or CLI behavior changed, set both evidence fields to an empty string and explicitly say that in `How verified`, including what validation was performed (for example tests or logs).
 
 Return only JSON that matches this schema:
 ```json

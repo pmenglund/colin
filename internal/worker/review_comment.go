@@ -49,19 +49,13 @@ func buildReviewComment(input reviewCommentInput) string {
 
 	beforeEvidenceRef := strings.TrimSpace(input.BeforeEvidenceRef)
 	afterEvidenceRef := strings.TrimSpace(input.AfterEvidenceRef)
-	if beforeEvidenceRef != "" || afterEvidenceRef != "" {
-		b.WriteString("\n\n## Evidence\n")
-		if beforeEvidenceRef != "" {
-			b.WriteString("- Before evidence: ")
-			b.WriteString(beforeEvidenceRef)
-			if afterEvidenceRef != "" {
-				b.WriteString("\n")
-			}
-		}
-		if afterEvidenceRef != "" {
-			b.WriteString("- After evidence: ")
-			b.WriteString(afterEvidenceRef)
-		}
+	if beforeEvidenceRef != "" {
+		b.WriteString("\n- Before evidence attachment: ")
+		b.WriteString(beforeEvidenceRef)
+	}
+	if afterEvidenceRef != "" {
+		b.WriteString("\n- After evidence attachment: ")
+		b.WriteString(afterEvidenceRef)
 	}
 
 	return b.String()

@@ -29,9 +29,9 @@ Deterministic behavior rules:
 2. If the issue description contains `[LIVE_E2E_FORCE_REVIEW]`, return:
    - `is_well_specified = true`
    - `needs_input_summary = ""`
-   - `execution_summary = "Before: Review issue not yet processed. After: Review issue processed successfully for the tagged path. How verified: Live harness observed worker transition and deterministic evidence refs."`
-   - `before_evidence_ref = "live-e2e-before://review"`
-   - `after_evidence_ref = "live-e2e-after://review"`
+   - `execution_summary = "Before: Review issue not yet processed. After: Review issue processed successfully for the tagged path. How verified: Live harness observed worker transition and deterministic evidence refs. Before evidence: https://linear.app/example/attachment/live-e2e-before. After evidence: https://linear.app/example/attachment/live-e2e-after."`
+   - `before_evidence_ref = "https://linear.app/example/attachment/live-e2e-before"`
+   - `after_evidence_ref = "https://linear.app/example/attachment/live-e2e-after"`
 
 3. For any other issue, return:
    - `is_well_specified = true`

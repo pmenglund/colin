@@ -955,8 +955,8 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 			ExecutionSummary:  "implemented the requested change",
 			ExecutionContext:  "Issue identifier: COL-1",
 			ThreadID:          "thr_2",
-			BeforeEvidenceRef: "terminal://logs/COL-1-before.txt",
-			AfterEvidenceRef:  "https://example.invalid/screenshot-after.png",
+			BeforeEvidenceRef: "https://linear.app/example/attachment/COL-1-before",
+			AfterEvidenceRef:  "https://linear.app/example/attachment/COL-1-after",
 		},
 	}
 
@@ -982,7 +982,7 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	if comments[0] != wantContextComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantContextComment)
 	}
-	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Evidence\n- Before evidence: terminal://logs/COL-1-before.txt\n- After evidence: https://example.invalid/screenshot-after.png"
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n- Before evidence attachment: https://linear.app/example/attachment/COL-1-before\n- After evidence attachment: https://linear.app/example/attachment/COL-1-after"
 	if comments[1] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[1], wantComment)
 	}
