@@ -92,3 +92,11 @@ Recommended reading order:
 2. [`docs/usage.md`](docs/usage.md) – day-to-day commands and operating patterns.
 3. [`docs/operator-runbook.md`](docs/operator-runbook.md) – production-like operation procedures.
 4. [`docs/troubleshooting.md`](docs/troubleshooting.md) – symptom-based recovery steps.
+
+## Release automation
+
+Git tags now trigger automated releases via GoReleaser in GitHub Actions.
+
+- Push a tag (for example `v0.1.0`) to start a release run.
+- The workflow builds `colin` for macOS, Linux, and Windows on `amd64` and `arm64`.
+- Release archives and `checksums.txt` are published to the matching GitHub release.
