@@ -11,7 +11,6 @@ import (
 
 const (
 	defaultTaskBaseBranch = "main"
-	defaultGitBinary      = "git"
 	worktreesDirName      = "worktrees"
 	issueBranchPrefix     = "colin/"
 )
@@ -45,7 +44,6 @@ type GitTaskBootstrapper struct {
 	repoRoot            string
 	colinHome           string
 	baseBranch          string
-	gitBinary           string
 	branchMetadataStore BranchMetadataStore
 }
 
@@ -56,19 +54,13 @@ func NewGitTaskBootstrapper(opts GitTaskBootstrapperOptions) *GitTaskBootstrappe
 	if baseBranch == "" {
 		baseBranch = defaultTaskBaseBranch
 	}
-	gitBinary := strings.TrimSpace(opts.GitBinary)
-	if gitBinary == "" {
-		gitBinary = defaultGitBinary
-	}
 	branchMetadataStore := NewGitBranchMetadataStore(GitBranchMetadataStoreOptions{
-		RepoRoot:  repoRoot,
-		GitBinary: gitBinary,
+		RepoRoot: repoRoot,
 	})
 	return &GitTaskBootstrapper{
 		repoRoot:            repoRoot,
 		colinHome:           filepath.Clean(strings.TrimSpace(opts.ColinHome)),
 		baseBranch:          baseBranch,
-		gitBinary:           gitBinary,
 		branchMetadataStore: branchMetadataStore,
 	}
 }
@@ -140,30 +132,58 @@ func (b *GitTaskBootstrapper) RecordBranchSession(ctx context.Context, worktreeP
 }
 
 func (b *GitTaskBootstrapper) ensureBaseBranchExists(ctx context.Context) error {
-	if err := gitRun(ctx, b.gitBinary, "-C", b.repoRoot, "rev-parse", "--verify", b.baseBranch+"^{commit}"); err != nil {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	repo, err := openRepository(b.repoRoot)
+	if err != nil {
+		return fmt.Errorf("verify base branch %q in %q: %w", b.baseBranch, b.repoRoot, err)
+	}
+	if _, err := resolveCommit(repo, b.baseBranch); err != nil {
 		return fmt.Errorf("verify base branch %q in %q: %w", b.baseBranch, b.repoRoot, err)
 	}
 	return nil
 }
 
 func (b *GitTaskBootstrapper) ensureWorktreeExists(ctx context.Context, worktreePath string) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
 	if _, err := os.Stat(worktreePath); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat worktree path %q: %w", worktreePath, err)
 	}
 
-	if err := gitRun(ctx, b.gitBinary, "-C", b.repoRoot, "worktree", "add", "--detach", worktreePath, b.baseBranch); err != nil {
+	if err := addLinkedWorktree(b.repoRoot, worktreePath, b.baseBranch); err != nil {
 		return fmt.Errorf("create worktree %q from %q: %w", worktreePath, b.baseBranch, err)
 	}
 	return nil
 }
 
 func (b *GitTaskBootstrapper) ensureBranchCheckedOut(ctx context.Context, worktreePath string, branchName string) error {
-	currentBranch, err := gitOutput(ctx, b.gitBinary, "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	repo, err := openRepository(worktreePath)
 	if err != nil {
 		return fmt.Errorf("inspect current branch in %q: %w", worktreePath, err)
 	}
+
+	currentBranch, err := currentBranchName(repo)
+	if err != nil {
+		return fmt.Errorf("inspect current branch in %q: %w", worktreePath, err)
+	}
+
 	if currentBranch == branchName {
 		return nil
 	}
@@ -173,20 +193,31 @@ func (b *GitTaskBootstrapper) ensureBranchCheckedOut(ctx context.Context, worktr
 		return err
 	}
 	if exists {
-		if err := gitRun(ctx, b.gitBinary, "-C", worktreePath, "checkout", branchName); err != nil {
+		if err := checkoutBranch(repo, branchName); err != nil {
 			return fmt.Errorf("checkout branch %q in %q: %w", branchName, worktreePath, err)
 		}
 		return nil
 	}
 
-	if err := gitRun(ctx, b.gitBinary, "-C", worktreePath, "checkout", "-b", branchName, b.baseBranch); err != nil {
+	if err := checkoutBranchFromRevision(repo, branchName, b.baseBranch); err != nil {
 		return fmt.Errorf("create branch %q from %q in %q: %w", branchName, b.baseBranch, worktreePath, err)
 	}
 	return nil
 }
 
 func (b *GitTaskBootstrapper) branchExists(ctx context.Context, branchName string) (bool, error) {
-	exists, err := gitCheckExitCodeOneMeansFalse(ctx, b.gitBinary, "-C", b.repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+
+	repo, err := openRepository(b.repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("check branch %q in %q: %w", branchName, b.repoRoot, err)
+	}
+
+	exists, err := gitBranchExists(repo, branchName)
 	if err != nil {
 		return false, fmt.Errorf("check branch %q in %q: %w", branchName, b.repoRoot, err)
 	}

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	git "github.com/go-git/go-git/v6"
 	"github.com/pmenglund/codex-sdk-go"
 
 	"github.com/pmenglund/colin/internal/execution"
@@ -145,18 +145,36 @@ func (e *Executor) commitTurnChanges(ctx context.Context, issue linear.Issue) er
 		return nil
 	}
 
-	status, err := gitOutput(ctx, "git", "-C", worktreePath, "status", "--porcelain=v1")
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	repo, err := git.PlainOpenWithOptions(worktreePath, &git.PlainOpenOptions{
+		EnableDotGitCommonDir: true,
+	})
 	if err != nil {
 		return fmt.Errorf("inspect git status in %q: %w", worktreePath, err)
 	}
-	if strings.TrimSpace(status) == "" {
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("inspect git status in %q: %w", worktreePath, err)
+	}
+
+	status, err := worktree.Status()
+	if err != nil {
+		return fmt.Errorf("inspect git status in %q: %w", worktreePath, err)
+	}
+	if status.IsClean() {
 		return nil
 	}
 
-	if err := gitRun(ctx, "git", "-C", worktreePath, "add", "-A"); err != nil {
+	if err := worktree.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		return fmt.Errorf("stage changes in %q: %w", worktreePath, err)
 	}
-	if err := gitRun(ctx, "git", "-C", worktreePath, "commit", "-m", turnCommitMessage(issue.Identifier)); err != nil {
+	if _, err := worktree.Commit(turnCommitMessage(issue.Identifier), &git.CommitOptions{}); err != nil {
 		return fmt.Errorf("commit changes in %q: %w", worktreePath, err)
 	}
 
@@ -299,22 +317,4 @@ func (t realCodexThread) ID() string {
 
 func (t realCodexThread) RunInputs(ctx context.Context, inputs []codex.Input, opts *codex.TurnOptions) (*codex.TurnResult, error) {
 	return t.thread.RunInputs(ctx, inputs, opts)
-}
-
-func gitRun(ctx context.Context, gitBinary string, args ...string) error {
-	cmd := exec.CommandContext(ctx, gitBinary, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
-}
-
-func gitOutput(ctx context.Context, gitBinary string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, gitBinary, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return strings.TrimSpace(string(output)), nil
 }
