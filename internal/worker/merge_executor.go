@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/workflow"
 )
@@ -15,7 +17,6 @@ import (
 const (
 	defaultMergeBaseBranch = "main"
 	defaultMergeRemoteName = "origin"
-	defaultMergeGitBinary  = "git"
 )
 
 // GitMergeExecutorOptions configures a git-backed MergeExecutor.
@@ -33,7 +34,6 @@ type GitMergeExecutor struct {
 	repoRoot             string
 	baseBranch           string
 	remoteName           string
-	gitBinary            string
 	shouldPushBaseBranch bool
 	mergePreparer        MergePreparer
 }
@@ -48,10 +48,6 @@ func NewGitMergeExecutor(opts GitMergeExecutorOptions) *GitMergeExecutor {
 	if remoteName == "" {
 		remoteName = defaultMergeRemoteName
 	}
-	gitBinary := strings.TrimSpace(opts.GitBinary)
-	if gitBinary == "" {
-		gitBinary = defaultMergeGitBinary
-	}
 	pushBaseBranch := true
 	if opts.PushBaseBranch != nil {
 		pushBaseBranch = *opts.PushBaseBranch
@@ -61,7 +57,6 @@ func NewGitMergeExecutor(opts GitMergeExecutorOptions) *GitMergeExecutor {
 		repoRoot:             filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
 		baseBranch:           baseBranch,
 		remoteName:           remoteName,
-		gitBinary:            gitBinary,
 		shouldPushBaseBranch: pushBaseBranch,
 		mergePreparer:        opts.MergePreparer,
 	}
@@ -181,37 +176,68 @@ func (e *GitMergeExecutor) prepareMerge(
 }
 
 func (e *GitMergeExecutor) ensureBaseBranchExists(ctx context.Context) error {
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "rev-parse", "--verify", e.baseBranch+"^{commit}"); err != nil {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	repo, err := openRepository(e.repoRoot)
+	if err != nil {
+		return fmt.Errorf("verify base branch %q in %q: %w", e.baseBranch, e.repoRoot, err)
+	}
+	if _, err := resolveCommit(repo, e.baseBranch); err != nil {
 		return fmt.Errorf("verify base branch %q in %q: %w", e.baseBranch, e.repoRoot, err)
 	}
 	return nil
 }
 
 func (e *GitMergeExecutor) checkoutBaseBranch(ctx context.Context) error {
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "checkout", e.baseBranch); err != nil {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	repo, err := openRepository(e.repoRoot)
+	if err != nil {
+		return fmt.Errorf("checkout base branch %q in %q: %w", e.baseBranch, e.repoRoot, err)
+	}
+	if err := checkoutBranch(repo, e.baseBranch); err != nil {
 		return fmt.Errorf("checkout base branch %q in %q: %w", e.baseBranch, e.repoRoot, err)
 	}
 	return nil
 }
 
 func (e *GitMergeExecutor) mergeTaskBranch(ctx context.Context, branchName string) error {
-	exists, err := e.branchExists(ctx, branchName)
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	repo, err := openRepository(e.repoRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("merge branch %q into %q: %w", branchName, e.baseBranch, err)
+	}
+
+	exists, err := gitBranchExists(repo, branchName)
+	if err != nil {
+		return fmt.Errorf("check branch %q in %q: %w", branchName, e.repoRoot, err)
 	}
 	if !exists {
 		return fmt.Errorf("source branch %q does not exist in %q", branchName, e.repoRoot)
 	}
 
-	merged, err := e.isAncestor(ctx, branchName, e.baseBranch)
+	merged, err := isAncestorBranch(repo, branchName, e.baseBranch)
 	if err != nil {
-		return err
+		return fmt.Errorf("check whether %q is ancestor of %q in %q: %w", branchName, e.baseBranch, e.repoRoot, err)
 	}
 	if merged {
 		return nil
 	}
 
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "merge", "--no-ff", "--no-edit", branchName); err != nil {
+	if err := fastForwardBranch(repo, e.baseBranch, branchName); err != nil {
 		return fmt.Errorf("merge branch %q into %q: %w", branchName, e.baseBranch, err)
 	}
 	return nil
@@ -221,39 +247,44 @@ func (e *GitMergeExecutor) pushBaseBranch(ctx context.Context) error {
 	if !e.shouldPushBaseBranch {
 		return nil
 	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 
-	exists, err := e.remoteExists(ctx, e.remoteName)
+	repo, err := openRepository(e.repoRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("verify remote %q in %q: %w", e.remoteName, e.repoRoot, err)
 	}
-	if !exists {
-		return nil
+
+	if _, err := remoteURL(repo, e.remoteName); err != nil {
+		if errors.Is(err, git.ErrRemoteNotFound) {
+			return nil
+		}
+		return fmt.Errorf("verify remote %q in %q: %w", e.remoteName, e.repoRoot, err)
 	}
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "push", e.remoteName, e.baseBranch); err != nil {
+	if err := pushBranch(ctx, repo, e.remoteName, e.baseBranch); err != nil {
 		return fmt.Errorf("push %q to remote %q: %w", e.baseBranch, e.remoteName, err)
 	}
 	return nil
 }
 
-func (e *GitMergeExecutor) remoteExists(ctx context.Context, remoteName string) (bool, error) {
-	remotes, err := gitOutput(ctx, e.gitBinary, "-C", e.repoRoot, "remote")
-	if err != nil {
-		return false, fmt.Errorf("list remotes in %q: %w", e.repoRoot, err)
-	}
-
-	target := strings.TrimSpace(remoteName)
-	for _, line := range strings.Split(remotes, "\n") {
-		if strings.TrimSpace(line) == target {
-			return true, nil
+func (e *GitMergeExecutor) deleteTaskBranch(ctx context.Context, branchName string, worktreePath string) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
-	return false, nil
-}
 
-func (e *GitMergeExecutor) deleteTaskBranch(ctx context.Context, branchName string, worktreePath string) error {
-	exists, err := e.branchExists(ctx, branchName)
+	repo, err := openRepository(e.repoRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("delete branch %q in %q: %w", branchName, e.repoRoot, err)
+	}
+
+	exists, err := gitBranchExists(repo, branchName)
+	if err != nil {
+		return fmt.Errorf("check branch %q in %q: %w", branchName, e.repoRoot, err)
 	}
 	if !exists {
 		return nil
@@ -261,12 +292,17 @@ func (e *GitMergeExecutor) deleteTaskBranch(ctx context.Context, branchName stri
 
 	if strings.TrimSpace(worktreePath) != "" {
 		if _, statErr := os.Stat(worktreePath); statErr == nil {
-			currentBranch, outErr := gitOutputAllowMissing(ctx, e.gitBinary, "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+			worktreeRepo, openErr := openRepository(worktreePath)
+			if openErr != nil {
+				return fmt.Errorf("inspect branch in worktree %q: %w", worktreePath, openErr)
+			}
+
+			currentBranch, outErr := currentBranchName(worktreeRepo)
 			if outErr != nil {
 				return fmt.Errorf("inspect branch in worktree %q: %w", worktreePath, outErr)
 			}
 			if strings.TrimSpace(currentBranch) == branchName {
-				if err := gitRun(ctx, e.gitBinary, "-C", worktreePath, "checkout", "--detach"); err != nil {
+				if err := checkoutDetachedHead(worktreeRepo); err != nil {
 					return fmt.Errorf("detach HEAD in worktree %q before branch delete: %w", worktreePath, err)
 				}
 			}
@@ -275,7 +311,15 @@ func (e *GitMergeExecutor) deleteTaskBranch(ctx context.Context, branchName stri
 		}
 	}
 
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "branch", "-d", branchName); err != nil {
+	merged, err := isAncestorBranch(repo, branchName, e.baseBranch)
+	if err != nil {
+		return fmt.Errorf("delete branch %q in %q: %w", branchName, e.repoRoot, err)
+	}
+	if !merged {
+		return fmt.Errorf("delete branch %q in %q: branch is not merged into %q", branchName, e.repoRoot, e.baseBranch)
+	}
+
+	if err := repo.Storer.RemoveReference(branchRef(branchName)); err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return fmt.Errorf("delete branch %q in %q: %w", branchName, e.repoRoot, err)
 	}
 	return nil
@@ -292,44 +336,30 @@ func (e *GitMergeExecutor) deleteTaskWorktree(ctx context.Context, worktreePath 
 		return fmt.Errorf("stat worktree path %q: %w", worktreePath, err)
 	}
 
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "worktree", "remove", "--force", worktreePath); err != nil {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	if err := removeLinkedWorktree(e.repoRoot, worktreePath); err != nil {
 		return fmt.Errorf("delete worktree %q from %q: %w", worktreePath, e.repoRoot, err)
 	}
 	return nil
 }
 
 func (e *GitMergeExecutor) findWorktreePathByBranch(ctx context.Context, branchName string) (string, error) {
-	listing, err := gitOutputAllowMissing(ctx, e.gitBinary, "-C", e.repoRoot, "worktree", "list", "--porcelain")
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+	}
+
+	worktreePath, err := findLinkedWorktreePathByBranch(e.repoRoot, branchName)
 	if err != nil {
 		return "", fmt.Errorf("list worktrees in %q: %w", e.repoRoot, err)
 	}
-	if strings.TrimSpace(listing) == "" {
-		return "", nil
-	}
-
-	const prefix = "refs/heads/"
-	target := prefix + strings.TrimSpace(branchName)
-
-	currentPath := ""
-	for _, line := range strings.Split(listing, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			currentPath = ""
-			continue
-		}
-		if strings.HasPrefix(line, "worktree ") {
-			currentPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-			continue
-		}
-		if strings.HasPrefix(line, "branch ") && currentPath != "" {
-			branchRef := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
-			if branchRef == target {
-				return currentPath, nil
-			}
-		}
-	}
-
-	return "", nil
+	return strings.TrimSpace(worktreePath), nil
 }
 
 func (e *GitMergeExecutor) resolveBranchName(issue linear.Issue) (string, error) {
@@ -369,7 +399,18 @@ func (e *GitMergeExecutor) resolveWorktreePath(ctx context.Context, issue linear
 }
 
 func (e *GitMergeExecutor) branchExists(ctx context.Context, branchName string) (bool, error) {
-	exists, err := gitCheckExitCodeOneMeansFalse(ctx, e.gitBinary, "-C", e.repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+
+	repo, err := openRepository(e.repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("check branch %q in %q: %w", branchName, e.repoRoot, err)
+	}
+
+	exists, err := gitBranchExists(repo, branchName)
 	if err != nil {
 		return false, fmt.Errorf("check branch %q in %q: %w", branchName, e.repoRoot, err)
 	}
@@ -377,7 +418,18 @@ func (e *GitMergeExecutor) branchExists(ctx context.Context, branchName string) 
 }
 
 func (e *GitMergeExecutor) isAncestor(ctx context.Context, ancestor string, descendant string) (bool, error) {
-	ok, err := gitCheckExitCodeOneMeansFalse(ctx, e.gitBinary, "-C", e.repoRoot, "merge-base", "--is-ancestor", ancestor, descendant)
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+
+	repo, err := openRepository(e.repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("check whether %q is ancestor of %q in %q: %w", ancestor, descendant, e.repoRoot, err)
+	}
+
+	ok, err := isAncestorBranch(repo, ancestor, descendant)
 	if err != nil {
 		return false, fmt.Errorf("check whether %q is ancestor of %q in %q: %w", ancestor, descendant, e.repoRoot, err)
 	}

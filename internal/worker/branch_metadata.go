@@ -9,8 +9,7 @@ import (
 )
 
 const (
-	defaultBranchMetadataGitBinary = "git"
-	branchSessionConfigKeySuffix   = "colinSessionId"
+	branchSessionConfigKeySuffix = "colinSessionId"
 )
 
 // BranchMetadataStore persists and reads task metadata scoped to git branches.
@@ -21,25 +20,18 @@ type BranchMetadataStore interface {
 
 // GitBranchMetadataStore stores branch metadata in local git config.
 type GitBranchMetadataStore struct {
-	repoRoot  string
-	gitBinary string
+	repoRoot string
 }
 
 // GitBranchMetadataStoreOptions configures a git-backed BranchMetadataStore.
 type GitBranchMetadataStoreOptions struct {
-	RepoRoot  string
-	GitBinary string
+	RepoRoot string
 }
 
 // NewGitBranchMetadataStore builds a git-backed branch metadata store.
 func NewGitBranchMetadataStore(opts GitBranchMetadataStoreOptions) *GitBranchMetadataStore {
-	gitBinary := strings.TrimSpace(opts.GitBinary)
-	if gitBinary == "" {
-		gitBinary = defaultBranchMetadataGitBinary
-	}
 	return &GitBranchMetadataStore{
-		repoRoot:  filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
-		gitBinary: gitBinary,
+		repoRoot: filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
 	}
 }
 
@@ -56,8 +48,19 @@ func (s *GitBranchMetadataStore) GetBranchSessionID(ctx context.Context, branchN
 		return "", errors.New("repo root is required")
 	}
 
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+	}
+
 	key := branchSessionConfigKey(branchName)
-	value, err := gitOutputAllowMissing(ctx, s.gitBinary, "-C", s.repoRoot, "config", "--local", "--get", key)
+	repo, err := openRepository(s.repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("read git metadata %q for branch %q in %q: %w", key, branchName, s.repoRoot, err)
+	}
+
+	value, err := readBranchConfigOption(repo, branchName, branchSessionConfigKeySuffix)
 	if err != nil {
 		return "", fmt.Errorf("read git metadata %q for branch %q in %q: %w", key, branchName, s.repoRoot, err)
 	}
@@ -81,8 +84,19 @@ func (s *GitBranchMetadataStore) SetBranchSessionID(ctx context.Context, branchN
 		return errors.New("repo root is required")
 	}
 
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
 	key := branchSessionConfigKey(branchName)
-	if err := gitRun(ctx, s.gitBinary, "-C", s.repoRoot, "config", "--local", key, sessionID); err != nil {
+	repo, err := openRepository(s.repoRoot)
+	if err != nil {
+		return fmt.Errorf("write git metadata %q for branch %q in %q: %w", key, branchName, s.repoRoot, err)
+	}
+
+	if err := writeBranchConfigOption(repo, branchName, branchSessionConfigKeySuffix, sessionID); err != nil {
 		return fmt.Errorf("write git metadata %q for branch %q in %q: %w", key, branchName, s.repoRoot, err)
 	}
 	return nil
