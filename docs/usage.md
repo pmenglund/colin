@@ -74,6 +74,7 @@ Most important values:
 - `worker_id`
 - `linear_backend` (`http` or `fake`)
 - `base_branch` (branch used for worktree bootstrap and merge target)
+- `push_after_merge` (when true, push base branch after merge if remote exists)
 - `project_filter` (optional comma-separated project IDs/names)
 - `poll_every`
 - `lease_ttl`

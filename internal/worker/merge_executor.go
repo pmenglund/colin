@@ -20,20 +20,22 @@ const (
 
 // GitMergeExecutorOptions configures a git-backed MergeExecutor.
 type GitMergeExecutorOptions struct {
-	RepoRoot      string
-	BaseBranch    string
-	RemoteName    string
-	GitBinary     string
-	MergePreparer MergePreparer
+	RepoRoot       string
+	BaseBranch     string
+	RemoteName     string
+	GitBinary      string
+	PushBaseBranch *bool
+	MergePreparer  MergePreparer
 }
 
 // GitMergeExecutor executes merge queue steps using git.
 type GitMergeExecutor struct {
-	repoRoot      string
-	baseBranch    string
-	remoteName    string
-	gitBinary     string
-	mergePreparer MergePreparer
+	repoRoot             string
+	baseBranch           string
+	remoteName           string
+	gitBinary            string
+	shouldPushBaseBranch bool
+	mergePreparer        MergePreparer
 }
 
 // NewGitMergeExecutor builds a git-backed merge executor.
@@ -50,13 +52,18 @@ func NewGitMergeExecutor(opts GitMergeExecutorOptions) *GitMergeExecutor {
 	if gitBinary == "" {
 		gitBinary = defaultMergeGitBinary
 	}
+	pushBaseBranch := true
+	if opts.PushBaseBranch != nil {
+		pushBaseBranch = *opts.PushBaseBranch
+	}
 
 	return &GitMergeExecutor{
-		repoRoot:      filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
-		baseBranch:    baseBranch,
-		remoteName:    remoteName,
-		gitBinary:     gitBinary,
-		mergePreparer: opts.MergePreparer,
+		repoRoot:             filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
+		baseBranch:           baseBranch,
+		remoteName:           remoteName,
+		gitBinary:            gitBinary,
+		shouldPushBaseBranch: pushBaseBranch,
+		mergePreparer:        opts.MergePreparer,
 	}
 }
 
@@ -211,13 +218,36 @@ func (e *GitMergeExecutor) mergeTaskBranch(ctx context.Context, branchName strin
 }
 
 func (e *GitMergeExecutor) pushBaseBranch(ctx context.Context) error {
-	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "remote", "get-url", e.remoteName); err != nil {
-		return fmt.Errorf("verify remote %q in %q: %w", e.remoteName, e.repoRoot, err)
+	if !e.shouldPushBaseBranch {
+		return nil
+	}
+
+	exists, err := e.remoteExists(ctx, e.remoteName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
 	}
 	if err := gitRun(ctx, e.gitBinary, "-C", e.repoRoot, "push", e.remoteName, e.baseBranch); err != nil {
 		return fmt.Errorf("push %q to remote %q: %w", e.baseBranch, e.remoteName, err)
 	}
 	return nil
+}
+
+func (e *GitMergeExecutor) remoteExists(ctx context.Context, remoteName string) (bool, error) {
+	remotes, err := gitOutput(ctx, e.gitBinary, "-C", e.repoRoot, "remote")
+	if err != nil {
+		return false, fmt.Errorf("list remotes in %q: %w", e.repoRoot, err)
+	}
+
+	target := strings.TrimSpace(remoteName)
+	for _, line := range strings.Split(remotes, "\n") {
+		if strings.TrimSpace(line) == target {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *GitMergeExecutor) deleteTaskBranch(ctx context.Context, branchName string, worktreePath string) error {

@@ -10,6 +10,8 @@ linear_base_url = "https://api.linear.app/graphql"
 linear_backend = "http"
 # Branch Colin uses for worktree bootstrap and final merge.
 base_branch = "main"
+# When true, push base_branch to remote after merge+cleanup if the configured remote exists.
+push_after_merge = true
 # Optional: comma-separated project IDs/names to limit candidate issues.
 # project_filter = "project-id-1,Project Name"
 project_filter = ""

@@ -15,6 +15,7 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
 	t.Setenv("COLIN_BASE_BRANCH", "")
+	t.Setenv("COLIN_PUSH_AFTER_MERGE", "")
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
@@ -38,6 +39,9 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	}
 	if cfg.BaseBranch != defaultBaseBranch {
 		t.Fatalf("BaseBranch = %q, want %q", cfg.BaseBranch, defaultBaseBranch)
+	}
+	if !cfg.PushAfterMerge {
+		t.Fatal("PushAfterMerge should default to true")
 	}
 	if cfg.ColinHome != defaultColinHome() {
 		t.Fatalf("ColinHome = %q, want %q", cfg.ColinHome, defaultColinHome())
@@ -77,6 +81,7 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("LINEAR_BASE_URL", "https://linear.invalid/graphql")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
 	t.Setenv("COLIN_BASE_BRANCH", "master")
+	t.Setenv("COLIN_PUSH_AFTER_MERGE", "false")
 	t.Setenv("COLIN_PROJECT_FILTER", "proj-a, Project One,proj-a,project one")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/custom-work-prompt.md")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/custom-merge-prompt.md")
@@ -100,6 +105,9 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.BaseBranch != "master" {
 		t.Fatalf("BaseBranch = %q", cfg.BaseBranch)
+	}
+	if cfg.PushAfterMerge {
+		t.Fatal("PushAfterMerge = true, want false")
 	}
 	if cfg.ColinHome != "/tmp/colin-home" {
 		t.Fatalf("ColinHome = %q", cfg.ColinHome)
@@ -194,6 +202,17 @@ func TestLoadFromEnvRejectsInvalidMaxConcurrency(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvRejectsInvalidPushAfterMerge(t *testing.T) {
+	t.Setenv("LINEAR_API_TOKEN", "token")
+	t.Setenv("LINEAR_TEAM_ID", "team")
+	t.Setenv("COLIN_PUSH_AFTER_MERGE", "not-a-bool")
+	t.Setenv("COLIN_PROJECT_FILTER", "")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected error for invalid COLIN_PUSH_AFTER_MERGE")
+	}
+}
+
 func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "colin.toml")
@@ -203,6 +222,7 @@ linear_team_id = "file-team"
 linear_base_url = "https://file.invalid/graphql"
 linear_backend = "http"
 base_branch = "master"
+push_after_merge = false
 project_filter = "PROJ-123, Website Revamp , proj-123"
 work_prompt_path = "/tmp/file-work-prompt.md"
 merge_prompt_path = "/tmp/file-merge-prompt.md"
@@ -223,6 +243,7 @@ poll_every = "15s"
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
 	t.Setenv("COLIN_BASE_BRANCH", "")
+	t.Setenv("COLIN_PUSH_AFTER_MERGE", "")
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
@@ -252,6 +273,9 @@ poll_every = "15s"
 	}
 	if cfg.BaseBranch != "master" {
 		t.Fatalf("BaseBranch = %q", cfg.BaseBranch)
+	}
+	if cfg.PushAfterMerge {
+		t.Fatal("PushAfterMerge = true, want false")
 	}
 	if cfg.ColinHome != "/tmp/file-colin-home" {
 		t.Fatalf("ColinHome = %q", cfg.ColinHome)
@@ -288,7 +312,7 @@ poll_every = "15s"
 func TestLoadEnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "colin.toml")
-	if err := os.WriteFile(configPath, []byte("linear_api_token = \"file-token\"\nlinear_team_id = \"file-team\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte("linear_api_token = \"file-token\"\nlinear_team_id = \"file-team\"\npush_after_merge = false\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -296,6 +320,7 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	t.Setenv("LINEAR_TEAM_ID", "env-team")
 	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
 	t.Setenv("COLIN_BASE_BRANCH", "trunk")
+	t.Setenv("COLIN_PUSH_AFTER_MERGE", "true")
 	t.Setenv("COLIN_PROJECT_FILTER", "env-project,ENV-PROJECT, release train")
 	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/env-work-prompt.md")
 	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/env-merge-prompt.md")
@@ -318,6 +343,9 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	}
 	if cfg.BaseBranch != "trunk" {
 		t.Fatalf("BaseBranch = %q", cfg.BaseBranch)
+	}
+	if !cfg.PushAfterMerge {
+		t.Fatal("PushAfterMerge = false, want true from env override")
 	}
 	if cfg.ColinHome != "/tmp/env-colin-home" {
 		t.Fatalf("ColinHome = %q", cfg.ColinHome)
