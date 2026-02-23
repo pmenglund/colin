@@ -9,11 +9,11 @@ type executionContextInput struct {
 }
 
 type reviewCommentInput struct {
-	ExecutionSummary string
-	ReviewStateName  string
-	PRURL            string
-	TranscriptRef    string
-	ScreenshotRef    string
+	ExecutionSummary  string
+	ReviewStateName   string
+	PRURL             string
+	BeforeEvidenceRef string
+	AfterEvidenceRef  string
 }
 
 func buildExecutionContextComment(input executionContextInput) string {
@@ -47,20 +47,20 @@ func buildReviewComment(input reviewCommentInput) string {
 		b.WriteString(prURL)
 	}
 
-	transcriptRef := strings.TrimSpace(input.TranscriptRef)
-	screenshotRef := strings.TrimSpace(input.ScreenshotRef)
-	if transcriptRef != "" || screenshotRef != "" {
+	beforeEvidenceRef := strings.TrimSpace(input.BeforeEvidenceRef)
+	afterEvidenceRef := strings.TrimSpace(input.AfterEvidenceRef)
+	if beforeEvidenceRef != "" || afterEvidenceRef != "" {
 		b.WriteString("\n\n## Evidence\n")
-		if transcriptRef != "" {
-			b.WriteString("- Terminal transcript: ")
-			b.WriteString(transcriptRef)
-			if screenshotRef != "" {
+		if beforeEvidenceRef != "" {
+			b.WriteString("- Before evidence: ")
+			b.WriteString(beforeEvidenceRef)
+			if afterEvidenceRef != "" {
 				b.WriteString("\n")
 			}
 		}
-		if screenshotRef != "" {
-			b.WriteString("- Screenshot: ")
-			b.WriteString(screenshotRef)
+		if afterEvidenceRef != "" {
+			b.WriteString("- After evidence: ")
+			b.WriteString(afterEvidenceRef)
 		}
 	}
 

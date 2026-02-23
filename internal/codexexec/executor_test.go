@@ -60,7 +60,7 @@ func (f *fakeClient) Close() error {
 func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_1",
-		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":false,"needs_input_summary":"Need acceptance criteria","execution_summary":""}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":false,"needs_input_summary":"Need acceptance criteria","execution_summary":"","before_evidence_ref":"","after_evidence_ref":""}`},
 	}
 	client := &fakeClient{thread: thread}
 
@@ -128,7 +128,7 @@ func TestExecutorEvaluateAndExecuteNotWellSpecified(t *testing.T) {
 func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_2",
-		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented tests","transcript_ref":"terminal://logs/COLIN-1.txt","screenshot_ref":"https://example.invalid/result.png"}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Before: old behavior. After: new behavior. How verified: go test ./...","before_evidence_ref":"terminal://logs/COLIN-1-before.txt","after_evidence_ref":"https://example.invalid/result-after.png"}`},
 	}
 	client := &fakeClient{thread: thread}
 
@@ -147,17 +147,17 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	if !result.IsWellSpecified {
 		t.Fatalf("IsWellSpecified = %t, want true", result.IsWellSpecified)
 	}
-	if result.ExecutionSummary != "Implemented tests" {
+	if result.ExecutionSummary != "Before: old behavior. After: new behavior. How verified: go test ./..." {
 		t.Fatalf("ExecutionSummary = %q", result.ExecutionSummary)
 	}
 	if !strings.Contains(result.ExecutionContext, "Issue identifier: COLIN-1") {
 		t.Fatalf("ExecutionContext missing issue identifier: %q", result.ExecutionContext)
 	}
-	if result.TranscriptRef != "terminal://logs/COLIN-1.txt" {
-		t.Fatalf("TranscriptRef = %q", result.TranscriptRef)
+	if result.BeforeEvidenceRef != "terminal://logs/COLIN-1-before.txt" {
+		t.Fatalf("BeforeEvidenceRef = %q", result.BeforeEvidenceRef)
 	}
-	if result.ScreenshotRef != "https://example.invalid/result.png" {
-		t.Fatalf("ScreenshotRef = %q", result.ScreenshotRef)
+	if result.AfterEvidenceRef != "https://example.invalid/result-after.png" {
+		t.Fatalf("AfterEvidenceRef = %q", result.AfterEvidenceRef)
 	}
 	if thread.lastTurnOpts == nil {
 		t.Fatal("expected turn options to be set")
@@ -176,11 +176,11 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 		t.Fatalf("marshal output schema: %v", err)
 	}
 	outputSchema := string(outputSchemaBytes)
-	if !strings.Contains(outputSchema, "\"transcript_ref\"") {
-		t.Fatalf("output schema missing transcript_ref: %s", outputSchema)
+	if !strings.Contains(outputSchema, "\"before_evidence_ref\"") {
+		t.Fatalf("output schema missing before_evidence_ref: %s", outputSchema)
 	}
-	if !strings.Contains(outputSchema, "\"screenshot_ref\"") {
-		t.Fatalf("output schema missing screenshot_ref: %s", outputSchema)
+	if !strings.Contains(outputSchema, "\"after_evidence_ref\"") {
+		t.Fatalf("output schema missing after_evidence_ref: %s", outputSchema)
 	}
 }
 
@@ -193,7 +193,7 @@ func TestExecutorEvaluateAndExecuteWellSpecifiedCommitsWorktreeChanges(t *testin
 
 	thread := &fakeThread{
 		id:         "thr_commit_1",
-		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented update","transcript_ref":"","screenshot_ref":""}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented update","before_evidence_ref":"","after_evidence_ref":""}`},
 	}
 	client := &fakeClient{thread: thread}
 	executor := &Executor{
@@ -230,7 +230,7 @@ func TestExecutorEvaluateAndExecuteWellSpecifiedSkipsCommitWhenNoChanges(t *test
 
 	thread := &fakeThread{
 		id:         "thr_commit_2",
-		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"No-op turn","transcript_ref":"","screenshot_ref":""}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"No-op turn","before_evidence_ref":"","after_evidence_ref":""}`},
 	}
 	client := &fakeClient{thread: thread}
 	executor := &Executor{
@@ -273,7 +273,7 @@ func TestExecutorEvaluateAndExecuteStartThreadError(t *testing.T) {
 func TestExecutorEvaluateAndExecuteUsesPromptTemplateFromMarkdown(t *testing.T) {
 	thread := &fakeThread{
 		id:         "thr_3",
-		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented"}`},
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented","before_evidence_ref":"","after_evidence_ref":""}`},
 	}
 
 	executor := &Executor{
@@ -315,6 +315,29 @@ func TestExecutorEvaluateAndExecuteUsesPromptTemplateFromMarkdown(t *testing.T) 
 	}
 	if strings.Contains(prompt, "colin:metadata") {
 		t.Fatalf("prompt should strip metadata block, got %q", prompt)
+	}
+}
+
+func TestExecutorEvaluateAndExecuteRejectsLegacyEvidenceFields(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_legacy",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented tests","transcript_ref":"terminal://logs/COLIN-1.txt","screenshot_ref":"https://example.invalid/result.png"}`},
+	}
+	client := &fakeClient{thread: thread}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{Identifier: "COLIN-1", Title: "Title", Description: "Spec"})
+	if err == nil {
+		t.Fatal("EvaluateAndExecute() error = nil, want strict schema failure")
+	}
+	if !strings.Contains(err.Error(), "response is missing required field \"before_evidence_ref\"") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

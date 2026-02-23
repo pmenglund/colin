@@ -24,10 +24,16 @@ The worker posts two deterministic markdown comments:
    - Optional `## Pull Request` (only when `colin.pr_url` metadata is present)
    - Optional `## Evidence` (only when evidence pointers are present)
 
+`Execution Summary` for successful execution should describe:
+
+- `Before` (what state/behavior existed before changes)
+- `After` (what changed)
+- `How verified` (how the change was validated)
+
 `Evidence` may include:
 
-- `Terminal transcript` (for example a transcript path or URL)
-- `Screenshot` (for example a screenshot path or URL)
+- `Before evidence` (for example a screenshot/recording/path/URL)
+- `After evidence` (for example a screenshot/recording/path/URL)
 
 If no evidence pointers are provided, the `## Evidence` section is omitted from the review comment.
 
@@ -39,8 +45,11 @@ If no evidence pointers are provided, the `## Evidence` section is omitted from 
    - `Execution Summary`
    - optional `Pull Request`
    - optional `Evidence`
-4. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
-5. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
+4. Verify `Execution Summary` includes clear `Before`, `After`, and `How verified` descriptions.
+5. If an `Evidence` section is present, open each pointer and confirm:
+   - `Before evidence` reflects the pre-change behavior/state.
+   - `After evidence` reflects the post-change behavior/state.
+6. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
 
 ## Troubleshooting
 

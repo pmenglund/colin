@@ -951,12 +951,12 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	client := newFakeLinearClient(state)
 	executor := &fakeInProgressExecutor{
 		result: InProgressExecutionResult{
-			IsWellSpecified:  true,
-			ExecutionSummary: "implemented the requested change",
-			ExecutionContext: "Issue identifier: COL-1",
-			ThreadID:         "thr_2",
-			TranscriptRef:    "terminal://logs/COL-1.txt",
-			ScreenshotRef:    "https://example.invalid/screenshot.png",
+			IsWellSpecified:   true,
+			ExecutionSummary:  "implemented the requested change",
+			ExecutionContext:  "Issue identifier: COL-1",
+			ThreadID:          "thr_2",
+			BeforeEvidenceRef: "terminal://logs/COL-1-before.txt",
+			AfterEvidenceRef:  "https://example.invalid/screenshot-after.png",
 		},
 	}
 
@@ -982,7 +982,7 @@ func TestRunnerInProgressWellSpecifiedReviewCommentIncludesEvidence(t *testing.T
 	if comments[0] != wantContextComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantContextComment)
 	}
-	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Evidence\n- Terminal transcript: terminal://logs/COL-1.txt\n- Screenshot: https://example.invalid/screenshot.png"
+	wantComment := "Moved to **Review** after Codex execution.\n\n## Execution Summary\nimplemented the requested change\n\n## Evidence\n- Before evidence: terminal://logs/COL-1-before.txt\n- After evidence: https://example.invalid/screenshot-after.png"
 	if comments[1] != wantComment {
 		t.Fatalf("comment body = %q, want %q", comments[1], wantComment)
 	}
@@ -1557,9 +1557,9 @@ func TestRunnerRunOnceDoneIssueWithMergeRecoveryReopensToMergeAndComments(t *tes
 	}
 	client := newFakeLinearClient(state)
 	mergeExecutor := &fakeMergeExecutor{
-		recoveryNeeds:   true,
-		recoveryTarget:  MergeRecoveryTargetMerge,
-		recoveryReason:  `branch "colin/COL-71" is not merged into "main"`,
+		recoveryNeeds:  true,
+		recoveryTarget: MergeRecoveryTargetMerge,
+		recoveryReason: `branch "colin/COL-71" is not merged into "main"`,
 	}
 
 	r := Runner{
@@ -1621,9 +1621,9 @@ func TestRunnerRunOnceDoneIssueWithCleanupRecoveryReopensToMergedAndComments(t *
 	}
 	client := newFakeLinearClient(state)
 	mergeExecutor := &fakeMergeExecutor{
-		recoveryNeeds:   true,
-		recoveryTarget:  MergeRecoveryTargetMerged,
-		recoveryReason:  `branch "colin/COL-72" is already merged into "main" but still exists; cleanup is incomplete`,
+		recoveryNeeds:  true,
+		recoveryTarget: MergeRecoveryTargetMerged,
+		recoveryReason: `branch "colin/COL-72" is already merged into "main" but still exists; cleanup is incomplete`,
 	}
 
 	r := Runner{
@@ -1671,9 +1671,9 @@ func TestRunnerRunOnceDoneRecoveryRetryAfterConflictDoesNotDuplicateComment(t *t
 	}
 	client := newFakeLinearClient(state)
 	mergeExecutor := &fakeMergeExecutor{
-		recoveryNeeds:   true,
-		recoveryTarget:  MergeRecoveryTargetMerge,
-		recoveryReason:  `branch "colin/COL-71" is not merged into "main"`,
+		recoveryNeeds:  true,
+		recoveryTarget: MergeRecoveryTargetMerge,
+		recoveryReason: `branch "colin/COL-71" is not merged into "main"`,
 	}
 
 	r := Runner{

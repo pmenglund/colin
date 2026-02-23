@@ -7,6 +7,6 @@ type InProgressExecutionResult struct {
 	ExecutionSummary  string
 	ExecutionContext  string
 	ThreadID          string
-	TranscriptRef     string
-	ScreenshotRef     string
+	BeforeEvidenceRef string
+	AfterEvidenceRef  string
 }

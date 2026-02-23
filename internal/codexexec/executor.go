@@ -91,10 +91,10 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 			"is_well_specified":   map[string]any{"type": "boolean"},
 			"needs_input_summary": map[string]any{"type": "string"},
 			"execution_summary":   map[string]any{"type": "string"},
-			"transcript_ref":      map[string]any{"type": "string"},
-			"screenshot_ref":      map[string]any{"type": "string"},
+			"before_evidence_ref": map[string]any{"type": "string"},
+			"after_evidence_ref":  map[string]any{"type": "string"},
 		},
-		"required":             []string{"is_well_specified", "needs_input_summary", "execution_summary", "transcript_ref", "screenshot_ref"},
+		"required":             []string{"is_well_specified", "needs_input_summary", "execution_summary", "before_evidence_ref", "after_evidence_ref"},
 		"additionalProperties": false,
 	})
 
@@ -134,8 +134,8 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
 		ExecutionContext:  strings.TrimSpace(prompt),
 		ThreadID:          strings.TrimSpace(thread.ID()),
-		TranscriptRef:     strings.TrimSpace(payload.TranscriptRef),
-		ScreenshotRef:     strings.TrimSpace(payload.ScreenshotRef),
+		BeforeEvidenceRef: strings.TrimSpace(payload.BeforeEvidenceRef),
+		AfterEvidenceRef:  strings.TrimSpace(payload.AfterEvidenceRef),
 	}, nil
 }
 
@@ -193,8 +193,8 @@ type codexResponse struct {
 	IsWellSpecified   bool   `json:"is_well_specified"`
 	NeedsInputSummary string `json:"needs_input_summary"`
 	ExecutionSummary  string `json:"execution_summary"`
-	TranscriptRef     string `json:"transcript_ref"`
-	ScreenshotRef     string `json:"screenshot_ref"`
+	BeforeEvidenceRef string `json:"before_evidence_ref"`
+	AfterEvidenceRef  string `json:"after_evidence_ref"`
 }
 
 func parseResponse(raw string) (codexResponse, error) {
@@ -204,7 +204,7 @@ func parseResponse(raw string) (codexResponse, error) {
 	}
 
 	var out codexResponse
-	if err := json.Unmarshal([]byte(text), &out); err == nil {
+	if err := decodeResponse([]byte(text), &out); err == nil {
 		return out, nil
 	}
 
@@ -213,10 +213,49 @@ func parseResponse(raw string) (codexResponse, error) {
 	if start == -1 || end == -1 || end < start {
 		return codexResponse{}, fmt.Errorf("response is not JSON: %q", text)
 	}
-	if err := json.Unmarshal([]byte(text[start:end+1]), &out); err != nil {
+	if err := decodeResponse([]byte(text[start:end+1]), &out); err != nil {
 		return codexResponse{}, err
 	}
 	return out, nil
+}
+
+func decodeResponse(raw []byte, out *codexResponse) error {
+	required := []string{
+		"is_well_specified",
+		"needs_input_summary",
+		"execution_summary",
+		"before_evidence_ref",
+		"after_evidence_ref",
+	}
+	allowed := map[string]struct{}{
+		"is_well_specified":   {},
+		"needs_input_summary": {},
+		"execution_summary":   {},
+		"before_evidence_ref": {},
+		"after_evidence_ref":  {},
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return err
+	}
+
+	for _, key := range required {
+		if _, ok := payload[key]; !ok {
+			return fmt.Errorf("response is missing required field %q", key)
+		}
+	}
+
+	for key := range payload {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("response contains unsupported field %q", key)
+		}
+	}
+
+	if err := json.Unmarshal(raw, out); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (e *Executor) buildPrompt(issue linear.Issue) (string, error) {

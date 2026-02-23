@@ -544,11 +544,11 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	}
 
 	comment := buildReviewComment(reviewCommentInput{
-		ExecutionSummary: result.ExecutionSummary,
-		ReviewStateName:  states.Review,
-		PRURL:            issue.Metadata[workflow.MetaPRURL],
-		TranscriptRef:    result.TranscriptRef,
-		ScreenshotRef:    result.ScreenshotRef,
+		ExecutionSummary:  result.ExecutionSummary,
+		ReviewStateName:   states.Review,
+		PRURL:             issue.Metadata[workflow.MetaPRURL],
+		BeforeEvidenceRef: result.BeforeEvidenceRef,
+		AfterEvidenceRef:  result.AfterEvidenceRef,
 	})
 	if err := r.applyInProgressOutcome(ctx, issue, states.Review, comment, now, map[string]string{
 		workflow.MetaNeedsRefine:         "false",
