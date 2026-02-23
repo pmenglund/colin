@@ -19,6 +19,7 @@ const (
 	defaultLinearBaseURL  = "https://api.linear.app/graphql"
 	defaultLinearBackend  = LinearBackendHTTP
 	defaultBaseBranch     = "main"
+	defaultPushAfterMerge = true
 	defaultPollEvery      = 30 * time.Second
 	defaultLeaseTTL       = 5 * time.Minute
 	defaultMaxConcurrency = 8
@@ -40,6 +41,7 @@ type Config struct {
 	LinearBaseURL   string
 	LinearBackend   string
 	BaseBranch      string
+	PushAfterMerge  bool
 	ProjectFilter   []string
 	WorkPromptPath  string
 	MergePromptPath string
@@ -58,6 +60,7 @@ type fileConfig struct {
 	LinearBaseURL   string         `toml:"linear_base_url"`
 	LinearBackend   string         `toml:"linear_backend"`
 	BaseBranch      string         `toml:"base_branch"`
+	PushAfterMerge  *bool          `toml:"push_after_merge"`
 	ProjectFilter   string         `toml:"project_filter"`
 	WorkPromptPath  string         `toml:"work_prompt_path"`
 	MergePromptPath string         `toml:"merge_prompt_path"`
@@ -148,6 +151,7 @@ func LoadFromPath(configPath string) (Config, error) {
 		LinearBaseURL:  defaultLinearBaseURL,
 		LinearBackend:  defaultLinearBackend,
 		BaseBranch:     defaultBaseBranch,
+		PushAfterMerge: defaultPushAfterMerge,
 		ColinHome:      defaultColinHome(),
 		WorkerID:       defaultWorkerID(),
 		PollEvery:      defaultPollEvery,
@@ -182,6 +186,7 @@ func LoadFromEnv() (Config, error) {
 		LinearBaseURL:  defaultLinearBaseURL,
 		LinearBackend:  defaultLinearBackend,
 		BaseBranch:     defaultBaseBranch,
+		PushAfterMerge: defaultPushAfterMerge,
 		ColinHome:      defaultColinHome(),
 		WorkerID:       defaultWorkerID(),
 		PollEvery:      defaultPollEvery,
@@ -230,6 +235,9 @@ func applyFileConfig(cfg *Config, path string) error {
 	}
 	if strings.TrimSpace(parsed.BaseBranch) != "" {
 		cfg.BaseBranch = strings.TrimSpace(parsed.BaseBranch)
+	}
+	if parsed.PushAfterMerge != nil {
+		cfg.PushAfterMerge = *parsed.PushAfterMerge
 	}
 	if strings.TrimSpace(parsed.ProjectFilter) != "" {
 		cfg.ProjectFilter = parseCSVList(parsed.ProjectFilter)
@@ -309,6 +317,13 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v, ok := readString("COLIN_BASE_BRANCH"); ok {
 		cfg.BaseBranch = v
+	}
+	if raw, ok := readString("COLIN_PUSH_AFTER_MERGE"); ok {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("parse COLIN_PUSH_AFTER_MERGE: %w", err)
+		}
+		cfg.PushAfterMerge = parsed
 	}
 	if raw, ok := readString("COLIN_PROJECT_FILTER"); ok {
 		cfg.ProjectFilter = parseCSVList(raw)

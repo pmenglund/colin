@@ -43,7 +43,7 @@ If the task is done, a human moves the task to `Merge` so it can be merged into 
 
 This state is used as a merge queue. Colin automatically attempts merge execution for issues in `Merge` and transitions `Merge -> Done` when merge execution succeeds.
 
-Transition to `Done` happens only after merge execution succeeds end-to-end (merge branch, push main, delete branch, delete worktree).
+Transition to `Done` happens only after merge execution succeeds end-to-end (merge branch, optional base-branch push when enabled and remote exists, delete branch, delete worktree).
 Merge execution is strict fail-fast: if source branch or worktree path is missing/stale, merge fails and the issue stays in `Merge`.
 
 ### Done
@@ -77,7 +77,7 @@ Steps to merge a task
 
 1. ensure the change has passed human review and is ready to merge
 2. move the issue to `Merge`
-3. Colin merges the git branch into the base branch, pushes upstream, and cleans up branch/worktree
+3. Colin merges the git branch into the base branch, optionally pushes upstream when configured and available, and cleans up branch/worktree
 4. verify the issue transitioned to `Done`
 
 Merge coordinates are read from issue metadata keys `colin.branch_name` and `colin.worktree_path` when available. If branch metadata is missing, Colin falls back to `colin/<issue-identifier>`.

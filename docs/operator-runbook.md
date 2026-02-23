@@ -24,6 +24,7 @@ Common runtime controls:
 
 - `COLIN_HOME` / `colin_home`: root for worker artifacts and worktrees (default `~/.colin`)
 - `COLIN_BASE_BRANCH` / `base_branch`: branch used for task worktree bootstrap and merge target (default `main`)
+- `COLIN_PUSH_AFTER_MERGE` / `push_after_merge`: push base branch after merge when configured remote exists (default `true`)
 - `CODEX_HOME`: must be writable by Codex runtime (default `~/.codex`)
 - `COLIN_LINEAR_BACKEND` / `linear_backend`: `http` or `fake`
 - `COLIN_MAX_CONCURRENCY` / `max_concurrency`: number of concurrent issue workers

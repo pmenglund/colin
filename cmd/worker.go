@@ -134,11 +134,13 @@ func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.Me
 		Logger:          codexLogger,
 		MergePromptPath: cfg.MergePromptPath,
 	})
+	pushBaseBranch := cfg.PushAfterMerge
 
 	return worker.NewGitMergeExecutor(worker.GitMergeExecutorOptions{
-		RepoRoot:      cwd,
-		BaseBranch:    cfg.BaseBranch,
-		MergePreparer: mergePreparer,
+		RepoRoot:       cwd,
+		BaseBranch:     cfg.BaseBranch,
+		PushBaseBranch: &pushBaseBranch,
+		MergePreparer:  mergePreparer,
 	})
 }
 

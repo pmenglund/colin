@@ -34,6 +34,7 @@ Optional but common:
 
 - `colin_home` (defaults to `~/.colin`)
 - `base_branch` (defaults to `main`)
+- `push_after_merge` (defaults to `true`; pushes base branch only when remote exists)
 - `project_filter` (optional comma-separated project IDs/names)
 - `poll_every`
 - `lease_ttl`
