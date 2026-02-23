@@ -21,7 +21,6 @@ The worker posts two deterministic markdown comments:
 
    Section order is:
    - `## Execution Summary`
-   - `## Execution Context`
    - Optional `## Evidence` (only when evidence pointers are present)
 
 `Evidence` may include:
@@ -37,11 +36,9 @@ If no evidence pointers are provided, the `## Evidence` section is omitted from 
 2. Verify the earlier comment starts with `Starting Codex turn with current execution context.` and includes `## Execution Context`.
 3. Verify the review-transition comment starts with `Moved to **Review** after Codex execution.` and uses deterministic section order:
    - `Execution Summary`
-   - `Execution Context`
    - optional `Evidence`
-4. Verify `Execution Context` includes the expected branch/worktree metadata and an appropriate thread value.
-5. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
-6. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
+4. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
+5. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
 
 ## Troubleshooting
 

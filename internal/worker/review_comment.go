@@ -11,9 +11,6 @@ type executionContextInput struct {
 type reviewCommentInput struct {
 	ExecutionSummary string
 	ReviewStateName  string
-	ThreadID         string
-	BranchName       string
-	WorktreePath     string
 	TranscriptRef    string
 	ScreenshotRef    string
 }
@@ -41,12 +38,6 @@ func buildReviewComment(input reviewCommentInput) string {
 	b.WriteString("** after Codex execution.\n\n")
 	b.WriteString("## Execution Summary\n")
 	b.WriteString(summary)
-	b.WriteString("\n\n")
-	writeExecutionContextSection(&b, executionContextInput{
-		ThreadID:     input.ThreadID,
-		BranchName:   input.BranchName,
-		WorktreePath: input.WorktreePath,
-	})
 
 	transcriptRef := strings.TrimSpace(input.TranscriptRef)
 	screenshotRef := strings.TrimSpace(input.ScreenshotRef)
