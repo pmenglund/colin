@@ -134,7 +134,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 	mergeIssueToProcess := ""
 	for _, issue := range issues {
-		if issue.StateName == states.Merge {
+		if issue.StateName == states.Merge || issue.StateName == states.Merged {
 			mergeIssueToProcess = issue.ID
 			break
 		}
@@ -155,7 +155,9 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	for _, issue := range issues {
-		if issue.StateName == states.Merge && mergeIssueToProcess != "" && issue.ID != mergeIssueToProcess {
+		if (issue.StateName == states.Merge || issue.StateName == states.Merged) &&
+			mergeIssueToProcess != "" &&
+			issue.ID != mergeIssueToProcess {
 			r.Logger.Info("worker decision",
 				"execution_id", executionID,
 				"issue", issue.Identifier,
@@ -340,6 +342,16 @@ func (r *Runner) processIssue(ctx context.Context, issueID string, executionID s
 			return errors.New("runner merge executor is required for merge transitions")
 		}
 		if err := r.MergeExecutor.ExecuteMerge(ctx, issue); err != nil {
+			if errors.Is(err, ErrMergePending) {
+				r.Logger.Info("worker decision",
+					"execution_id", executionID,
+					"issue", issue.Identifier,
+					"state", issue.StateName,
+					"action", "noop",
+					"reason", "merge pending",
+				)
+				return nil
+			}
 			return fmt.Errorf("execute merge for issue %s: %w", issue.Identifier, err)
 		}
 	}
@@ -395,12 +407,19 @@ func (r *Runner) processDoneIssue(
 		return nil
 	}
 
-	needsRecovery, reason, err := probe.NeedsMergeRecovery(ctx, issue)
+	needsRecovery, target, reason, err := probe.NeedsMergeRecovery(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("inspect merge recovery for issue %s: %w", issue.Identifier, err)
 	}
 	if !needsRecovery {
 		return nil
+	}
+	targetState := states.Merge
+	switch target {
+	case MergeRecoveryTargetMerged:
+		targetState = states.Merged
+	case MergeRecoveryTargetMerge, "":
+		targetState = states.Merge
 	}
 
 	reason = strings.TrimSpace(reason)
@@ -412,14 +431,14 @@ func (r *Runner) processDoneIssue(
 		"issue", issue.Identifier,
 		"state", issue.StateName,
 		"action", "transition",
-		"to", states.Merge,
+		"to", targetState,
 		"reason", reason,
 	)
 	if r.DryRun {
 		return nil
 	}
 
-	comment := buildDoneRecoveryComment(states.Merge, reason)
+	comment := buildDoneRecoveryComment(targetState, reason)
 	commentID := commentFingerprint(comment)
 	if issue.Metadata[workflow.MetaDoneRecoveryCommentID] != commentID {
 		if err := r.Linear.CreateIssueComment(ctx, issue.ID, comment); err != nil {
@@ -438,13 +457,13 @@ func (r *Runner) processDoneIssue(
 		return err
 	}
 
-	if !states.CanTransition(issue.StateName, states.Merge) {
-		return fmt.Errorf("invalid transition %q -> %q", issue.StateName, states.Merge)
+	if !states.CanTransition(issue.StateName, targetState) {
+		return fmt.Errorf("invalid transition %q -> %q", issue.StateName, targetState)
 	}
-	if issue.StateName == states.Merge {
+	if issue.StateName == targetState {
 		return nil
 	}
-	return r.Linear.UpdateIssueState(ctx, issue.ID, states.Merge)
+	return r.Linear.UpdateIssueState(ctx, issue.ID, targetState)
 }
 
 func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue, executionID string, now time.Time) error {
@@ -527,6 +546,7 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	comment := buildReviewComment(reviewCommentInput{
 		ExecutionSummary: result.ExecutionSummary,
 		ReviewStateName:  states.Review,
+		PRURL:            issue.Metadata[workflow.MetaPRURL],
 		TranscriptRef:    result.TranscriptRef,
 		ScreenshotRef:    result.ScreenshotRef,
 	})
@@ -642,10 +662,10 @@ func commentFingerprint(comment string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-func buildDoneRecoveryComment(mergeStateName string, reason string) string {
+func buildDoneRecoveryComment(targetStateName string, reason string) string {
 	return fmt.Sprintf(
 		"Reopened to **%s** from **Done** because merge recovery is required.\n\n## Recovery Reason\n%s",
-		strings.TrimSpace(mergeStateName),
+		strings.TrimSpace(targetStateName),
 		strings.TrimSpace(reason),
 	)
 }
@@ -699,9 +719,16 @@ func shouldBootstrapWorkspace(fromState string, decision workflow.Decision, stat
 }
 
 func shouldExecuteMerge(fromState string, decision workflow.Decision, states workflow.States) bool {
-	return fromState == states.Merge &&
-		decision.Action != workflow.ActionNoop &&
-		decision.ToState == states.Done
+	if decision.Action == workflow.ActionNoop {
+		return false
+	}
+	if fromState == states.Merge && decision.ToState == states.Merged {
+		return true
+	}
+	if fromState == states.Merged && decision.ToState == states.Done {
+		return true
+	}
+	return false
 }
 
 func (r *Runner) recordBranchSessionMetadata(ctx context.Context, issue linear.Issue, sessionID string) error {

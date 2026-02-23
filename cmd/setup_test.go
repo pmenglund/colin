@@ -63,6 +63,7 @@ func TestRunSetupCreatesMissingStatesAndPrintsSummary(t *testing.T) {
 					{"id": "s-2", "name": "In Progress", "type": "started"},
 					{"id": "s-3", "name": "Refine", "type": "started"},
 					{"id": "s-4", "name": "Review", "type": "started"},
+					{"id": "s-5", "name": "Merge", "type": "started"},
 					{"id": "s-6", "name": "Done", "type": "completed"},
 				}}},
 			})
@@ -71,7 +72,7 @@ func TestRunSetupCreatesMissingStatesAndPrintsSummary(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{"workflowStateCreate": map[string]any{
 					"success":       true,
-					"workflowState": map[string]any{"id": "s-5", "name": "Merge", "type": "started"},
+					"workflowState": map[string]any{"id": "s-7", "name": "Merged", "type": "started"},
 				}},
 			})
 		default:
@@ -99,8 +100,8 @@ func TestRunSetupCreatesMissingStatesAndPrintsSummary(t *testing.T) {
 	if !strings.Contains(result, "Linear team: COLIN (team-123)") {
 		t.Fatalf("output missing team summary: %q", result)
 	}
-	if !strings.Contains(result, `- merge: "Merge" -> "Merge" [created, type=started]`) {
-		t.Fatalf("output missing merge created line: %q", result)
+	if !strings.Contains(result, `- merged: "Merged" -> "Merged" [created, type=started]`) {
+		t.Fatalf("output missing merged created line: %q", result)
 	}
 	if !strings.Contains(result, `- review => "Review"`) {
 		t.Fatalf("output missing resolved review mapping: %q", result)

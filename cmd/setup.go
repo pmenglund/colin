@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var setupCanonicalOrder = []string{"todo", "in_progress", "refine", "review", "merge", "done"}
+var setupCanonicalOrder = []string{"todo", "in_progress", "refine", "review", "merge", "merged", "done"}
 
 func newSetupCommand(rootOpts *RootOptions) *cobra.Command {
 	return &cobra.Command{
@@ -72,6 +72,7 @@ func runSetup(ctx context.Context, w io.Writer, cfg config.Config) error {
 		"refine":      runtimeStates.Refine,
 		"review":      runtimeStates.Review,
 		"merge":       runtimeStates.Merge,
+		"merged":      runtimeStates.Merged,
 		"done":        runtimeStates.Done,
 	}
 	for _, canonical := range setupCanonicalOrder {

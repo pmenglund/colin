@@ -27,6 +27,7 @@ type GitMergeExecutorOptions struct {
 	GitBinary      string
 	PushBaseBranch *bool
 	MergePreparer  MergePreparer
+	States         workflow.States
 }
 
 // GitMergeExecutor executes merge queue steps using git.
@@ -36,6 +37,7 @@ type GitMergeExecutor struct {
 	remoteName           string
 	shouldPushBaseBranch bool
 	mergePreparer        MergePreparer
+	states               workflow.States
 }
 
 // NewGitMergeExecutor builds a git-backed merge executor.
@@ -59,10 +61,11 @@ func NewGitMergeExecutor(opts GitMergeExecutorOptions) *GitMergeExecutor {
 		remoteName:           remoteName,
 		shouldPushBaseBranch: pushBaseBranch,
 		mergePreparer:        opts.MergePreparer,
+		states:               opts.States.WithDefaults(),
 	}
 }
 
-// ExecuteMerge runs merge, push, branch delete, and worktree delete in order.
+// ExecuteMerge performs merge-phase side effects based on issue state.
 func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue) error {
 	if e == nil {
 		return errors.New("git merge executor is nil")
@@ -71,6 +74,21 @@ func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue)
 		return errors.New("repo root is required")
 	}
 
+	states := e.states.WithDefaults()
+	switch strings.TrimSpace(issue.StateName) {
+	case "":
+		// Legacy compatibility for direct callers/tests that do not set state.
+		return e.executeLegacyMergeAndCleanup(ctx, issue)
+	case states.Merge:
+		return e.executeMergePhase(ctx, issue)
+	case states.Merged:
+		return e.executeCleanupPhase(ctx, issue)
+	default:
+		return fmt.Errorf("unsupported merge execution state %q", issue.StateName)
+	}
+}
+
+func (e *GitMergeExecutor) executeLegacyMergeAndCleanup(ctx context.Context, issue linear.Issue) error {
 	branchName, err := e.resolveBranchName(issue)
 	if err != nil {
 		return err
@@ -107,46 +125,103 @@ func (e *GitMergeExecutor) ExecuteMerge(ctx context.Context, issue linear.Issue)
 	if err := e.deleteTaskWorktree(ctx, worktreePath); err != nil {
 		return err
 	}
+	return nil
+}
 
+func (e *GitMergeExecutor) executeMergePhase(ctx context.Context, issue linear.Issue) error {
+	branchName, err := e.resolveBranchName(issue)
+	if err != nil {
+		return err
+	}
+	exists, err := e.branchExists(ctx, branchName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("source branch %q does not exist in %q", branchName, e.repoRoot)
+	}
+	worktreePath, err := e.resolveWorktreePath(ctx, issue, branchName)
+	if err != nil {
+		return err
+	}
+	if err := e.ensureBaseBranchExists(ctx); err != nil {
+		return err
+	}
+	if err := e.prepareMerge(ctx, issue, branchName, worktreePath); err != nil {
+		return err
+	}
+	if err := e.checkoutBaseBranch(ctx); err != nil {
+		return err
+	}
+	if err := e.mergeTaskBranch(ctx, branchName); err != nil {
+		return err
+	}
+	if err := e.pushBaseBranch(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *GitMergeExecutor) executeCleanupPhase(ctx context.Context, issue linear.Issue) error {
+	branchName, err := e.resolveBranchName(issue)
+	if err != nil {
+		return err
+	}
+	if err := e.ensureBaseBranchExists(ctx); err != nil {
+		return err
+	}
+	worktreePath, err := e.resolveCleanupWorktreePath(ctx, issue, branchName)
+	if err != nil {
+		return err
+	}
+	if err := e.deleteTaskBranch(ctx, branchName, worktreePath); err != nil {
+		return err
+	}
+	if err := e.deleteTaskWorktree(ctx, worktreePath); err != nil {
+		return err
+	}
 	return nil
 }
 
 // NeedsMergeRecovery reports whether a done issue should be moved back to merge.
-func (e *GitMergeExecutor) NeedsMergeRecovery(ctx context.Context, issue linear.Issue) (bool, string, error) {
+func (e *GitMergeExecutor) NeedsMergeRecovery(
+	ctx context.Context,
+	issue linear.Issue,
+) (bool, MergeRecoveryTarget, string, error) {
 	if e == nil {
-		return false, "", errors.New("git merge executor is nil")
+		return false, "", "", errors.New("git merge executor is nil")
 	}
 	if e.repoRoot == "." || e.repoRoot == "" {
-		return false, "", errors.New("repo root is required")
+		return false, "", "", errors.New("repo root is required")
 	}
 
 	branchName, err := e.resolveBranchName(issue)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 	exists, err := e.branchExists(ctx, branchName)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 	if !exists {
-		return false, "", nil
+		return false, "", "", nil
 	}
 	if err := e.ensureBaseBranchExists(ctx); err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 
 	merged, err := e.isAncestor(ctx, branchName, e.baseBranch)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 	if merged {
-		return true, fmt.Sprintf(
+		return true, MergeRecoveryTargetMerged, fmt.Sprintf(
 			"branch %q is already merged into %q but still exists; cleanup is incomplete",
 			branchName,
 			e.baseBranch,
 		), nil
 	}
-	return true, fmt.Sprintf(
+	return true, MergeRecoveryTargetMerge, fmt.Sprintf(
 		"branch %q is not merged into %q",
 		branchName,
 		e.baseBranch,
@@ -396,6 +471,19 @@ func (e *GitMergeExecutor) resolveWorktreePath(ctx context.Context, issue linear
 		return "", fmt.Errorf("stat worktree path %q: %w", worktreePath, err)
 	}
 	return worktreePath, nil
+}
+
+func (e *GitMergeExecutor) resolveCleanupWorktreePath(ctx context.Context, issue linear.Issue, branchName string) (string, error) {
+	worktreePath := strings.TrimSpace(issue.Metadata[workflow.MetaWorktreePath])
+	if worktreePath != "" {
+		return worktreePath, nil
+	}
+
+	discovered, err := e.findWorktreePathByBranch(ctx, branchName)
+	if err != nil {
+		return "", fmt.Errorf("resolve cleanup worktree path for branch %q: %w", branchName, err)
+	}
+	return strings.TrimSpace(discovered), nil
 }
 
 func (e *GitMergeExecutor) branchExists(ctx context.Context, branchName string) (bool, error) {

@@ -11,6 +11,7 @@ type executionContextInput struct {
 type reviewCommentInput struct {
 	ExecutionSummary string
 	ReviewStateName  string
+	PRURL            string
 	TranscriptRef    string
 	ScreenshotRef    string
 }
@@ -38,6 +39,13 @@ func buildReviewComment(input reviewCommentInput) string {
 	b.WriteString("** after Codex execution.\n\n")
 	b.WriteString("## Execution Summary\n")
 	b.WriteString(summary)
+
+	prURL := strings.TrimSpace(input.PRURL)
+	if prURL != "" {
+		b.WriteString("\n\n## Pull Request\n")
+		b.WriteString("- URL: ")
+		b.WriteString(prURL)
+	}
 
 	transcriptRef := strings.TrimSpace(input.TranscriptRef)
 	screenshotRef := strings.TrimSpace(input.ScreenshotRef)

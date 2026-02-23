@@ -60,6 +60,7 @@ Expected behavior:
 
 - Colin prints your Linear team details.
 - Required workflow states are validated or created.
+- Required states include `todo`, `in_progress`, `refine`, `review`, `merge`, `merged`, and `done`.
 - Resolved runtime mapping is displayed.
 
 ## 5. Run a safe one-shot validation

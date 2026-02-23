@@ -8,7 +8,7 @@ vars: {
 
 direction: down
 
-backlog:{
+backlog: {
   label: Backlog
   shape: hexagon
   style: {
@@ -16,7 +16,7 @@ backlog:{
     stroke: "#2B6CB0"
   }
 }
-todo:{
+todo: {
   label: Todo
   style: {
     stroke: "#2F855A"
@@ -30,7 +30,7 @@ review: {
     stroke: "#2B6CB0"
   }
 }
-in_progress:{
+in_progress: {
   label: In Progress
   style: {
     fill: "#D9F2E3"
@@ -45,31 +45,79 @@ refine: {
     stroke: "#2B6CB0"
   }
 }
-merge:{
+merge: {
   label: Merge
   style: {
     fill: "#D9F2E3"
     stroke: "#2F855A"
   }
 }
-done:{
+merged: {
+  label: Merged
+  style: {
+    fill: "#D9F2E3"
+    stroke: "#2F855A"
+  }
+}
+done: {
   label: Done
   style: {
     stroke: "#2F855A"
   }
 }
 
-backlog -> todo: "Ready for work"
+backlog -> todo: "Ready for work" {
+  style: {
+    stroke: "#2563EB"
+  }
+}
 
-todo -> in_progress: "Claim + Start"
-todo -> refine: "Spec Missing"
+todo -> in_progress: "Claim + Start" {
+  style: {
+    stroke: "#2563EB"
+  }
+}
+todo -> refine: "Spec Missing" {
+  style: {
+    stroke: "#2563EB"
+  }
+}
 
-in_progress -> review: "Execution Complete"
-in_progress -> refine: "Needs Clarification"
+in_progress -> review: "Execution Complete" {
+  style: {
+    stroke: "#16A34A"
+  }
+}
+in_progress -> refine: "Needs Clarification" {
+  style: {
+    stroke: "#16A34A"
+  }
+}
 
-review -> todo: "Human Rework"
-review -> merge: "Human Approved"
+review -> todo: "Human Rework" {
+  style: {
+    stroke: "#2563EB"
+  }
+}
+review -> merge: "PR Approved" {
+  style: {
+    stroke: "#2563EB"
+  }
+}
 
-refine -> todo: "Spec Added"
+refine -> todo: "Spec Added" {
+  style: {
+    stroke: "#2563EB"
+  }
+}
 
-merge -> done: "Merged Successfully"
+merge -> merged: "PR Merged" {
+  style: {
+    stroke: "#DC2626"
+  }
+}
+merged -> done: "Cleanup Complete" {
+  style: {
+    stroke: "#16A34A"
+  }
+}

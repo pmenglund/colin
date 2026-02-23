@@ -127,8 +127,19 @@ func DecideWithStates(snapshot IssueSnapshot, now time.Time, states States) Deci
 	case states.Merge:
 		return Decision{
 			Action:  ActionTransition,
-			ToState: states.Done,
+			ToState: states.Merged,
 			Reason:  "issue queued in merge state",
+			MetadataPatch: map[string]string{
+				MetaReason:     "",
+				MetaMergeReady: "false",
+			},
+		}
+
+	case states.Merged:
+		return Decision{
+			Action:  ActionTransition,
+			ToState: states.Done,
+			Reason:  "issue merged and awaiting cleanup completion",
 			MetadataPatch: map[string]string{
 				MetaReason:     "",
 				MetaMergeReady: "false",

@@ -59,7 +59,7 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 			}
 
 			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
-			mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr())
+			mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates)
 			bootstrapper := newTaskBootstrapper(cfg, cwd)
 
 			runner := &worker.Runner{
@@ -123,7 +123,7 @@ func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) work
 	})
 }
 
-func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.MergeExecutor {
+func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer, states workflow.States) worker.MergeExecutor {
 	if cfg.LinearBackend == config.LinearBackendFake {
 		return worker.NoopMergeExecutor{}
 	}
@@ -141,6 +141,7 @@ func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.Me
 		BaseBranch:     cfg.BaseBranch,
 		PushBaseBranch: &pushBaseBranch,
 		MergePreparer:  mergePreparer,
+		States:         states,
 	})
 }
 

@@ -11,6 +11,7 @@ const (
 	StateInProgress = "In Progress"
 	StateReview     = "Review"
 	StateMerge      = "Merge"
+	StateMerged     = "Merged"
 	StateDone       = "Done"
 )
 
@@ -21,6 +22,7 @@ type States struct {
 	InProgress string
 	Review     string
 	Merge      string
+	Merged     string
 	Done       string
 }
 
@@ -32,6 +34,7 @@ func DefaultStates() States {
 		InProgress: StateInProgress,
 		Review:     StateReview,
 		Merge:      StateMerge,
+		Merged:     StateMerged,
 		Done:       StateDone,
 	}
 }
@@ -55,6 +58,9 @@ func (s States) WithDefaults() States {
 	if strings.TrimSpace(s.Merge) == "" {
 		s.Merge = defaults.Merge
 	}
+	if strings.TrimSpace(s.Merged) == "" {
+		s.Merged = defaults.Merged
+	}
 	if strings.TrimSpace(s.Done) == "" {
 		s.Done = defaults.Done
 	}
@@ -72,6 +78,7 @@ func (s States) Validate() error {
 		"in_progress": s.InProgress,
 		"review":      s.Review,
 		"merge":       s.Merge,
+		"merged":      s.Merged,
 		"done":        s.Done,
 	}
 
@@ -94,7 +101,7 @@ func (s States) Validate() error {
 func (s States) IsCandidate(state string) bool {
 	s = s.WithDefaults()
 	switch strings.TrimSpace(state) {
-	case s.Todo, s.InProgress, s.Merge, s.Done:
+	case s.Todo, s.InProgress, s.Merge, s.Merged, s.Done:
 		return true
 	default:
 		return false
@@ -125,10 +132,14 @@ func (s States) CanTransition(from, to string) bool {
 			s.Merge: {},
 		},
 		s.Merge: {
+			s.Merged: {},
+		},
+		s.Merged: {
 			s.Done: {},
 		},
 		s.Done: {
-			s.Merge: {},
+			s.Merge:  {},
+			s.Merged: {},
 		},
 	}
 

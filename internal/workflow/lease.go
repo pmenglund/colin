@@ -23,6 +23,7 @@ const (
 	MetaWorktreePath               = "colin.worktree_path"
 	MetaBranchName                 = "colin.branch_name"
 	MetaThreadID                   = "colin.thread_id"
+	MetaPRURL                      = "colin.pr_url"
 )
 
 // Lease coordinates exclusive work ownership on a Linear issue.

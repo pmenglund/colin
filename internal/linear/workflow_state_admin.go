@@ -21,7 +21,7 @@ const (
 	workflowStateTypeCompleted = "completed"
 )
 
-var workflowStateCanonicalOrder = []string{"todo", "in_progress", "refine", "review", "merge", "done"}
+var workflowStateCanonicalOrder = []string{"todo", "in_progress", "refine", "review", "merge", "merged", "done"}
 
 // WorkflowStateMapping describes one resolved canonical workflow state.
 type WorkflowStateMapping struct {
@@ -60,6 +60,7 @@ func (r WorkflowStateResolution) RuntimeStates() workflow.States {
 		Refine:     read("refine", workflow.StateRefine),
 		Review:     read("review", workflow.StateReview),
 		Merge:      read("merge", workflow.StateMerge),
+		Merged:     read("merged", workflow.StateMerged),
 		Done:       read("done", workflow.StateDone),
 	}
 }
@@ -331,6 +332,8 @@ func configuredStateName(states workflow.States, canonical string) string {
 		return states.Review
 	case "merge":
 		return states.Merge
+	case "merged":
+		return states.Merged
 	case "done":
 		return states.Done
 	default:

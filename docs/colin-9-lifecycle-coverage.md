@@ -10,7 +10,7 @@ The following tests run offline without real Linear or Codex network calls:
   - Verifies CLI worker execution path can run with `linear_backend = "fake"` and no external API connectivity.
 
 - `e2e/lifecycle_happy_path_test.go`:
-  - `TestLifecycleHappyPathTodoToDone` validates `Todo -> In Progress -> Review -> Merge -> Done` progression across worker cycles.
+  - `TestLifecycleHappyPathTodoToDone` validates `Todo -> In Progress -> Review -> Merge -> Merged -> Done` progression across worker cycles.
   - `TestLifecycleBlockedDependencyUnblocksWhenDependencyDone` validates blocked dependency gating and unblocking flow.
   - `TestLifecycleMergeQueueSerializedAcrossCycles` validates one-at-a-time merge queue progression across cycles.
   - Happy-path assertions include metadata persistence for:

@@ -4,9 +4,9 @@ This runbook is for operating Colin in production-like environments. It is writt
 
 ## What Colin Automates
 
-Colin continuously polls Linear and processes only the configured candidate states (`workflow_states.todo`, `workflow_states.in_progress`, `workflow_states.merge`, `workflow_states.done`). At startup, Colin resolves those configured names against the team’s real Linear workflow states and fails fast if any mapped state is missing.
+Colin continuously polls Linear and processes only the configured candidate states (`workflow_states.todo`, `workflow_states.in_progress`, `workflow_states.merge`, `workflow_states.merged`, `workflow_states.done`). At startup, Colin resolves those configured names against the team’s real Linear workflow states and fails fast if any mapped state is missing.
 
-A `todo` issue with required specification is moved to `in_progress` and receives lease metadata. `in_progress` issues are evaluated by Codex and moved to `review` or `refine`. `merge` issues move to `done` when merge metadata says they are ready.
+A `todo` issue with required specification is moved to `in_progress` and receives lease metadata. `in_progress` issues are evaluated by Codex and moved to `review` or `refine`. `merge` issues move to `merged` after merge-phase execution, and `merged` issues move to `done` after cleanup.
 
 ## Required Configuration
 
@@ -40,6 +40,7 @@ Workflow mapping controls (`colin.toml` only in this iteration):
 - `refine`
 - `review`
 - `merge`
+- `merged`
 - `done`
 
 ## Startup Runbook
@@ -123,22 +124,25 @@ If a worktree already exists, Colin reuses it.
 
 ## Merge Queue Runbook
 
-Colin treats `Merge` as a candidate state and attempts merge execution automatically.
-When merge execution succeeds, Colin transitions `Merge -> Done`.
-Merge execution is strict fail-fast: missing source branch or missing/stale worktree path aborts execution and keeps the issue in `Merge`.
+Colin treats `Merge` and `Merged` as candidate states and executes merge-side effects automatically.
+When merge-phase execution succeeds, Colin transitions `Merge -> Merged`.
+When cleanup succeeds, Colin transitions `Merged -> Done`.
+Merge-phase execution is strict fail-fast: missing source branch or missing/stale worktree path aborts execution and keeps the issue in `Merge`.
 
-Colin also reconciles `Done` issues. If a Colin task branch still exists for an issue in `Done`, Colin reopens it to `Merge` and adds a recovery comment so merge cleanup can be completed.
+Colin also reconciles `Done` issues. If a Colin task branch still exists for an issue in `Done`, Colin reopens it to:
+- `Merge` when the branch is not merged into the base branch
+- `Merged` when the branch is already merged but cleanup is incomplete
 
 Operational guidance:
 
-- Merge queue processing is serialized: only one `Merge` issue is processed per cycle.
+- Merge queue processing is serialized: only one `Merge`/`Merged` issue is processed per cycle.
 - Place issues in `Merge` in the order you want them merged.
 
 Metadata is stored in a per-issue Linear attachment with URL:
 
     https://github.com/pmenglund/colin/blob/main/docs/metadata.md
 
-If merge execution fails, Colin leaves the issue in `Merge` and retries on the next cycle.
+If merge execution fails, Colin leaves the issue in `Merge` or `Merged` (depending on phase) and retries on the next cycle.
 
 ## Disaster Recovery Runbook
 

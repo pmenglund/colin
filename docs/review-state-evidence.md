@@ -21,6 +21,7 @@ The worker posts two deterministic markdown comments:
 
    Section order is:
    - `## Execution Summary`
+   - Optional `## Pull Request` (only when `colin.pr_url` metadata is present)
    - Optional `## Evidence` (only when evidence pointers are present)
 
 `Evidence` may include:
@@ -36,6 +37,7 @@ If no evidence pointers are provided, the `## Evidence` section is omitted from 
 2. Verify the earlier comment starts with `Starting Codex turn with current execution context.` and includes `## Execution Context`.
 3. Verify the review-transition comment starts with `Moved to **Review** after Codex execution.` and uses deterministic section order:
    - `Execution Summary`
+   - optional `Pull Request`
    - optional `Evidence`
 4. If an `Evidence` section is present, open each pointer and confirm it matches the claimed behavior.
 5. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.

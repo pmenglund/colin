@@ -162,9 +162,20 @@ func TestDecideInProgressNoopWhenBlocked(t *testing.T) {
 	}
 }
 
-func TestDecideMergeToDoneWithoutMergeReadyMetadata(t *testing.T) {
+func TestDecideMergeToMergedWithoutMergeReadyMetadata(t *testing.T) {
 	d := Decide(IssueSnapshot{
 		State:    StateMerge,
+		Metadata: map[string]string{},
+	}, time.Now())
+
+	if d.ToState != StateMerged {
+		t.Fatalf("ToState = %q", d.ToState)
+	}
+}
+
+func TestDecideMergedToDoneWithoutMergeReadyMetadata(t *testing.T) {
+	d := Decide(IssueSnapshot{
+		State:    StateMerged,
 		Metadata: map[string]string{},
 	}, time.Now())
 
@@ -206,6 +217,7 @@ func TestDecideWithStatesUsesConfiguredNames(t *testing.T) {
 		Refine:     "Needs Spec",
 		Review:     "Human Review",
 		Merge:      "Merge Queue",
+		Merged:     "Merged Queue",
 		Done:       "Closed",
 	}
 

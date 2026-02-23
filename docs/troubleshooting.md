@@ -169,16 +169,16 @@ Fix:
    - `colin.lease_expires_at`
 3. Run one cycle again.
 
-### Issue in `Merge` does not transition to `Done`
+### Issue in `Merge`/`Merged` does not transition forward
 
 Cause:
 
-- Merge execution failed (for example: merge conflict, push failure, missing source branch, missing/stale worktree path).
+- Merge-phase or cleanup-phase execution failed (for example: merge conflict, push failure, missing source branch, missing/stale worktree path).
 
 Fix:
 
 1. Check worker logs for `execute merge for issue <ID>` errors.
-2. Resolve the reported git/worktree issue.
+2. Resolve the reported git/worktree issue for the current phase (`Merge` or `Merged`).
 3. Re-run one worker cycle.
 
 ### Issue reached `Done` but branch/worktree still exists
@@ -189,8 +189,8 @@ Cause:
 
 Fix:
 
-1. Run one worker cycle. Colin now auto-detects unresolved task branches on `Done` issues and reopens them to `Merge`.
-2. Confirm the issue was moved back to `Merge` with a recovery comment.
+1. Run one worker cycle. Colin now auto-detects unresolved task branches on `Done` issues and reopens them to `Merge` (not merged) or `Merged` (merged but cleanup pending).
+2. Confirm the issue was moved back with a recovery comment naming the target state.
 3. Re-run another cycle after resolving any reported merge precondition errors.
 
 ### Missing or malformed metadata attachment values

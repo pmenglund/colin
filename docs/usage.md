@@ -62,6 +62,7 @@ Use this to inspect Colin metadata values currently stored for an issue.
 2. Run one cycle with `--once --dry-run` to validate behavior safely.
 3. Start continuous worker mode.
 4. Use one-shot dry-runs for diagnostics while system is live.
+5. Expect merge processing in two phases: `Merge -> Merged -> Done`.
 
 ## Configuration notes
 

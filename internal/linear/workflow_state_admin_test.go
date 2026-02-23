@@ -41,7 +41,8 @@ func TestWorkflowStateAdminResolveWorkflowStates(t *testing.T) {
 							{"id": "s-3", "name": "Needs Spec", "type": "started"},
 							{"id": "s-4", "name": "Human Review", "type": "started"},
 							{"id": "s-5", "name": "Merge Queue", "type": "started"},
-							{"id": "s-6", "name": "Shipped", "type": "completed"},
+							{"id": "s-6", "name": "Merged Queue", "type": "started"},
+							{"id": "s-7", "name": "Shipped", "type": "completed"},
 						},
 					},
 				},
@@ -59,6 +60,7 @@ func TestWorkflowStateAdminResolveWorkflowStates(t *testing.T) {
 		Refine:     "Needs Spec",
 		Review:     "Human Review",
 		Merge:      "Merge Queue",
+		Merged:     "Merged Queue",
 		Done:       "Shipped",
 	})
 	if err != nil {
@@ -78,6 +80,9 @@ func TestWorkflowStateAdminResolveWorkflowStates(t *testing.T) {
 	ids := resolved.StateIDByName()
 	if ids["Merge Queue"] != "s-5" {
 		t.Fatalf("StateIDByName()[Merge Queue] = %q, want %q", ids["Merge Queue"], "s-5")
+	}
+	if ids["Merged Queue"] != "s-6" {
+		t.Fatalf("StateIDByName()[Merged Queue] = %q, want %q", ids["Merged Queue"], "s-6")
 	}
 	if resolved.Mappings["review"].Created {
 		t.Fatal("review mapping Created = true, want false")
@@ -105,7 +110,8 @@ func TestWorkflowStateAdminResolveWorkflowStatesMissingState(t *testing.T) {
 					{"id": "s-2", "name": "In Progress", "type": "started"},
 					{"id": "s-3", "name": "Refine", "type": "started"},
 					{"id": "s-5", "name": "Merge", "type": "started"},
-					{"id": "s-6", "name": "Done", "type": "completed"},
+					{"id": "s-6", "name": "Merged", "type": "started"},
+					{"id": "s-7", "name": "Done", "type": "completed"},
 				}}},
 			})
 		default:
@@ -147,14 +153,15 @@ func TestWorkflowStateAdminEnsureWorkflowStatesCreatesMissing(t *testing.T) {
 					{"id": "s-2", "name": "In Progress", "type": "started"},
 					{"id": "s-3", "name": "Refine", "type": "started"},
 					{"id": "s-4", "name": "Review", "type": "started"},
+					{"id": "s-5", "name": "Merge", "type": "started"},
 					{"id": "s-6", "name": "Done", "type": "completed"},
 				}}},
 			})
 		case strings.Contains(req.Query, "mutation WorkflowStateCreate"):
 			createCalls++
 			input := req.Variables["input"].(map[string]any)
-			if input["name"] != "Merge" {
-				t.Fatalf("created state name = %v, want Merge", input["name"])
+			if input["name"] != "Merged" {
+				t.Fatalf("created state name = %v, want Merged", input["name"])
 			}
 			if input["type"] != "started" {
 				t.Fatalf("created state type = %v, want started", input["type"])
@@ -162,7 +169,7 @@ func TestWorkflowStateAdminEnsureWorkflowStatesCreatesMissing(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{"workflowStateCreate": map[string]any{
 					"success":       true,
-					"workflowState": map[string]any{"id": "s-5", "name": "Merge", "type": "started"},
+					"workflowState": map[string]any{"id": "s-7", "name": "Merged", "type": "started"},
 				}},
 			})
 		default:
@@ -179,8 +186,8 @@ func TestWorkflowStateAdminEnsureWorkflowStatesCreatesMissing(t *testing.T) {
 	if createCalls != 1 {
 		t.Fatalf("createCalls = %d, want 1", createCalls)
 	}
-	if !resolved.Mappings["merge"].Created {
-		t.Fatal("merge mapping Created = false, want true")
+	if !resolved.Mappings["merged"].Created {
+		t.Fatal("merged mapping Created = false, want true")
 	}
 	if resolved.Mappings["todo"].Created {
 		t.Fatal("todo mapping Created = true, want false")
@@ -209,7 +216,8 @@ func TestWorkflowStateAdminEnsureWorkflowStatesValidatesType(t *testing.T) {
 					{"id": "s-3", "name": "Refine", "type": "started"},
 					{"id": "s-4", "name": "Review", "type": "started"},
 					{"id": "s-5", "name": "Merge", "type": "started"},
-					{"id": "s-6", "name": "Done", "type": "completed"},
+					{"id": "s-6", "name": "Merged", "type": "started"},
+					{"id": "s-7", "name": "Done", "type": "completed"},
 				}}},
 			})
 		default:

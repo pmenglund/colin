@@ -9,6 +9,7 @@ func TestStatesValidateRejectsDuplicateNames(t *testing.T) {
 		Refine:     "Refine",
 		Review:     "Review",
 		Merge:      "Merge",
+		Merged:     "Merged",
 		Done:       "Done",
 	}.Validate()
 	if err == nil {
@@ -23,6 +24,7 @@ func TestStatesIsCandidateAndDoneWithCustomNames(t *testing.T) {
 		Refine:     "Needs Spec",
 		Review:     "Human Review",
 		Merge:      "Merge Queue",
+		Merged:     "Merged Queue",
 		Done:       "Closed",
 	}
 
@@ -34,6 +36,9 @@ func TestStatesIsCandidateAndDoneWithCustomNames(t *testing.T) {
 	}
 	if !states.IsCandidate("Merge Queue") {
 		t.Fatal("IsCandidate(Merge Queue) = false, want true")
+	}
+	if !states.IsCandidate("Merged Queue") {
+		t.Fatal("IsCandidate(Merged Queue) = false, want true")
 	}
 	if !states.IsCandidate("Closed") {
 		t.Fatal("IsCandidate(Closed) = false, want true")
@@ -50,6 +55,7 @@ func TestStatesCanTransitionWithCustomNames(t *testing.T) {
 		Refine:     "Needs Spec",
 		Review:     "Human Review",
 		Merge:      "Merge Queue",
+		Merged:     "Merged Queue",
 		Done:       "Closed",
 	}
 
@@ -59,8 +65,17 @@ func TestStatesCanTransitionWithCustomNames(t *testing.T) {
 	if !states.CanTransition("Human Review", "Merge Queue") {
 		t.Fatal("CanTransition(Human Review, Merge Queue) = false, want true")
 	}
+	if !states.CanTransition("Merge Queue", "Merged Queue") {
+		t.Fatal("CanTransition(Merge Queue, Merged Queue) = false, want true")
+	}
+	if !states.CanTransition("Merged Queue", "Closed") {
+		t.Fatal("CanTransition(Merged Queue, Closed) = false, want true")
+	}
 	if !states.CanTransition("Closed", "Merge Queue") {
 		t.Fatal("CanTransition(Closed, Merge Queue) = false, want true")
+	}
+	if !states.CanTransition("Closed", "Merged Queue") {
+		t.Fatal("CanTransition(Closed, Merged Queue) = false, want true")
 	}
 	if states.CanTransition("Backlog", "Closed") {
 		t.Fatal("CanTransition(Backlog, Closed) = true, want false")

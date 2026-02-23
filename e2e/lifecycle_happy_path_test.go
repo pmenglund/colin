@@ -120,12 +120,23 @@ func TestLifecycleHappyPathTodoToDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() after cycle 3 error = %v", err)
 	}
-	if issue.StateName != workflow.StateDone {
-		t.Fatalf("cycle 3 state = %q, want %q", issue.StateName, workflow.StateDone)
+	if issue.StateName != workflow.StateMerged {
+		t.Fatalf("cycle 3 state = %q, want %q", issue.StateName, workflow.StateMerged)
 	}
 
 	if err := runner.RunOnce(ctx); err != nil {
 		t.Fatalf("cycle 4 RunOnce() error = %v", err)
+	}
+	issue, err = client.GetIssue(ctx, "issue-100")
+	if err != nil {
+		t.Fatalf("GetIssue() after cycle 4 error = %v", err)
+	}
+	if issue.StateName != workflow.StateDone {
+		t.Fatalf("cycle 4 state = %q, want %q", issue.StateName, workflow.StateDone)
+	}
+
+	if err := runner.RunOnce(ctx); err != nil {
+		t.Fatalf("cycle 5 RunOnce() error = %v", err)
 	}
 	if bootstrapper.callCount != 1 {
 		t.Fatalf("bootstrapper callCount after rerun = %d, want 1", bootstrapper.callCount)
@@ -249,8 +260,8 @@ func TestLifecycleMergeQueueSerializedAcrossCycles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(issue-merge-2) after cycle 1 error = %v", err)
 	}
-	if issueOne.StateName != workflow.StateDone {
-		t.Fatalf("cycle 1 issue-merge-1 state = %q, want %q", issueOne.StateName, workflow.StateDone)
+	if issueOne.StateName != workflow.StateMerged {
+		t.Fatalf("cycle 1 issue-merge-1 state = %q, want %q", issueOne.StateName, workflow.StateMerged)
 	}
 	if issueTwo.StateName != workflow.StateMerge {
 		t.Fatalf("cycle 1 issue-merge-2 state = %q, want %q", issueTwo.StateName, workflow.StateMerge)
@@ -263,7 +274,29 @@ func TestLifecycleMergeQueueSerializedAcrossCycles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(issue-merge-2) after cycle 2 error = %v", err)
 	}
+	if issueTwo.StateName != workflow.StateMerge {
+		t.Fatalf("cycle 2 issue-merge-2 state = %q, want %q", issueTwo.StateName, workflow.StateMerge)
+	}
+
+	if err := runner.RunOnce(ctx); err != nil {
+		t.Fatalf("cycle 3 RunOnce() error = %v", err)
+	}
+	issueTwo, err = client.GetIssue(ctx, "issue-merge-2")
+	if err != nil {
+		t.Fatalf("GetIssue(issue-merge-2) after cycle 3 error = %v", err)
+	}
+	if issueTwo.StateName != workflow.StateMerged {
+		t.Fatalf("cycle 3 issue-merge-2 state = %q, want %q", issueTwo.StateName, workflow.StateMerged)
+	}
+
+	if err := runner.RunOnce(ctx); err != nil {
+		t.Fatalf("cycle 4 RunOnce() error = %v", err)
+	}
+	issueTwo, err = client.GetIssue(ctx, "issue-merge-2")
+	if err != nil {
+		t.Fatalf("GetIssue(issue-merge-2) after cycle 4 error = %v", err)
+	}
 	if issueTwo.StateName != workflow.StateDone {
-		t.Fatalf("cycle 2 issue-merge-2 state = %q, want %q", issueTwo.StateName, workflow.StateDone)
+		t.Fatalf("cycle 4 issue-merge-2 state = %q, want %q", issueTwo.StateName, workflow.StateDone)
 	}
 }

@@ -80,6 +80,7 @@ type WorkflowStates struct {
 	Refine     string `toml:"refine"`
 	Review     string `toml:"review"`
 	Merge      string `toml:"merge"`
+	Merged     string `toml:"merged"`
 	Done       string `toml:"done"`
 }
 
@@ -91,6 +92,7 @@ func DefaultWorkflowStates() WorkflowStates {
 		Refine:     workflow.StateRefine,
 		Review:     workflow.StateReview,
 		Merge:      workflow.StateMerge,
+		Merged:     workflow.StateMerged,
 		Done:       workflow.StateDone,
 	}
 }
@@ -113,6 +115,9 @@ func (w WorkflowStates) WithDefaults() WorkflowStates {
 	if strings.TrimSpace(w.Merge) == "" {
 		w.Merge = defaults.Merge
 	}
+	if strings.TrimSpace(w.Merged) == "" {
+		w.Merged = defaults.Merged
+	}
 	if strings.TrimSpace(w.Done) == "" {
 		w.Done = defaults.Done
 	}
@@ -133,6 +138,7 @@ func (w WorkflowStates) AsRuntimeStates() workflow.States {
 		Refine:     strings.TrimSpace(w.Refine),
 		Review:     strings.TrimSpace(w.Review),
 		Merge:      strings.TrimSpace(w.Merge),
+		Merged:     strings.TrimSpace(w.Merged),
 		Done:       strings.TrimSpace(w.Done),
 	}
 }
@@ -295,6 +301,9 @@ func mergeWorkflowStateOverrides(base WorkflowStates, overrides WorkflowStates) 
 	}
 	if strings.TrimSpace(overrides.Merge) != "" {
 		base.Merge = strings.TrimSpace(overrides.Merge)
+	}
+	if strings.TrimSpace(overrides.Merged) != "" {
+		base.Merged = strings.TrimSpace(overrides.Merged)
 	}
 	if strings.TrimSpace(overrides.Done) != "" {
 		base.Done = strings.TrimSpace(overrides.Done)
