@@ -62,9 +62,8 @@ Edit `colin.toml` and set at least:
 
     go run . --help
     go run . setup --help
-    go run . worker run --help
 
-Expected commands include `setup` and `worker run`; expected flags include `--config`, `--once`, and `--dry-run`.
+Expected commands include `setup`, `metadata`, and `worker`; expected root flags include `--config`, `--once`, and `--dry-run`.
 
 ### 3. Ensure workflow states
 
@@ -78,7 +77,7 @@ Expected behavior:
 
 ### 4. Dry-run a single cycle
 
-    go run . --config ./colin.toml worker run --once --dry-run
+    go run . --config ./colin.toml --once --dry-run
 
 Expected behavior:
 
@@ -88,7 +87,7 @@ Expected behavior:
 
 ### 5. Start continuous worker
 
-    go run . --config ./colin.toml worker run
+    go run . --config ./colin.toml
 
 Expected behavior:
 
@@ -112,7 +111,7 @@ If a cycle fails, logs include `action=cycle_error` with a `stage` value.
 
 Use one-shot cycles for diagnostics without changing runtime mode:
 
-    go run . --config ./colin.toml worker run --once --dry-run
+    go run . --config ./colin.toml --once --dry-run
 
 ### Worker artifacts
 
@@ -153,7 +152,7 @@ If merge execution fails, Colin leaves the issue in `Merge` or `Merged` (dependi
 
        go run . --config ./colin.toml setup
 
-       go run . --config ./colin.toml worker run
+       go run . --config ./colin.toml
 
 2. Colin is idempotent for repeated cycles and resumes from current Linear state.
 
@@ -190,7 +189,7 @@ Recovery:
 2. Ensure required keys are present with string values.
 3. Re-run one cycle:
 
-       go run . --config ./colin.toml worker run --once
+       go run . --config ./colin.toml --once
 
 ## Offline/Fake Backend Runbook
 
@@ -199,6 +198,6 @@ For local verification without network writes:
 1. Set `linear_backend = "fake"` in `colin.toml`.
 2. Run:
 
-       go run . --config ./colin.toml worker run --once
+       go run . --config ./colin.toml --once
 
 With fake backend, Linear credentials are not required and Codex execution paths are skipped.

@@ -20,32 +20,40 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 		Short: "Run the Linear issue worker",
 	}
 
-	var once bool
-	var dryRun bool
+	runOpts := &workerRunOptions{}
 
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run worker reconciliation",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runWorkerCommand(cmd, rootOpts, once, dryRun)
+			return runWorker(cmd, rootOpts, *runOpts)
 		},
 	}
 
-	runCmd.Flags().BoolVar(&once, "once", false, "Run one poll cycle and exit")
-	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Log decisions without writing to Linear")
+	addWorkerRunFlags(runCmd, runOpts)
 
 	workerCmd.AddCommand(runCmd)
 	return workerCmd
 }
 
-func runWorkerCommand(cmd *cobra.Command, rootOpts *RootOptions, once bool, dryRun bool) error {
+type workerRunOptions struct {
+	once   bool
+	dryRun bool
+}
+
+func addWorkerRunFlags(cmd *cobra.Command, opts *workerRunOptions) {
+	cmd.Flags().BoolVar(&opts.once, "once", false, "Run one poll cycle and exit")
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Log decisions without writing to Linear")
+}
+
+func runWorker(cmd *cobra.Command, rootOpts *RootOptions, opts workerRunOptions) error {
 	cfg, err := loadCLIConfig(rootOpts)
 	if err != nil {
 		return err
 	}
 
 	if cmd.Flags().Changed("dry-run") {
-		cfg.DryRun = dryRun
+		cfg.DryRun = opts.dryRun
 	}
 
 	cwd, err := os.Getwd()
@@ -88,7 +96,7 @@ func runWorkerCommand(cmd *cobra.Command, rootOpts *RootOptions, once bool, dryR
 		Logger:             logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
 	}
 
-	if once {
+	if opts.once {
 		return runner.RunOnce(cmd.Context())
 	}
 

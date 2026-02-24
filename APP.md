@@ -90,7 +90,7 @@ If merge coordinates are inconsistent (for example: missing branch or missing wo
 
 ## Repository Layout
 
-- `cmd/` - Cobra command wiring (`root`, `worker run`)
+- `cmd/` - Cobra command wiring (`root`, `worker run` compatibility command)
 - `internal/config/` - environment and runtime configuration parsing
 - `internal/codexexec/` - Codex SDK adapter for evaluating/executing `In Progress` issues
 - `internal/linear/` - Linear GraphQL client and metadata persistence helpers
@@ -120,11 +120,11 @@ If merge coordinates are inconsistent (for example: missing branch or missing wo
 - Install dependencies: `go mod download`
 - Optional config template: copy `colin.toml.example` to `colin.toml` and fill values
 - Set `COLIN_HOME` (or `colin_home` in config) to control where task worktrees are created; default is `~/.colin`
-- Override config path with root flag: `go run . --config /path/to/colin.toml worker run --once`
+- Override config path with root flag: `go run . --config /path/to/colin.toml --once`
 - Show CLI help: `go run . --help`
 - Ensure required workflow states exist/are valid: `go run . --config ./colin.toml setup`
-- Run worker once (dry-run): `go run . --config ./colin.toml worker run --once --dry-run`
-- Run worker once with fake backend (offline): set `linear_backend = "fake"` and run `go run . --config ./colin.toml worker run --once`
+- Run worker once (dry-run): `go run . --config ./colin.toml --once --dry-run`
+- Run worker once with fake backend (offline): set `linear_backend = "fake"` and run `go run . --config ./colin.toml --once`
 - Run tests locally: `go test ./...`
 - Lint/format checks: `go vet ./...` and `gofmt -w .`
 - Operator docs: `docs/operator-runbook.md` and `docs/troubleshooting.md`

@@ -8,16 +8,7 @@ import (
 )
 
 func TestRootCommandRunsWorkerByDefault(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	content := `linear_backend = "fake"
-worker_id = "test-worker"
-dry_run = true
-`
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
+	configPath := writeRootTestConfig(t)
 	rootCmd := NewRootCommand()
 	rootCmd.SetArgs([]string{"--config", configPath, "--once"})
 
@@ -26,16 +17,18 @@ dry_run = true
 	}
 }
 
-func TestRootCommandUsesCOLIN_CONFIGWhenConfigFlagUnset(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	content := `linear_backend = "fake"
-worker_id = "test-worker"
-dry_run = true
-`
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+func TestRootCommandVerboseFlag(t *testing.T) {
+	configPath := writeRootTestConfig(t)
+	rootCmd := NewRootCommand()
+	rootCmd.SetArgs([]string{"--config", configPath, "--once", "--verbose"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Execute() returned error: %v", err)
 	}
+}
+
+func TestRootCommandUsesCOLIN_CONFIGWhenConfigFlagUnset(t *testing.T) {
+	configPath := writeRootTestConfig(t)
 	t.Setenv("COLIN_CONFIG", configPath)
 
 	rootCmd := NewRootCommand()
@@ -71,14 +64,14 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	if !strings.Contains(helpOutput, "--verbose") {
 		t.Fatalf("expected help output to contain --verbose, got: %q", helpOutput)
 	}
+	if !strings.Contains(helpOutput, "--config") {
+		t.Fatalf("expected help output to contain --config, got: %q", helpOutput)
+	}
 	if !strings.Contains(helpOutput, "--once") {
 		t.Fatalf("expected help output to contain --once, got: %q", helpOutput)
 	}
 	if !strings.Contains(helpOutput, "--dry-run") {
 		t.Fatalf("expected help output to contain --dry-run, got: %q", helpOutput)
-	}
-	if !strings.Contains(helpOutput, "--config") {
-		t.Fatalf("expected help output to contain --config, got: %q", helpOutput)
 	}
 	if !strings.Contains(helpOutput, "worker") {
 		t.Fatalf("expected help output to contain worker command, got: %q", helpOutput)
@@ -89,4 +82,19 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	if !strings.Contains(helpOutput, "metadata") {
 		t.Fatalf("expected help output to contain metadata command, got: %q", helpOutput)
 	}
+}
+
+func writeRootTestConfig(t *testing.T) string {
+	t.Helper()
+
+	configPath := filepath.Join(t.TempDir(), "colin.toml")
+	content := `linear_backend = "fake"
+worker_id = "test-worker"
+dry_run = true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	return configPath
 }

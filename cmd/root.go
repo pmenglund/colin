@@ -13,22 +13,20 @@ type RootOptions struct {
 // NewRootCommand constructs the root colin command.
 func NewRootCommand() *cobra.Command {
 	opts := &RootOptions{}
-	var once bool
-	var dryRun bool
+	runOpts := &workerRunOptions{}
 
 	rootCmd := &cobra.Command{
 		Use:          "colin",
 		Short:        "Colin is an automation tool",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runWorkerCommand(cmd, opts, once, dryRun)
+			return runWorker(cmd, opts, *runOpts)
 		},
 	}
 
 	rootCmd.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", "", "Path to config file (default: ./colin.toml or $COLIN_CONFIG)")
-	rootCmd.Flags().BoolVar(&once, "once", false, "Run one poll cycle and exit")
-	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Log decisions without writing to Linear")
+	addWorkerRunFlags(rootCmd, runOpts)
 	rootCmd.AddCommand(newMetadataCommand(opts))
 	rootCmd.AddCommand(newSetupCommand(opts))
 	rootCmd.AddCommand(newWorkerCommand(opts))

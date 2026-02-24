@@ -46,10 +46,9 @@ Optional but common:
 ```bash
 ./bin/colin --help
 ./bin/colin setup --help
-./bin/colin worker run --help
 ```
 
-You should see `setup` and `worker run` commands and the `--config`, `--once`, and `--dry-run` flags.
+You should see `setup`, `metadata`, and `worker` commands plus the root `--config`, `--once`, and `--dry-run` flags.
 
 ## 4. Initialize/validate Linear workflow states
 
@@ -67,7 +66,7 @@ Expected behavior:
 ## 5. Run a safe one-shot validation
 
 ```bash
-./bin/colin --config ./colin.toml worker run --once --dry-run
+./bin/colin --config ./colin.toml --once --dry-run
 ```
 
 Expected behavior:
@@ -79,7 +78,7 @@ Expected behavior:
 ## 6. Run continuously
 
 ```bash
-./bin/colin --config ./colin.toml worker run
+./bin/colin --config ./colin.toml
 ```
 
 Colin now polls Linear continuously and processes candidate issues.
@@ -95,7 +94,7 @@ linear_backend = "fake"
 Then run:
 
 ```bash
-./bin/colin --config ./colin.toml worker run --once
+./bin/colin --config ./colin.toml --once
 ```
 
 ## Next steps

@@ -6,7 +6,7 @@ Use this playbook with `docs/operator-runbook.md` when Colin fails to start, fai
 
 1. Run a single dry-run cycle to reduce noise:
 
-       go run . --config ./colin.toml worker run --once --dry-run
+       go run . --config ./colin.toml --once --dry-run
 
 2. Capture the exact error text.
 3. Match the error text to a case below.
@@ -24,7 +24,7 @@ Fix:
 1. Set `linear_api_token` in `colin.toml` or `LINEAR_API_TOKEN` in environment.
 2. Re-run one-shot validation:
 
-       go run . --config ./colin.toml worker run --once --dry-run
+       go run . --config ./colin.toml --once --dry-run
 
 ### `LINEAR_TEAM_ID is required`
 
@@ -204,7 +204,7 @@ Fix:
 1. Edit/create metadata attachment `https://github.com/pmenglund/colin/blob/main/docs/metadata.md` and set valid string values.
 2. Re-run one cycle:
 
-       go run . --config ./colin.toml worker run --once
+       go run . --config ./colin.toml --once
 
 ## Workspace and Git Failures
 
