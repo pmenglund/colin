@@ -60,7 +60,7 @@ This ensures required workflow states exist (or creates them) and prints the res
 ### 5) Run one safe dry-run cycle
 
 ```bash
-colin --config ./colin.toml worker run --once --dry-run
+colin --config ./colin.toml --once --dry-run
 ```
 
 This performs one reconciliation cycle without writing changes to Linear.
@@ -68,16 +68,16 @@ This performs one reconciliation cycle without writing changes to Linear.
 ### 6) Start continuous processing
 
 ```bash
-colin --config ./colin.toml worker run
+colin --config ./colin.toml
 ```
 
 ## How to use Colin
 
 - `colin setup`: create/validate required Linear workflow states.
 - `colin metadata <ISSUE-ID>`: print Colin metadata currently stored for one issue.
-- `colin worker run --once`: run a single reconciliation cycle and exit.
-- `colin worker run --dry-run`: compute decisions without writing to Linear.
-- `colin worker run`: run continuously on the configured poll interval.
+- `colin --once`: run a single reconciliation cycle and exit.
+- `colin --dry-run`: compute decisions without writing to Linear.
+- `colin`: run continuously on the configured poll interval.
 
 `project_filter` can also be set from `COLIN_PROJECT_FILTER` as a comma-separated list. Matching is exact (case-insensitive) against project ID or project name.
 
