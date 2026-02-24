@@ -22,6 +22,7 @@ Follow this workflow:
 8. Never return local filesystem paths (for example `/tmp/...`) or `file://` links in evidence fields. Evidence must be reviewer-accessible URLs.
 9. Include evidence links in `execution_summary` itself (for example `Before evidence: <url>` and `After evidence: <url>`) so reviewers can verify from the summary section.
 10. When no observable UI or CLI behavior changed, set both evidence fields to an empty string and explicitly say that in `How verified`, including what validation was performed (for example tests or logs).
+11. When including textual output in the Linear comment (for example command output, logs, or generated text), inline that text inside a fenced code block using triple backticks (```...```).
 
 Return only JSON that matches this schema:
 ```json
