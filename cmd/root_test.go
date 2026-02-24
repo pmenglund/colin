@@ -47,6 +47,9 @@ func TestRootCommandRootFlagsIncludeWorkerExecutionFlags(t *testing.T) {
 	if rootCmd.Flags().Lookup("dry-run") == nil {
 		t.Fatal("expected root command to expose --dry-run")
 	}
+	if rootCmd.PersistentFlags().Lookup("no-color") == nil {
+		t.Fatal("expected root command to expose --no-color")
+	}
 }
 
 func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
@@ -75,6 +78,9 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	}
 	if strings.Contains(helpOutput, "\n  worker") {
 		t.Fatalf("expected help output to omit worker command, got: %q", helpOutput)
+	}
+	if !strings.Contains(helpOutput, "--no-color") {
+		t.Fatalf("expected help output to contain --no-color, got: %q", helpOutput)
 	}
 	if !strings.Contains(helpOutput, "setup") {
 		t.Fatalf("expected help output to contain setup command, got: %q", helpOutput)

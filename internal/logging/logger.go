@@ -14,10 +14,14 @@ const (
 )
 
 // NewSlog creates a slog logger backed by charmbracelet/log.
-func NewSlog(w io.Writer, level slog.Level) *slog.Logger {
+func NewSlog(w io.Writer, level slog.Level, noColor bool) *slog.Logger {
 	handler := charm.NewWithOptions(w, charm.Options{
 		Level: charm.Level(level),
 	})
-	handler.SetColorProfile(termenv.TrueColor)
+	if noColor {
+		handler.SetColorProfile(termenv.Ascii)
+	} else {
+		handler.SetColorProfile(termenv.TrueColor)
+	}
 	return slog.New(handler)
 }

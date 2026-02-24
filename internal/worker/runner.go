@@ -78,7 +78,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		r.Clock = time.Now
 	}
 	if r.Logger == nil {
-		r.Logger = logging.NewSlog(nil, logging.LevelInfo)
+		r.Logger = logging.NewSlog(nil, logging.LevelInfo, false)
 	}
 
 	cycleStartedAt := time.Now()
@@ -254,7 +254,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		pollEvery = 30 * time.Second
 	}
 	if r.Logger == nil {
-		r.Logger = logging.NewSlog(nil, logging.LevelInfo)
+		r.Logger = logging.NewSlog(nil, logging.LevelInfo, false)
 	}
 
 	r.Logger.Info("worker run", "worker", r.WorkerID, "action", "run_start", "poll_every", pollEvery.String())

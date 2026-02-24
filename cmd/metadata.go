@@ -27,9 +27,13 @@ type metadataStyles struct {
 	emptyValue lipgloss.Style
 }
 
-func newMetadataStyles(w io.Writer) metadataStyles {
+func newMetadataStyles(w io.Writer, noColor bool) metadataStyles {
 	renderer := lipgloss.NewRenderer(w)
-	renderer.SetColorProfile(termenv.TrueColor)
+	if noColor {
+		renderer.SetColorProfile(termenv.Ascii)
+	} else {
+		renderer.SetColorProfile(termenv.TrueColor)
+	}
 
 	return metadataStyles{
 		label:      renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
@@ -54,18 +58,18 @@ func newMetadataCommand(rootOpts *RootOptions) *cobra.Command {
 				return err
 			}
 
-			return runMetadata(cmd.Context(), cmd.OutOrStdout(), cfg, args[0])
+			return runMetadata(cmd.Context(), cmd.OutOrStdout(), cfg, args[0], rootOpts != nil && rootOpts.NoColor)
 		},
 	}
 }
 
-func runMetadata(ctx context.Context, w io.Writer, cfg config.Config, issueIdentifier string) error {
+func runMetadata(ctx context.Context, w io.Writer, cfg config.Config, issueIdentifier string, noColor bool) error {
 	lookup, err := newMetadataIssueLookup(cfg)
 	if err != nil {
 		return err
 	}
 
-	return runMetadataWithLookup(ctx, w, lookup, issueIdentifier)
+	return runMetadataWithLookup(ctx, w, lookup, issueIdentifier, noColor)
 }
 
 func newMetadataIssueLookup(cfg config.Config) (metadataIssueLookup, error) {
@@ -79,7 +83,7 @@ func newMetadataIssueLookup(cfg config.Config) (metadataIssueLookup, error) {
 	}
 }
 
-func runMetadataWithLookup(ctx context.Context, w io.Writer, lookup metadataIssueLookup, issueIdentifier string) error {
+func runMetadataWithLookup(ctx context.Context, w io.Writer, lookup metadataIssueLookup, issueIdentifier string, noColor bool) error {
 	if lookup == nil {
 		return errors.New("metadata lookup client is required")
 	}
@@ -90,7 +94,7 @@ func runMetadataWithLookup(ctx context.Context, w io.Writer, lookup metadataIssu
 		return err
 	}
 
-	styles := newMetadataStyles(w)
+	styles := newMetadataStyles(w, noColor)
 	if _, err := fmt.Fprintf(w, "%s: %s\n", styles.label.Render("Issue"), styles.identifier.Render(issue.Identifier)); err != nil {
 		return err
 	}

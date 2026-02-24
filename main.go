@@ -11,15 +11,24 @@ import (
 )
 
 func main() {
-	if err := cmd.NewRootCommand().Execute(); err != nil {
-		_ = printMainError(os.Stderr, err)
+	rootCmd := cmd.NewRootCommand()
+	if err := rootCmd.Execute(); err != nil {
+		noColor, getErr := rootCmd.PersistentFlags().GetBool("no-color")
+		if getErr != nil {
+			noColor = false
+		}
+		_ = printMainError(os.Stderr, err, noColor)
 		os.Exit(1)
 	}
 }
 
-func printMainError(w io.Writer, err error) error {
+func printMainError(w io.Writer, err error, noColor bool) error {
 	renderer := lipgloss.NewRenderer(w)
-	renderer.SetColorProfile(termenv.TrueColor)
+	if noColor {
+		renderer.SetColorProfile(termenv.Ascii)
+	} else {
+		renderer.SetColorProfile(termenv.TrueColor)
+	}
 	red := renderer.NewStyle().Foreground(lipgloss.Color("1"))
 
 	_, writeErr := fmt.Fprintln(w, red.Render(err.Error()))

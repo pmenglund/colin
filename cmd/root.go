@@ -8,6 +8,7 @@ import (
 type RootOptions struct {
 	Verbose    bool
 	ConfigPath string
+	NoColor    bool
 }
 
 // NewRootCommand constructs the root colin command.
@@ -26,6 +27,7 @@ func NewRootCommand() *cobra.Command {
 
 	rootCmd.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", "", "Path to config file (default: ./colin.toml or $COLIN_CONFIG)")
+	rootCmd.PersistentFlags().BoolVar(&opts.NoColor, "no-color", false, "Disable ANSI color output")
 	addWorkerRunFlags(rootCmd, runOpts)
 	rootCmd.AddCommand(newMetadataCommand(opts))
 	rootCmd.AddCommand(newSetupCommand(opts))

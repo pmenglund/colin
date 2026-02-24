@@ -29,6 +29,7 @@ func runWorker(cmd *cobra.Command, rootOpts *RootOptions, opts workerRunOptions)
 	if err != nil {
 		return err
 	}
+	noColor := rootOpts != nil && rootOpts.NoColor
 
 	if cmd.Flags().Changed("dry-run") {
 		cfg.DryRun = opts.dryRun
@@ -51,8 +52,8 @@ func runWorker(cmd *cobra.Command, rootOpts *RootOptions, opts workerRunOptions)
 		configureLinearRuntimeState(client, runtimeStates, resolved.StateIDByName())
 	}
 
-	executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
-	mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates)
+	executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr(), noColor)
+	mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates, noColor)
 	pullRequestManager := newPullRequestManager(cfg, cwd)
 	bootstrapper := newTaskBootstrapper(cfg, cwd)
 
@@ -71,7 +72,7 @@ func runWorker(cmd *cobra.Command, rootOpts *RootOptions, opts workerRunOptions)
 		MaxConcurrency:     cfg.MaxConcurrency,
 		DryRun:             cfg.DryRun,
 		States:             runtimeStates,
-		Logger:             logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
+		Logger:             logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo, noColor),
 	}
 
 	if opts.once {
@@ -97,13 +98,13 @@ func newLinearClient(cfg config.Config, states workflow.States) linear.Client {
 	return client
 }
 
-func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) worker.InProgressExecutor {
+func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer, noColor bool) worker.InProgressExecutor {
 	if cfg.LinearBackend == config.LinearBackendFake {
 		// Keep fake backend fully local/offline by skipping Codex execution paths.
 		return nil
 	}
 
-	codexLogger := logging.NewSlog(stderr, logging.LevelInfo)
+	codexLogger := logging.NewSlog(stderr, logging.LevelInfo, noColor)
 	return codexexec.New(codexexec.Options{
 		Cwd:            cwd,
 		Logger:         codexLogger,
@@ -111,12 +112,12 @@ func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer) work
 	})
 }
 
-func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer, states workflow.States) worker.MergeExecutor {
+func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer, states workflow.States, noColor bool) worker.MergeExecutor {
 	if cfg.LinearBackend == config.LinearBackendFake {
 		return worker.NoopMergeExecutor{}
 	}
 
-	codexLogger := logging.NewSlog(stderr, logging.LevelInfo)
+	codexLogger := logging.NewSlog(stderr, logging.LevelInfo, noColor)
 	mergePreparer := codexexec.NewMergePreparer(codexexec.Options{
 		Cwd:             cwd,
 		Logger:          codexLogger,
