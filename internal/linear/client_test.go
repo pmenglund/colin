@@ -561,6 +561,147 @@ func TestCreateIssueComment(t *testing.T) {
 	}
 }
 
+func TestListIssueComments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if strings.Contains(req.Query, "query ListIssueComments") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"comments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":        "c2",
+									"body":      "second",
+									"createdAt": "2026-02-24T06:02:39Z",
+								},
+								{
+									"id":        "c1",
+									"body":      "first",
+									"createdAt": "2026-02-24T06:01:39Z",
+								},
+							},
+						},
+					},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	comments, err := client.ListIssueComments(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("ListIssueComments() error = %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
+	}
+	if comments[0].ID != "c1" || comments[1].ID != "c2" {
+		t.Fatalf("comments not sorted by createdAt: %#v", comments)
+	}
+}
+
+func TestListIssueCommentsEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if strings.Contains(req.Query, "query ListIssueComments") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"comments": map[string]any{
+							"nodes": []map[string]any{},
+						},
+					},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	comments, err := client.ListIssueComments(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("ListIssueComments() error = %v", err)
+	}
+	if len(comments) != 0 {
+		t.Fatalf("comment count = %d, want 0", len(comments))
+	}
+}
+
+func TestListIssueCommentsMalformedCreatedAt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if strings.Contains(req.Query, "query ListIssueComments") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"comments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":        "c1",
+									"body":      "first",
+									"createdAt": "not-a-timestamp",
+								},
+							},
+						},
+					},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	_, err := client.ListIssueComments(context.Background(), "1")
+	if err == nil {
+		t.Fatal("ListIssueComments() error = nil, want parse error")
+	}
+	if !strings.Contains(err.Error(), "parse issue comment") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestListIssueCommentsGraphQLError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"errors":[{"message":"query failed"}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	_, err := client.ListIssueComments(context.Background(), "1")
+	if err == nil {
+		t.Fatal("ListIssueComments() error = nil, want GraphQL error")
+	}
+	if !strings.Contains(err.Error(), "query failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveStateIDFromMapSupportsNormalizedMatching(t *testing.T) {
 	stateID := resolveStateIDFromMap(map[string]string{
 		"Human Review": "state-human-review",

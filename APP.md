@@ -67,9 +67,8 @@ Colin stores startup execution metadata using these canonical keys:
 
 - Linear metadata key `colin.worktree_path`: absolute path to the task worktree
 - Linear metadata key `colin.branch_name`: git branch used for the task
-- Linear metadata key `colin.codex_thread_id`: Codex thread identifier for the task execution
-- Linear metadata key `colin.codex_session_id`: Codex session identifier used to resume execution context
-- Git branch metadata key `branch.<branch>.colinSessionId`: local git config entry storing `colin.codex_session_id` per branch
+- Linear metadata key `colin.thread_id`: Codex thread identifier for in-progress execution context
+- Git branch metadata key `branch.<branch>.colinSessionId`: local git config entry storing the latest Codex session ID per branch
 
 ## Merging a Task
 

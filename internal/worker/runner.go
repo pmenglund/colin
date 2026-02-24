@@ -506,7 +506,15 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 		}
 	}
 
-	result, err := r.Executor.EvaluateAndExecute(ctx, issue)
+	states := r.runtimeStates()
+	executionIssue := issue
+	issueComments, err := r.Linear.ListIssueComments(ctx, issue.ID)
+	if err != nil {
+		return fmt.Errorf("list issue comments for issue %s: %w", issue.Identifier, err)
+	}
+	executionIssue.Description = appendReworkFeedbackToDescription(issue.Description, issueComments, states.Review)
+
+	result, err := r.Executor.EvaluateAndExecute(ctx, executionIssue)
 	if err != nil {
 		return fmt.Errorf("evaluate and execute in-progress issue %s: %w", issue.Identifier, err)
 	}
@@ -514,11 +522,14 @@ func (r *Runner) processInProgressIssue(ctx context.Context, issue linear.Issue,
 	if threadID == "" {
 		threadID = strings.TrimSpace(issue.Metadata[workflow.MetaThreadID])
 	}
+	if strings.TrimSpace(result.ResumeFallbackReason) != "" {
+		if err := r.commentThreadResumeFallback(ctx, issue, threadID, result.ResumeFallbackReason); err != nil {
+			return err
+		}
+	}
 	if err := r.commentTurnExecutionContext(ctx, issue, threadID); err != nil {
 		return err
 	}
-
-	states := r.runtimeStates()
 	if !result.IsWellSpecified {
 		needsInput := strings.TrimSpace(result.NeedsInputSummary)
 		if needsInput == "" {
@@ -678,6 +689,20 @@ func (r *Runner) commentTurnExecutionContext(ctx context.Context, issue linear.I
 	return nil
 }
 
+func (r *Runner) commentThreadResumeFallback(
+	ctx context.Context,
+	issue linear.Issue,
+	newThreadID string,
+	reason string,
+) error {
+	comment := buildThreadResumeFallbackComment(threadResumeFallbackCommentInput{
+		PreviousThreadID: strings.TrimSpace(issue.Metadata[workflow.MetaThreadID]),
+		NewThreadID:      strings.TrimSpace(newThreadID),
+		Reason:           strings.TrimSpace(reason),
+	})
+	return r.Linear.CreateIssueComment(ctx, issue.ID, comment)
+}
+
 func commentFingerprint(comment string) string {
 	sum := sha256.Sum256([]byte(comment))
 	return hex.EncodeToString(sum[:8])
@@ -689,6 +714,118 @@ func buildDoneRecoveryComment(targetStateName string, reason string) string {
 		strings.TrimSpace(targetStateName),
 		strings.TrimSpace(reason),
 	)
+}
+
+const (
+	maxReworkFeedbackComments = 10
+	maxReworkFeedbackChars    = 4000
+)
+
+func appendReworkFeedbackToDescription(description string, comments []linear.IssueComment, reviewStateName string) string {
+	feedback := collectReviewFeedbackComments(comments, reviewStateName)
+	if len(feedback) == 0 {
+		return description
+	}
+
+	if len(feedback) > maxReworkFeedbackComments {
+		feedback = feedback[len(feedback)-maxReworkFeedbackComments:]
+	}
+
+	const heading = "## Review Feedback To Address\n"
+	var b strings.Builder
+	b.WriteString(heading)
+	used := len(heading)
+	for _, comment := range feedback {
+		body := strings.Join(strings.Fields(strings.TrimSpace(comment.Body)), " ")
+		if body == "" {
+			continue
+		}
+		line := fmt.Sprintf("- %s: %s\n", comment.CreatedAt.UTC().Format(time.RFC3339), body)
+		if used+len(line) > maxReworkFeedbackChars {
+			break
+		}
+		b.WriteString(line)
+		used += len(line)
+	}
+	feedbackBlock := strings.TrimSpace(b.String())
+	if feedbackBlock == strings.TrimSpace(heading) || feedbackBlock == "" {
+		return description
+	}
+
+	trimmedDescription := strings.TrimSpace(description)
+	if trimmedDescription == "" {
+		return feedbackBlock
+	}
+	return strings.TrimRight(description, "\n") + "\n\n" + feedbackBlock
+}
+
+func collectReviewFeedbackComments(comments []linear.IssueComment, reviewStateName string) []linear.IssueComment {
+	if len(comments) == 0 {
+		return nil
+	}
+
+	ordered := append([]linear.IssueComment(nil), comments...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+	})
+
+	markerIndex := -1
+	markerPrefix := reviewCompletionCommentPrefix(reviewStateName)
+	for i, comment := range ordered {
+		if strings.HasPrefix(strings.TrimSpace(comment.Body), markerPrefix) {
+			markerIndex = i
+		}
+	}
+	if markerIndex == -1 {
+		return nil
+	}
+
+	out := make([]linear.IssueComment, 0, len(ordered)-markerIndex-1)
+	for _, comment := range ordered[markerIndex+1:] {
+		body := strings.TrimSpace(comment.Body)
+		if body == "" {
+			continue
+		}
+		if isWorkerGeneratedComment(body) {
+			continue
+		}
+		out = append(out, comment)
+	}
+	return out
+}
+
+func reviewCompletionCommentPrefix(reviewStateName string) string {
+	name := strings.TrimSpace(reviewStateName)
+	if name == "" {
+		name = workflow.StateReview
+	}
+	return "Moved to **" + name + "** after Codex execution."
+}
+
+func isWorkerGeneratedComment(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "Starting Codex turn with current execution context.") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "Moved to **") {
+		if strings.Contains(trimmed, "after Codex execution.") {
+			return true
+		}
+		if strings.Contains(trimmed, "because this task is not specified enough for autonomous execution.") {
+			return true
+		}
+	}
+	if strings.HasPrefix(trimmed, "Reopened to **") &&
+		strings.Contains(trimmed, "from **Done** because merge recovery is required.") {
+		return true
+	}
+	return false
 }
 
 func toMetadataPatch(decision workflow.Decision, now time.Time) linear.MetadataPatch {

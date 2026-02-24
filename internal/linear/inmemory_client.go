@@ -15,7 +15,7 @@ import (
 type InMemoryClient struct {
 	mu       sync.Mutex
 	issues   map[string]Issue
-	comments map[string][]string
+	comments map[string][]IssueComment
 	states   workflow.States
 }
 
@@ -32,7 +32,7 @@ func NewInMemoryClient(seed []Issue) *InMemoryClient {
 
 	return &InMemoryClient{
 		issues:   issues,
-		comments: map[string][]string{},
+		comments: map[string][]IssueComment{},
 		states:   workflow.DefaultStates(),
 	}
 }
@@ -191,8 +191,36 @@ func (c *InMemoryClient) CreateIssueComment(ctx context.Context, issueID string,
 	if _, ok := c.issues[issueID]; !ok {
 		return fmt.Errorf("issue %s not found", issueID)
 	}
-	c.comments[issueID] = append(c.comments[issueID], body)
+	existing := c.comments[issueID]
+	c.comments[issueID] = append(existing, IssueComment{
+		ID:        fmt.Sprintf("%s-comment-%d", issueID, len(existing)+1),
+		Body:      body,
+		CreatedAt: time.Now().UTC(),
+	})
 	return nil
+}
+
+// ListIssueComments returns issue comments sorted by creation timestamp.
+func (c *InMemoryClient) ListIssueComments(ctx context.Context, issueID string) ([]IssueComment, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, ok := c.issues[issueID]; !ok {
+		return nil, fmt.Errorf("issue %s not found", issueID)
+	}
+
+	comments := append([]IssueComment(nil), c.comments[issueID]...)
+	sort.Slice(comments, func(i, j int) bool {
+		if comments[i].CreatedAt.Equal(comments[j].CreatedAt) {
+			return comments[i].ID < comments[j].ID
+		}
+		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+	})
+	return comments, nil
 }
 
 func cloneInMemoryIssue(issue Issue) Issue {

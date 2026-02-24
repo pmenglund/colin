@@ -37,17 +37,36 @@ func (f *fakeThread) RunInputs(_ context.Context, inputs []codex.Input, opts *co
 }
 
 type fakeClient struct {
-	thread              *fakeThread
-	closed              bool
-	startErr            error
-	lastStartThreadOpts *codex.ThreadStartOptions
+	thread               *fakeThread
+	resumeThread         *fakeThread
+	closed               bool
+	startErr             error
+	resumeErr            error
+	startCalls           int
+	resumeCalls          int
+	lastStartThreadOpts  *codex.ThreadStartOptions
+	lastResumeThreadOpts *codex.ThreadResumeOptions
 }
 
 func (f *fakeClient) StartThread(_ context.Context, opts codex.ThreadStartOptions) (codexThread, error) {
 	optsCopy := opts
+	f.startCalls++
 	f.lastStartThreadOpts = &optsCopy
 	if f.startErr != nil {
 		return nil, f.startErr
+	}
+	return f.thread, nil
+}
+
+func (f *fakeClient) ResumeThread(_ context.Context, opts codex.ThreadResumeOptions) (codexThread, error) {
+	optsCopy := opts
+	f.resumeCalls++
+	f.lastResumeThreadOpts = &optsCopy
+	if f.resumeErr != nil {
+		return nil, f.resumeErr
+	}
+	if f.resumeThread != nil {
+		return f.resumeThread, nil
 	}
 	return f.thread, nil
 }
@@ -181,6 +200,101 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	}
 	if !strings.Contains(outputSchema, "\"after_evidence_ref\"") {
 		t.Fatalf("output schema missing after_evidence_ref: %s", outputSchema)
+	}
+}
+
+func TestExecutorEvaluateAndExecuteResumesExistingThread(t *testing.T) {
+	resumedThread := &fakeThread{
+		id:         "thr_resumed",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented","before_evidence_ref":"","after_evidence_ref":""}`},
+	}
+	client := &fakeClient{
+		thread:       &fakeThread{id: "thr_new"},
+		resumeThread: resumedThread,
+	}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	result, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
+		Identifier: "COLIN-201",
+		Metadata: map[string]string{
+			workflow.MetaThreadID: "thr_existing",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
+	}
+	if result.ThreadID != "thr_resumed" {
+		t.Fatalf("ThreadID = %q, want %q", result.ThreadID, "thr_resumed")
+	}
+	if result.ResumedFromThreadID != "thr_existing" {
+		t.Fatalf("ResumedFromThreadID = %q, want %q", result.ResumedFromThreadID, "thr_existing")
+	}
+	if result.ResumeFallbackReason != "" {
+		t.Fatalf("ResumeFallbackReason = %q, want empty", result.ResumeFallbackReason)
+	}
+	if client.resumeCalls != 1 {
+		t.Fatalf("resumeCalls = %d, want 1", client.resumeCalls)
+	}
+	if client.startCalls != 0 {
+		t.Fatalf("startCalls = %d, want 0", client.startCalls)
+	}
+	if client.lastResumeThreadOpts == nil {
+		t.Fatal("expected resume thread options to be set")
+	}
+	if client.lastResumeThreadOpts.ThreadID != "thr_existing" {
+		t.Fatalf("resume thread id = %q, want %q", client.lastResumeThreadOpts.ThreadID, "thr_existing")
+	}
+}
+
+func TestExecutorEvaluateAndExecuteResumeFallbackStartsNewThread(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_new",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented","before_evidence_ref":"","after_evidence_ref":""}`},
+	}
+	client := &fakeClient{
+		thread:    thread,
+		resumeErr: errors.New("thread missing"),
+	}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	result, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
+		Identifier: "COLIN-202",
+		Metadata: map[string]string{
+			workflow.MetaThreadID: "thr_existing",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
+	}
+	if result.ThreadID != "thr_new" {
+		t.Fatalf("ThreadID = %q, want %q", result.ThreadID, "thr_new")
+	}
+	if result.ResumedFromThreadID != "" {
+		t.Fatalf("ResumedFromThreadID = %q, want empty", result.ResumedFromThreadID)
+	}
+	if !strings.Contains(result.ResumeFallbackReason, "resume thread \"thr_existing\" failed") {
+		t.Fatalf("ResumeFallbackReason = %q, want resume failure context", result.ResumeFallbackReason)
+	}
+	if client.resumeCalls != 1 {
+		t.Fatalf("resumeCalls = %d, want 1", client.resumeCalls)
+	}
+	if client.startCalls != 1 {
+		t.Fatalf("startCalls = %d, want 1", client.startCalls)
+	}
+	if client.lastResumeThreadOpts == nil {
+		t.Fatal("expected resume thread options to be set")
 	}
 }
 

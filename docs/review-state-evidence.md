@@ -47,6 +47,15 @@ When evidence is available, include reviewer-accessible attachment URLs directly
    - `After evidence attachment` reflects the post-change behavior/state.
 6. If the implementation is acceptable, move the issue to `Merge`. If not, comment requested changes and move back to `Todo`.
 
+## Rework Context Reuse
+
+When an issue is moved from `Review` back to `Todo`, Colin reuses review context on the next run by:
+- attempting to resume the previously recorded Codex thread (`colin.thread_id`)
+- collecting non-worker comments posted after the latest `Moved to **Review** after Codex execution.` comment
+- appending those comments to the next execution prompt under `## Review Feedback To Address`
+
+If thread resume fails, Colin starts a new thread and posts a `## Thread Resume Fallback` note comment before the next execution-context comment.
+
 ## Troubleshooting
 
 - If `Thread`, `Branch`, or `Worktree` shows `_not recorded_`, the task can still be reviewed, but the missing context should be noted in a follow-up issue.

@@ -18,12 +18,7 @@ func newSetupCommand(rootOpts *RootOptions) *cobra.Command {
 		Use:   "setup",
 		Short: "Ensure required Linear workflow states for Colin",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			configPath := config.DefaultConfigPath
-			if rootOpts != nil {
-				configPath = rootOpts.ConfigPath
-			}
-
-			cfg, err := config.LoadFromPath(configPath)
+			cfg, err := loadCLIConfig(rootOpts)
 			if err != nil {
 				return err
 			}

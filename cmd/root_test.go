@@ -1,45 +1,64 @@
 package cmd
 
 import (
-	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestRootCommandDefaultRun(t *testing.T) {
+func TestRootCommandRunsWorkerByDefault(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "colin.toml")
+	content := `linear_backend = "fake"
+worker_id = "test-worker"
+dry_run = true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
 	rootCmd := NewRootCommand()
-	buf := new(bytes.Buffer)
-	rootCmd.SetOut(buf)
-	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--config", configPath, "--once"})
 
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("Execute() returned error: %v", err)
-	}
-
-	if got := buf.String(); got != "colin running\n" {
-		t.Fatalf("unexpected output: %q", got)
 	}
 }
 
-func TestRootCommandVerboseFlag(t *testing.T) {
+func TestRootCommandUsesCOLIN_CONFIGWhenConfigFlagUnset(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "colin.toml")
+	content := `linear_backend = "fake"
+worker_id = "test-worker"
+dry_run = true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("COLIN_CONFIG", configPath)
+
 	rootCmd := NewRootCommand()
-	buf := new(bytes.Buffer)
-	rootCmd.SetOut(buf)
-	rootCmd.SetErr(buf)
-	rootCmd.SetArgs([]string{"--verbose"})
+	rootCmd.SetArgs([]string{"--once"})
 
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("Execute() returned error: %v", err)
 	}
+}
 
-	if got := buf.String(); got != "colin running (verbose mode)\n" {
-		t.Fatalf("unexpected output: %q", got)
+func TestRootCommandRootFlagsIncludeWorkerExecutionFlags(t *testing.T) {
+	rootCmd := NewRootCommand()
+	if rootCmd.Flags().Lookup("once") == nil {
+		t.Fatal("expected root command to expose --once")
+	}
+	if rootCmd.Flags().Lookup("dry-run") == nil {
+		t.Fatal("expected root command to expose --dry-run")
 	}
 }
 
 func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	rootCmd := NewRootCommand()
-	buf := new(bytes.Buffer)
+	buf := new(strings.Builder)
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
 	rootCmd.SetArgs([]string{"--help"})
@@ -51,6 +70,12 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	helpOutput := buf.String()
 	if !strings.Contains(helpOutput, "--verbose") {
 		t.Fatalf("expected help output to contain --verbose, got: %q", helpOutput)
+	}
+	if !strings.Contains(helpOutput, "--once") {
+		t.Fatalf("expected help output to contain --once, got: %q", helpOutput)
+	}
+	if !strings.Contains(helpOutput, "--dry-run") {
+		t.Fatalf("expected help output to contain --dry-run, got: %q", helpOutput)
 	}
 	if !strings.Contains(helpOutput, "--config") {
 		t.Fatalf("expected help output to contain --config, got: %q", helpOutput)

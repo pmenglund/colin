@@ -16,6 +16,12 @@ type reviewCommentInput struct {
 	AfterEvidenceRef  string
 }
 
+type threadResumeFallbackCommentInput struct {
+	PreviousThreadID string
+	NewThreadID      string
+	Reason           string
+}
+
 func buildExecutionContextComment(input executionContextInput) string {
 	var b strings.Builder
 	b.WriteString("Starting Codex turn with current execution context.\n\n")
@@ -58,6 +64,23 @@ func buildReviewComment(input reviewCommentInput) string {
 		b.WriteString(afterEvidenceRef)
 	}
 
+	return b.String()
+}
+
+func buildThreadResumeFallbackComment(input threadResumeFallbackCommentInput) string {
+	var b strings.Builder
+	b.WriteString("Could not resume the previous Codex thread; started a new thread instead.\n\n")
+	b.WriteString("## Thread Resume Fallback\n")
+	b.WriteString("- Previous thread: ")
+	b.WriteString(formatContextValue(input.PreviousThreadID))
+	b.WriteString("\n- New thread: ")
+	b.WriteString(formatContextValue(input.NewThreadID))
+	b.WriteString("\n- Reason: ")
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		reason = "resume failed without an error message"
+	}
+	b.WriteString(reason)
 	return b.String()
 }
 

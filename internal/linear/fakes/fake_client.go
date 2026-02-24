@@ -50,6 +50,20 @@ type FakeClient struct {
 		result1 []linear.Issue
 		result2 error
 	}
+	ListIssueCommentsStub        func(context.Context, string) ([]linear.IssueComment, error)
+	listIssueCommentsMutex       sync.RWMutex
+	listIssueCommentsArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+	}
+	listIssueCommentsReturns struct {
+		result1 []linear.IssueComment
+		result2 error
+	}
+	listIssueCommentsReturnsOnCall map[int]struct {
+		result1 []linear.IssueComment
+		result2 error
+	}
 	UpdateIssueMetadataStub        func(context.Context, string, linear.MetadataPatch) error
 	updateIssueMetadataMutex       sync.RWMutex
 	updateIssueMetadataArgsForCall []struct {
@@ -269,6 +283,71 @@ func (fake *FakeClient) ListCandidateIssuesReturnsOnCall(i int, result1 []linear
 	}
 	fake.listCandidateIssuesReturnsOnCall[i] = struct {
 		result1 []linear.Issue
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeClient) ListIssueComments(arg1 context.Context, arg2 string) ([]linear.IssueComment, error) {
+	fake.listIssueCommentsMutex.Lock()
+	ret, specificReturn := fake.listIssueCommentsReturnsOnCall[len(fake.listIssueCommentsArgsForCall)]
+	fake.listIssueCommentsArgsForCall = append(fake.listIssueCommentsArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+	}{arg1, arg2})
+	stub := fake.ListIssueCommentsStub
+	fakeReturns := fake.listIssueCommentsReturns
+	fake.recordInvocation("ListIssueComments", []interface{}{arg1, arg2})
+	fake.listIssueCommentsMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *FakeClient) ListIssueCommentsCallCount() int {
+	fake.listIssueCommentsMutex.RLock()
+	defer fake.listIssueCommentsMutex.RUnlock()
+	return len(fake.listIssueCommentsArgsForCall)
+}
+
+func (fake *FakeClient) ListIssueCommentsCalls(stub func(context.Context, string) ([]linear.IssueComment, error)) {
+	fake.listIssueCommentsMutex.Lock()
+	defer fake.listIssueCommentsMutex.Unlock()
+	fake.ListIssueCommentsStub = stub
+}
+
+func (fake *FakeClient) ListIssueCommentsArgsForCall(i int) (context.Context, string) {
+	fake.listIssueCommentsMutex.RLock()
+	defer fake.listIssueCommentsMutex.RUnlock()
+	argsForCall := fake.listIssueCommentsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
+}
+
+func (fake *FakeClient) ListIssueCommentsReturns(result1 []linear.IssueComment, result2 error) {
+	fake.listIssueCommentsMutex.Lock()
+	defer fake.listIssueCommentsMutex.Unlock()
+	fake.ListIssueCommentsStub = nil
+	fake.listIssueCommentsReturns = struct {
+		result1 []linear.IssueComment
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeClient) ListIssueCommentsReturnsOnCall(i int, result1 []linear.IssueComment, result2 error) {
+	fake.listIssueCommentsMutex.Lock()
+	defer fake.listIssueCommentsMutex.Unlock()
+	fake.ListIssueCommentsStub = nil
+	if fake.listIssueCommentsReturnsOnCall == nil {
+		fake.listIssueCommentsReturnsOnCall = make(map[int]struct {
+			result1 []linear.IssueComment
+			result2 error
+		})
+	}
+	fake.listIssueCommentsReturnsOnCall[i] = struct {
+		result1 []linear.IssueComment
 		result2 error
 	}{result1, result2}
 }

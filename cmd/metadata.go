@@ -49,12 +49,7 @@ func newMetadataCommand(rootOpts *RootOptions) *cobra.Command {
 			"colin metadata COLIN-42",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			configPath := config.DefaultConfigPath
-			if rootOpts != nil {
-				configPath = rootOpts.ConfigPath
-			}
-
-			cfg, err := config.LoadFromPath(configPath)
+			cfg, err := loadCLIConfig(rootOpts)
 			if err != nil {
 				return err
 			}

@@ -25,6 +25,7 @@ type fakeClientState struct {
 	stateUpdates             int
 	metadataUpdates          int
 	comments                 map[string][]string
+	issueComments            map[string][]linear.IssueComment
 	conflictOnNextStateWrite bool
 	conflictOnNextMetaWrite  bool
 }
@@ -109,7 +110,28 @@ func newFakeLinearClient(state *fakeClientState) *fakes.FakeClient {
 			state.comments = map[string][]string{}
 		}
 		state.comments[issueID] = append(state.comments[issueID], body)
+		if state.issueComments == nil {
+			state.issueComments = map[string][]linear.IssueComment{}
+		}
+		state.issueComments[issueID] = append(state.issueComments[issueID], linear.IssueComment{
+			ID:        fmt.Sprintf("%s-generated-%d", issueID, len(state.issueComments[issueID])+1),
+			Body:      body,
+			CreatedAt: time.Now().UTC(),
+		})
 		return nil
+	})
+
+	fake.ListIssueCommentsCalls(func(_ context.Context, issueID string) ([]linear.IssueComment, error) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		comments := append([]linear.IssueComment(nil), state.issueComments[issueID]...)
+		sort.Slice(comments, func(i, j int) bool {
+			if comments[i].CreatedAt.Equal(comments[j].CreatedAt) {
+				return comments[i].ID < comments[j].ID
+			}
+			return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+		})
+		return comments, nil
 	})
 
 	return fake
@@ -1177,6 +1199,128 @@ func TestRunnerInProgressCommentsExecutionContextAfterThreadIDIsAvailable(t *tes
 	wantContextComment := "Starting Codex turn with current execution context.\n\n## Execution Context\n- Thread: `thr_2`\n- Branch: `colin/COL-1`\n- Worktree: `/tmp/colin/worktrees/COL-1`"
 	if comments[0] != wantContextComment {
 		t.Fatalf("comment body = %q, want %q", comments[0], wantContextComment)
+	}
+}
+
+func TestRunnerInProgressIncludesHumanReviewFeedbackSinceLastReviewMarker(t *testing.T) {
+	reviewAt := time.Date(2026, 2, 24, 6, 0, 0, 0, time.UTC)
+	humanAt := reviewAt.Add(2 * time.Minute)
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "implement requested change",
+				Metadata: map[string]string{
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+		issueComments: map[string][]linear.IssueComment{
+			"1": {
+				{
+					ID:        "c-review",
+					Body:      "Moved to **Review** after Codex execution.\n\n## Execution Summary\nbefore/after",
+					CreatedAt: reviewAt,
+				},
+				{
+					ID:        "c-context",
+					Body:      "Starting Codex turn with current execution context.\n\n## Execution Context\n- Thread: `thr_1`",
+					CreatedAt: reviewAt.Add(time.Minute),
+				},
+				{
+					ID:        "c-human",
+					Body:      "Please remove backwards compatibility for `colin worker run`.",
+					CreatedAt: humanAt,
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:  true,
+			ExecutionSummary: "implemented the requested change",
+			ThreadID:         "thr_2",
+		},
+	}
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if !strings.Contains(executor.lastIssue.Description, "## Review Feedback To Address") {
+		t.Fatalf("execution description missing review feedback block: %q", executor.lastIssue.Description)
+	}
+	if !strings.Contains(executor.lastIssue.Description, "Please remove backwards compatibility") {
+		t.Fatalf("execution description missing human feedback: %q", executor.lastIssue.Description)
+	}
+	if strings.Contains(executor.lastIssue.Description, "Starting Codex turn with current execution context.") {
+		t.Fatalf("execution description should not include worker-generated comments: %q", executor.lastIssue.Description)
+	}
+}
+
+func TestRunnerInProgressResumeFallbackPostsCommentBeforeExecutionContext(t *testing.T) {
+	state := &fakeClientState{
+		issues: map[string]linear.Issue{
+			"1": {
+				ID:          "1",
+				Identifier:  "COL-1",
+				StateName:   workflow.StateInProgress,
+				Description: "complete issue",
+				Metadata: map[string]string{
+					workflow.MetaThreadID:     "thr_old",
+					workflow.MetaWorktreePath: "/tmp/colin/worktrees/COL-1",
+					workflow.MetaBranchName:   "colin/COL-1",
+				},
+			},
+		},
+	}
+	client := newFakeLinearClient(state)
+	executor := &fakeInProgressExecutor{
+		result: InProgressExecutionResult{
+			IsWellSpecified:      true,
+			ExecutionSummary:     "implemented the requested change",
+			ThreadID:             "thr_new",
+			ResumeFallbackReason: "resume thread \"thr_old\" failed: thread missing",
+		},
+	}
+	r := Runner{
+		Linear:   client,
+		Executor: executor,
+		TeamID:   "team-1",
+		WorkerID: "worker-1",
+		LeaseTTL: 5 * time.Minute,
+		Clock:    time.Now,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	comments := state.comments["1"]
+	if len(comments) != 3 {
+		t.Fatalf("comment count = %d, want 3", len(comments))
+	}
+	if !strings.Contains(comments[0], "## Thread Resume Fallback") {
+		t.Fatalf("first comment should be resume fallback note, got %q", comments[0])
+	}
+	if !strings.HasPrefix(comments[1], "Starting Codex turn with current execution context.") {
+		t.Fatalf("second comment should be execution context, got %q", comments[1])
+	}
+	if !strings.HasPrefix(comments[2], "Moved to **Review** after Codex execution.") {
+		t.Fatalf("third comment should be review completion, got %q", comments[2])
 	}
 }
 

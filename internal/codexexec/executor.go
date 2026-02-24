@@ -75,14 +75,10 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 	}
 	defer client.Close()
 
-	thread, err := client.StartThread(ctx, codex.ThreadStartOptions{
-		Model:          e.model,
-		Cwd:            e.resolveThreadCWD(issue),
-		ApprovalPolicy: codex.ApprovalPolicyNever,
-		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
-	})
+	threadCWD := e.resolveThreadCWD(issue)
+	thread, resumedFromThreadID, resumeFallbackReason, err := e.startOrResumeThread(ctx, client, issue, threadCWD)
 	if err != nil {
-		return execution.InProgressExecutionResult{}, fmt.Errorf("start thread: %w", err)
+		return execution.InProgressExecutionResult{}, err
 	}
 
 	responseSchema := codex.MustJSON(map[string]any{
@@ -104,7 +100,7 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 	}
 
 	turn, err := thread.RunInputs(ctx, []codex.Input{codex.TextInput(prompt)}, &codex.TurnOptions{
-		Cwd:          e.resolveThreadCWD(issue),
+		Cwd:          threadCWD,
 		Model:        e.model,
 		OutputSchema: responseSchema,
 	})
@@ -129,14 +125,64 @@ func (e *Executor) EvaluateAndExecute(ctx context.Context, issue linear.Issue) (
 	}
 
 	return execution.InProgressExecutionResult{
-		IsWellSpecified:   payload.IsWellSpecified,
-		NeedsInputSummary: strings.TrimSpace(payload.NeedsInputSummary),
-		ExecutionSummary:  strings.TrimSpace(payload.ExecutionSummary),
-		ExecutionContext:  strings.TrimSpace(prompt),
-		ThreadID:          strings.TrimSpace(thread.ID()),
-		BeforeEvidenceRef: strings.TrimSpace(payload.BeforeEvidenceRef),
-		AfterEvidenceRef:  strings.TrimSpace(payload.AfterEvidenceRef),
+		IsWellSpecified:      payload.IsWellSpecified,
+		NeedsInputSummary:    strings.TrimSpace(payload.NeedsInputSummary),
+		ExecutionSummary:     strings.TrimSpace(payload.ExecutionSummary),
+		ExecutionContext:     strings.TrimSpace(prompt),
+		ThreadID:             strings.TrimSpace(thread.ID()),
+		ResumedFromThreadID:  strings.TrimSpace(resumedFromThreadID),
+		ResumeFallbackReason: strings.TrimSpace(resumeFallbackReason),
+		BeforeEvidenceRef:    strings.TrimSpace(payload.BeforeEvidenceRef),
+		AfterEvidenceRef:     strings.TrimSpace(payload.AfterEvidenceRef),
 	}, nil
+}
+
+func (e *Executor) startOrResumeThread(
+	ctx context.Context,
+	client codexClient,
+	issue linear.Issue,
+	threadCWD string,
+) (codexThread, string, string, error) {
+	existingThreadID := strings.TrimSpace(issue.Metadata[workflow.MetaThreadID])
+	if existingThreadID != "" {
+		thread, err := client.ResumeThread(ctx, codex.ThreadResumeOptions{
+			ThreadID:       existingThreadID,
+			Model:          e.model,
+			Cwd:            threadCWD,
+			ApprovalPolicy: codex.ApprovalPolicyNever,
+			Sandbox:        codex.SandboxModeWorkspaceWrite,
+		})
+		if err == nil {
+			return thread, existingThreadID, "", nil
+		}
+
+		fallbackThread, startErr := client.StartThread(ctx, codex.ThreadStartOptions{
+			Model:          e.model,
+			Cwd:            threadCWD,
+			ApprovalPolicy: codex.ApprovalPolicyNever,
+			SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
+		})
+		if startErr != nil {
+			return nil, "", "", fmt.Errorf(
+				"resume thread %q failed (%v), and start fallback thread failed: %w",
+				existingThreadID,
+				err,
+				startErr,
+			)
+		}
+		return fallbackThread, "", fmt.Sprintf("resume thread %q failed: %v", existingThreadID, err), nil
+	}
+
+	thread, err := client.StartThread(ctx, codex.ThreadStartOptions{
+		Model:          e.model,
+		Cwd:            threadCWD,
+		ApprovalPolicy: codex.ApprovalPolicyNever,
+		SandboxPolicy:  codex.SandboxModeWorkspaceWrite,
+	})
+	if err != nil {
+		return nil, "", "", fmt.Errorf("start thread: %w", err)
+	}
+	return thread, "", "", nil
 }
 
 func (e *Executor) commitTurnChanges(ctx context.Context, issue linear.Issue) error {
@@ -339,6 +385,7 @@ func resolveThreadCWD(defaultCWD string, worktreePath string) string {
 
 type codexClient interface {
 	StartThread(ctx context.Context, options codex.ThreadStartOptions) (codexThread, error)
+	ResumeThread(ctx context.Context, options codex.ThreadResumeOptions) (codexThread, error)
 	Close() error
 }
 
@@ -353,6 +400,14 @@ type realCodexClient struct {
 
 func (c realCodexClient) StartThread(ctx context.Context, options codex.ThreadStartOptions) (codexThread, error) {
 	thread, err := c.client.StartThread(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	return realCodexThread{thread: thread}, nil
+}
+
+func (c realCodexClient) ResumeThread(ctx context.Context, options codex.ThreadResumeOptions) (codexThread, error) {
+	thread, err := c.client.ResumeThread(ctx, options)
 	if err != nil {
 		return nil, err
 	}

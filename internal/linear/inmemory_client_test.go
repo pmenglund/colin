@@ -162,6 +162,37 @@ func TestInMemoryClientUpdates(t *testing.T) {
 	}
 }
 
+func TestInMemoryClientListIssueComments(t *testing.T) {
+	client := NewInMemoryClient([]Issue{
+		{
+			ID:          "1",
+			Identifier:  "COL-1",
+			StateName:   "Todo",
+			Description: "spec",
+		},
+	})
+	if err := client.CreateIssueComment(context.Background(), "1", "first"); err != nil {
+		t.Fatalf("CreateIssueComment() error = %v", err)
+	}
+	if err := client.CreateIssueComment(context.Background(), "1", "second"); err != nil {
+		t.Fatalf("CreateIssueComment() error = %v", err)
+	}
+
+	comments, err := client.ListIssueComments(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("ListIssueComments() error = %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
+	}
+	if comments[0].Body != "first" || comments[1].Body != "second" {
+		t.Fatalf("unexpected comment order: %#v", comments)
+	}
+	if comments[0].ID == "" || comments[1].ID == "" {
+		t.Fatalf("expected generated comment IDs, got %#v", comments)
+	}
+}
+
 func TestInMemoryClientGetIssueByIdentifier(t *testing.T) {
 	client := NewInMemoryClient([]Issue{
 		{

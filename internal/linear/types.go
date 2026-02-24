@@ -24,6 +24,13 @@ type Issue struct {
 	BlockedBy   []string
 }
 
+// IssueComment is the subset of Linear comment fields used by worker logic.
+type IssueComment struct {
+	ID        string
+	Body      string
+	CreatedAt time.Time
+}
+
 // MetadataPatch describes updates to colin metadata persisted in Linear.
 type MetadataPatch struct {
 	Set    map[string]string

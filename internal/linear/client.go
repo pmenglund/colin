@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ const (
 type Client interface {
 	ListCandidateIssues(ctx context.Context, teamID string) ([]Issue, error)
 	GetIssue(ctx context.Context, issueID string) (Issue, error)
+	ListIssueComments(ctx context.Context, issueID string) ([]IssueComment, error)
 	UpdateIssueState(ctx context.Context, issueID string, toState string) error
 	UpdateIssueMetadata(ctx context.Context, issueID string, metadata MetadataPatch) error
 	CreateIssueComment(ctx context.Context, issueID string, body string) error
@@ -397,6 +399,62 @@ func (c *HTTPClient) CreateIssueComment(ctx context.Context, issueID string, bod
 		return fmt.Errorf("create issue comment: %w", ErrConflict)
 	}
 	return nil
+}
+
+func (c *HTTPClient) ListIssueComments(ctx context.Context, issueID string) ([]IssueComment, error) {
+	query := `query ListIssueComments($issueId: String!) {
+  issue(id: $issueId) {
+    comments(first: 100) {
+      nodes {
+        id
+        body
+        createdAt
+      }
+    }
+  }
+}`
+
+	var resp struct {
+		Issue *struct {
+			Comments struct {
+				Nodes []struct {
+					ID        string `json:"id"`
+					Body      string `json:"body"`
+					CreatedAt string `json:"createdAt"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"issue"`
+	}
+
+	if err := c.graphQL(ctx, query, map[string]any{"issueId": issueID}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
+		return nil, err
+	}
+	if resp.Issue == nil {
+		return nil, fmt.Errorf("issue %s not found", issueID)
+	}
+
+	out := make([]IssueComment, 0, len(resp.Issue.Comments.Nodes))
+	for _, node := range resp.Issue.Comments.Nodes {
+		createdAtRaw := strings.TrimSpace(node.CreatedAt)
+		createdAt, err := time.Parse(time.RFC3339, createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse issue comment %q createdAt %q: %w", strings.TrimSpace(node.ID), createdAtRaw, err)
+		}
+		out = append(out, IssueComment{
+			ID:        strings.TrimSpace(node.ID),
+			Body:      strings.TrimSpace(node.Body),
+			CreatedAt: createdAt.UTC(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
 }
 
 func (c *HTTPClient) resolveStateID(ctx context.Context, stateName string) (string, error) {
