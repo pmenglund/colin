@@ -20,80 +20,92 @@ func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
 		Short: "Run the Linear issue worker",
 	}
 
-	var once bool
-	var dryRun bool
+	runOpts := &workerRunOptions{}
 
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run worker reconciliation",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			configPath := config.DefaultConfigPath
-			if rootOpts != nil {
-				configPath = rootOpts.ConfigPath
-			}
-
-			cfg, err := config.LoadFromPath(configPath)
-			if err != nil {
-				return err
-			}
-
-			if cmd.Flags().Changed("dry-run") {
-				cfg.DryRun = dryRun
-			}
-
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-
-			runtimeStates := cfg.WorkflowStates.AsRuntimeStates()
-			client := newLinearClient(cfg, runtimeStates)
-			if cfg.LinearBackend == config.LinearBackendHTTP {
-				admin := linear.NewWorkflowStateAdmin(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
-				resolved, err := admin.ResolveWorkflowStates(cmd.Context(), runtimeStates)
-				if err != nil {
-					return fmt.Errorf("resolve workflow states: %w; run `colin setup` to create/validate mapped states", err)
-				}
-				runtimeStates = resolved.RuntimeStates()
-				configureLinearRuntimeState(client, runtimeStates, resolved.StateIDByName())
-			}
-
-			executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
-			mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates)
-			pullRequestManager := newPullRequestManager(cfg, cwd)
-			bootstrapper := newTaskBootstrapper(cfg, cwd)
-
-			runner := &worker.Runner{
-				Linear:             client,
-				Executor:           executor,
-				MergeExecutor:      mergeExecutor,
-				PullRequestManager: pullRequestManager,
-				RequirePullRequest: cfg.LinearBackend == config.LinearBackendHTTP,
-				Bootstrapper:       bootstrapper,
-				TeamID:             cfg.LinearTeamID,
-				ProjectFilter:      cfg.ProjectFilter,
-				WorkerID:           cfg.WorkerID,
-				PollEvery:          cfg.PollEvery,
-				LeaseTTL:           cfg.LeaseTTL,
-				MaxConcurrency:     cfg.MaxConcurrency,
-				DryRun:             cfg.DryRun,
-				States:             runtimeStates,
-				Logger:             logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
-			}
-
-			if once {
-				return runner.RunOnce(cmd.Context())
-			}
-
-			return runner.Run(cmd.Context())
+			return runWorker(cmd, rootOpts, *runOpts)
 		},
 	}
 
-	runCmd.Flags().BoolVar(&once, "once", false, "Run one poll cycle and exit")
-	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Log decisions without writing to Linear")
+	addWorkerRunFlags(runCmd, runOpts)
 
 	workerCmd.AddCommand(runCmd)
 	return workerCmd
+}
+
+type workerRunOptions struct {
+	once   bool
+	dryRun bool
+}
+
+func addWorkerRunFlags(cmd *cobra.Command, opts *workerRunOptions) {
+	cmd.Flags().BoolVar(&opts.once, "once", false, "Run one poll cycle and exit")
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Log decisions without writing to Linear")
+}
+
+func runWorker(cmd *cobra.Command, rootOpts *RootOptions, opts workerRunOptions) error {
+	configPath := config.DefaultConfigPath
+	if rootOpts != nil {
+		configPath = rootOpts.ConfigPath
+	}
+
+	cfg, err := config.LoadFromPath(configPath)
+	if err != nil {
+		return err
+	}
+
+	if cmd.Flags().Changed("dry-run") {
+		cfg.DryRun = opts.dryRun
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	runtimeStates := cfg.WorkflowStates.AsRuntimeStates()
+	client := newLinearClient(cfg, runtimeStates)
+	if cfg.LinearBackend == config.LinearBackendHTTP {
+		admin := linear.NewWorkflowStateAdmin(cfg.LinearBaseURL, cfg.LinearAPIToken, cfg.LinearTeamID, nil)
+		resolved, err := admin.ResolveWorkflowStates(cmd.Context(), runtimeStates)
+		if err != nil {
+			return fmt.Errorf("resolve workflow states: %w; run `colin setup` to create/validate mapped states", err)
+		}
+		runtimeStates = resolved.RuntimeStates()
+		configureLinearRuntimeState(client, runtimeStates, resolved.StateIDByName())
+	}
+
+	executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr())
+	mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates)
+	pullRequestManager := newPullRequestManager(cfg, cwd)
+	bootstrapper := newTaskBootstrapper(cfg, cwd)
+
+	runner := &worker.Runner{
+		Linear:             client,
+		Executor:           executor,
+		MergeExecutor:      mergeExecutor,
+		PullRequestManager: pullRequestManager,
+		RequirePullRequest: cfg.LinearBackend == config.LinearBackendHTTP,
+		Bootstrapper:       bootstrapper,
+		TeamID:             cfg.LinearTeamID,
+		ProjectFilter:      cfg.ProjectFilter,
+		WorkerID:           cfg.WorkerID,
+		PollEvery:          cfg.PollEvery,
+		LeaseTTL:           cfg.LeaseTTL,
+		MaxConcurrency:     cfg.MaxConcurrency,
+		DryRun:             cfg.DryRun,
+		States:             runtimeStates,
+		Logger:             logging.NewSlog(cmd.ErrOrStderr(), logging.LevelInfo),
+	}
+
+	if opts.once {
+		return runner.RunOnce(cmd.Context())
+	}
+
+	return runner.Run(cmd.Context())
 }
 
 func newLinearClient(cfg config.Config, states workflow.States) linear.Client {

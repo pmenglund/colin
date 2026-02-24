@@ -21,7 +21,7 @@ Use this whenever you first configure a workspace or change workflow-state mappi
 ### Run one reconciliation cycle
 
 ```bash
-./bin/colin --config ./colin.toml worker run --once
+./bin/colin --config ./colin.toml --once
 ```
 
 Useful for validation, controlled rollouts, and incident checks.
@@ -29,7 +29,7 @@ Useful for validation, controlled rollouts, and incident checks.
 ### Run one dry-run reconciliation cycle
 
 ```bash
-./bin/colin --config ./colin.toml worker run --once --dry-run
+./bin/colin --config ./colin.toml --once --dry-run
 ```
 
 Use this to inspect decisions without writing state or metadata.
@@ -37,7 +37,7 @@ Use this to inspect decisions without writing state or metadata.
 ### Run continuously
 
 ```bash
-./bin/colin --config ./colin.toml worker run
+./bin/colin --config ./colin.toml
 ```
 
 This is the standard operating mode.
