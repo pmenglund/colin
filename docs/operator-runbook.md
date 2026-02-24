@@ -63,7 +63,7 @@ Edit `colin.toml` and set at least:
     go run . --help
     go run . setup --help
 
-Expected commands include `setup`, `metadata`, and `worker`; expected root flags include `--config`, `--once`, and `--dry-run`.
+Expected commands include `setup` and `metadata`; expected root flags include `--config`, `--once`, and `--dry-run`.
 
 ### 3. Ensure workflow states
 

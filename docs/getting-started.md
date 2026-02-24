@@ -48,7 +48,7 @@ Optional but common:
 ./bin/colin setup --help
 ```
 
-You should see `setup`, `metadata`, and `worker` commands plus the root `--config`, `--once`, and `--dry-run` flags.
+You should see `setup` and `metadata` commands plus the root `--config`, `--once`, and `--dry-run` flags.
 
 ## 4. Initialize/validate Linear workflow states
 

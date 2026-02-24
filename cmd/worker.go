@@ -14,28 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newWorkerCommand(rootOpts *RootOptions) *cobra.Command {
-	workerCmd := &cobra.Command{
-		Use:   "worker",
-		Short: "Run the Linear issue worker",
-	}
-
-	runOpts := &workerRunOptions{}
-
-	runCmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run worker reconciliation",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runWorker(cmd, rootOpts, *runOpts)
-		},
-	}
-
-	addWorkerRunFlags(runCmd, runOpts)
-
-	workerCmd.AddCommand(runCmd)
-	return workerCmd
-}
-
 type workerRunOptions struct {
 	once   bool
 	dryRun bool

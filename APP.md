@@ -90,7 +90,7 @@ If merge coordinates are inconsistent (for example: missing branch or missing wo
 
 ## Repository Layout
 
-- `cmd/` - Cobra command wiring (`root`, `worker run` compatibility command)
+- `cmd/` - Cobra command wiring (root worker execution plus `setup` and `metadata` subcommands)
 - `internal/config/` - environment and runtime configuration parsing
 - `internal/codexexec/` - Codex SDK adapter for evaluating/executing `In Progress` issues
 - `internal/linear/` - Linear GraphQL client and metadata persistence helpers

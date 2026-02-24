@@ -73,8 +73,8 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	if !strings.Contains(helpOutput, "--dry-run") {
 		t.Fatalf("expected help output to contain --dry-run, got: %q", helpOutput)
 	}
-	if !strings.Contains(helpOutput, "worker") {
-		t.Fatalf("expected help output to contain worker command, got: %q", helpOutput)
+	if strings.Contains(helpOutput, "\n  worker") {
+		t.Fatalf("expected help output to omit worker command, got: %q", helpOutput)
 	}
 	if !strings.Contains(helpOutput, "setup") {
 		t.Fatalf("expected help output to contain setup command, got: %q", helpOutput)

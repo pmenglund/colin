@@ -489,7 +489,7 @@ func buildColinBinary(t *testing.T, repoRoot string) string {
 }
 
 func runLiveWorkerOnce(binaryPath string, sandboxRepoRoot string, configPath string, codexHome string) (string, error) {
-	cmd := exec.Command(binaryPath, "--config", configPath, "worker", "run", "--once")
+	cmd := exec.Command(binaryPath, "--config", configPath, "--once")
 	cmd.Dir = sandboxRepoRoot
 	cmd.Env = append(os.Environ(),
 		"CODEX_HOME="+codexHome,

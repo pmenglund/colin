@@ -22,7 +22,7 @@ dry_run = true
 		t.Fatalf("WriteFile(%s) error = %v", configPath, err)
 	}
 
-	cmd := exec.Command("go", "run", ".", "--config", configPath, "worker", "run", "--once")
+	cmd := exec.Command("go", "run", ".", "--config", configPath, "--once")
 	cmd.Dir = filepath.Clean("..")
 	cmd.Env = append(os.Environ(),
 		"LINEAR_API_TOKEN=",

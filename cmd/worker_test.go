@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-func TestWorkerRunHelp(t *testing.T) {
+func TestWorkerFlagsAvailableOnRootHelp(t *testing.T) {
 	rootCmd := NewRootCommand()
 	buf := new(bytes.Buffer)
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
-	rootCmd.SetArgs([]string{"worker", "run", "--help"})
+	rootCmd.SetArgs([]string{"--help"})
 
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("Execute() returned error: %v", err)
@@ -36,7 +36,7 @@ func TestWorkerRunRequiresLinearEnv(t *testing.T) {
 	buf := new(bytes.Buffer)
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
-	rootCmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "missing.toml"), "worker", "run", "--once"})
+	rootCmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "missing.toml"), "--once"})
 
 	err := rootCmd.Execute()
 	if err == nil {
@@ -66,7 +66,7 @@ dry_run = true
 	buf := new(bytes.Buffer)
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
-	rootCmd.SetArgs([]string{"--config", configPath, "worker", "run", "--once"})
+	rootCmd.SetArgs([]string{"--config", configPath, "--once"})
 
 	err := rootCmd.Execute()
 	if err == nil {
@@ -96,7 +96,7 @@ dry_run = true
 	buf := new(bytes.Buffer)
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
-	rootCmd.SetArgs([]string{"--config", configPath, "worker", "run", "--once"})
+	rootCmd.SetArgs([]string{"--config", configPath, "--once"})
 
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("Execute() returned error: %v", err)

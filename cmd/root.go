@@ -29,7 +29,6 @@ func NewRootCommand() *cobra.Command {
 	addWorkerRunFlags(rootCmd, runOpts)
 	rootCmd.AddCommand(newMetadataCommand(opts))
 	rootCmd.AddCommand(newSetupCommand(opts))
-	rootCmd.AddCommand(newWorkerCommand(opts))
 
 	return rootCmd
 }
