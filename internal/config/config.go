@@ -18,6 +18,7 @@ import (
 const (
 	defaultLinearBaseURL  = "https://api.linear.app/graphql"
 	defaultLinearBackend  = LinearBackendHTTP
+	defaultGitHubAPIURL   = "https://api.github.com"
 	defaultBaseBranch     = "main"
 	defaultPushAfterMerge = true
 	defaultPollEvery      = 30 * time.Second
@@ -36,41 +37,51 @@ const (
 
 // Config is runtime configuration for the Linear worker.
 type Config struct {
-	LinearAPIToken  string
-	LinearTeamID    string
-	LinearBaseURL   string
-	LinearBackend   string
-	BaseBranch      string
-	PushAfterMerge  bool
-	ProjectFilter   []string
-	WorkPromptPath  string
-	MergePromptPath string
-	ColinHome       string
-	WorkerID        string
-	PollEvery       time.Duration
-	LeaseTTL        time.Duration
-	MaxConcurrency  int
-	DryRun          bool
-	WorkflowStates  WorkflowStates
+	LinearAPIToken          string
+	LinearTeamID            string
+	LinearBaseURL           string
+	LinearBackend           string
+	GitHubAPIURL            string
+	GitHubAppID             string
+	GitHubAppInstallationID string
+	GitHubAppPrivateKey     string
+	GitHubAppPrivateKeyPath string
+	BaseBranch              string
+	PushAfterMerge          bool
+	ProjectFilter           []string
+	WorkPromptPath          string
+	MergePromptPath         string
+	ColinHome               string
+	WorkerID                string
+	PollEvery               time.Duration
+	LeaseTTL                time.Duration
+	MaxConcurrency          int
+	DryRun                  bool
+	WorkflowStates          WorkflowStates
 }
 
 type fileConfig struct {
-	LinearAPIToken  string         `toml:"linear_api_token"`
-	LinearTeamID    string         `toml:"linear_team_id"`
-	LinearBaseURL   string         `toml:"linear_base_url"`
-	LinearBackend   string         `toml:"linear_backend"`
-	BaseBranch      string         `toml:"base_branch"`
-	PushAfterMerge  *bool          `toml:"push_after_merge"`
-	ProjectFilter   string         `toml:"project_filter"`
-	WorkPromptPath  string         `toml:"work_prompt_path"`
-	MergePromptPath string         `toml:"merge_prompt_path"`
-	ColinHome       string         `toml:"colin_home"`
-	WorkerID        string         `toml:"worker_id"`
-	PollEvery       string         `toml:"poll_every"`
-	LeaseTTL        string         `toml:"lease_ttl"`
-	MaxConcurrency  *int           `toml:"max_concurrency"`
-	DryRun          *bool          `toml:"dry_run"`
-	WorkflowStates  WorkflowStates `toml:"workflow_states"`
+	LinearAPIToken          string         `toml:"linear_api_token"`
+	LinearTeamID            string         `toml:"linear_team_id"`
+	LinearBaseURL           string         `toml:"linear_base_url"`
+	LinearBackend           string         `toml:"linear_backend"`
+	GitHubAPIURL            string         `toml:"github_api_url"`
+	GitHubAppID             string         `toml:"github_app_id"`
+	GitHubAppInstallationID string         `toml:"github_app_installation_id"`
+	GitHubAppPrivateKey     string         `toml:"github_app_private_key"`
+	GitHubAppPrivateKeyPath string         `toml:"github_app_private_key_path"`
+	BaseBranch              string         `toml:"base_branch"`
+	PushAfterMerge          *bool          `toml:"push_after_merge"`
+	ProjectFilter           string         `toml:"project_filter"`
+	WorkPromptPath          string         `toml:"work_prompt_path"`
+	MergePromptPath         string         `toml:"merge_prompt_path"`
+	ColinHome               string         `toml:"colin_home"`
+	WorkerID                string         `toml:"worker_id"`
+	PollEvery               string         `toml:"poll_every"`
+	LeaseTTL                string         `toml:"lease_ttl"`
+	MaxConcurrency          *int           `toml:"max_concurrency"`
+	DryRun                  *bool          `toml:"dry_run"`
+	WorkflowStates          WorkflowStates `toml:"workflow_states"`
 }
 
 // WorkflowStates configures canonical workflow states to actual Linear state names.
@@ -156,6 +167,7 @@ func LoadFromPath(configPath string) (Config, error) {
 	cfg := Config{
 		LinearBaseURL:  defaultLinearBaseURL,
 		LinearBackend:  defaultLinearBackend,
+		GitHubAPIURL:   defaultGitHubAPIURL,
 		BaseBranch:     defaultBaseBranch,
 		PushAfterMerge: defaultPushAfterMerge,
 		ColinHome:      defaultColinHome(),
@@ -191,6 +203,7 @@ func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		LinearBaseURL:  defaultLinearBaseURL,
 		LinearBackend:  defaultLinearBackend,
+		GitHubAPIURL:   defaultGitHubAPIURL,
 		BaseBranch:     defaultBaseBranch,
 		PushAfterMerge: defaultPushAfterMerge,
 		ColinHome:      defaultColinHome(),
@@ -238,6 +251,21 @@ func applyFileConfig(cfg *Config, path string) error {
 	}
 	if strings.TrimSpace(parsed.LinearBackend) != "" {
 		cfg.LinearBackend = strings.TrimSpace(parsed.LinearBackend)
+	}
+	if strings.TrimSpace(parsed.GitHubAPIURL) != "" {
+		cfg.GitHubAPIURL = strings.TrimSpace(parsed.GitHubAPIURL)
+	}
+	if strings.TrimSpace(parsed.GitHubAppID) != "" {
+		cfg.GitHubAppID = strings.TrimSpace(parsed.GitHubAppID)
+	}
+	if strings.TrimSpace(parsed.GitHubAppInstallationID) != "" {
+		cfg.GitHubAppInstallationID = strings.TrimSpace(parsed.GitHubAppInstallationID)
+	}
+	if strings.TrimSpace(parsed.GitHubAppPrivateKey) != "" {
+		cfg.GitHubAppPrivateKey = strings.TrimSpace(parsed.GitHubAppPrivateKey)
+	}
+	if strings.TrimSpace(parsed.GitHubAppPrivateKeyPath) != "" {
+		cfg.GitHubAppPrivateKeyPath = strings.TrimSpace(parsed.GitHubAppPrivateKeyPath)
 	}
 	if strings.TrimSpace(parsed.BaseBranch) != "" {
 		cfg.BaseBranch = strings.TrimSpace(parsed.BaseBranch)
@@ -324,6 +352,21 @@ func applyEnvOverrides(cfg *Config) error {
 	if v, ok := readString("COLIN_LINEAR_BACKEND"); ok {
 		cfg.LinearBackend = v
 	}
+	if v, ok := readString("GITHUB_API_URL"); ok {
+		cfg.GitHubAPIURL = v
+	}
+	if v, ok := readString("GITHUB_APP_ID"); ok {
+		cfg.GitHubAppID = v
+	}
+	if v, ok := readString("GITHUB_APP_INSTALLATION_ID"); ok {
+		cfg.GitHubAppInstallationID = v
+	}
+	if v, ok := readString("GITHUB_APP_PRIVATE_KEY"); ok {
+		cfg.GitHubAppPrivateKey = v
+	}
+	if v, ok := readString("GITHUB_APP_PRIVATE_KEY_PATH"); ok {
+		cfg.GitHubAppPrivateKeyPath = v
+	}
 	if v, ok := readString("COLIN_BASE_BRANCH"); ok {
 		cfg.BaseBranch = v
 	}
@@ -393,6 +436,15 @@ func (c Config) Validate() error {
 		if c.LinearTeamID == "" {
 			return errors.New("LINEAR_TEAM_ID is required")
 		}
+		if strings.TrimSpace(c.GitHubAppID) == "" {
+			return errors.New("GITHUB_APP_ID is required")
+		}
+		if strings.TrimSpace(c.GitHubAppInstallationID) == "" {
+			return errors.New("GITHUB_APP_INSTALLATION_ID is required")
+		}
+		if strings.TrimSpace(c.GitHubAppPrivateKey) == "" && strings.TrimSpace(c.GitHubAppPrivateKeyPath) == "" {
+			return errors.New("either GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is required")
+		}
 	case LinearBackendFake:
 		// Fake backend does not require real Linear credentials.
 	default:
@@ -410,6 +462,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.BaseBranch) == "" {
 		return errors.New("COLIN_BASE_BRANCH must not be empty")
 	}
+	if strings.TrimSpace(c.GitHubAPIURL) == "" {
+		return errors.New("GITHUB_API_URL must not be empty")
+	}
 	if strings.TrimSpace(c.ColinHome) == "" {
 		return errors.New("COLIN_HOME must not be empty")
 	}
@@ -420,6 +475,29 @@ func (c Config) Validate() error {
 		return fmt.Errorf("workflow_states: %w", err)
 	}
 	return nil
+}
+
+// ResolvedGitHubAppPrivateKey returns the configured GitHub App private key.
+// Inline key takes precedence over file path.
+func (c Config) ResolvedGitHubAppPrivateKey() (string, error) {
+	if v := strings.TrimSpace(c.GitHubAppPrivateKey); v != "" {
+		return v, nil
+	}
+
+	path := strings.TrimSpace(c.GitHubAppPrivateKeyPath)
+	if path == "" {
+		return "", errors.New("github app private key is not configured")
+	}
+
+	content, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("read GitHub App private key file %q: %w", path, err)
+	}
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		return "", fmt.Errorf("GitHub App private key file %q is empty", path)
+	}
+	return trimmed, nil
 }
 
 func normalizeLinearBackend(raw string) string {

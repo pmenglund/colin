@@ -8,6 +8,13 @@ linear_api_token = ""
 linear_team_id = ""
 linear_base_url = "https://api.linear.app/graphql"
 linear_backend = "http"
+# GitHub App settings used for installation-token-authenticated pushes and PR API calls.
+github_api_url = "https://api.github.com"
+github_app_id = ""
+github_app_installation_id = ""
+# Set either github_app_private_key (inline PEM) or github_app_private_key_path.
+github_app_private_key = ""
+# github_app_private_key_path = "/absolute/path/to/github-app-private-key.pem"
 # Branch Colin uses for worktree bootstrap and final merge.
 base_branch = "main"
 # When true, push base_branch to remote after merge+cleanup if the configured remote exists.

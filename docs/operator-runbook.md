@@ -19,13 +19,16 @@ For `linear_backend = "http"` (default), these values are required:
 
 - `LINEAR_API_TOKEN`
 - `LINEAR_TEAM_ID`
-- `gh` CLI available on `PATH` and authenticated (used to create pull requests before `Review`)
+- `GITHUB_APP_ID`
+- `GITHUB_APP_INSTALLATION_ID`
+- `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`
 
 Common runtime controls:
 
 - `COLIN_HOME` / `colin_home`: root for worker artifacts and worktrees (default `~/.colin`)
 - `COLIN_BASE_BRANCH` / `base_branch`: branch used for task worktree bootstrap and merge target (default `main`)
 - `COLIN_PUSH_AFTER_MERGE` / `push_after_merge`: push base branch after merge when configured remote exists (default `true`)
+- `GITHUB_API_URL` / `github_api_url`: GitHub REST API base URL (default `https://api.github.com`)
 - `CODEX_HOME`: must be writable by Codex runtime (default `~/.codex`)
 - `COLIN_LINEAR_BACKEND` / `linear_backend`: `http` or `fake`
 - `COLIN_MAX_CONCURRENCY` / `max_concurrency`: number of concurrent issue workers

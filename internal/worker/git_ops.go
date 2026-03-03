@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	gitconfig "github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 	formatconfig "github.com/go-git/go-git/v6/plumbing/format/config"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	githttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	xworktree "github.com/go-git/go-git/v6/x/plumbing/worktree"
 )
 
@@ -212,7 +215,13 @@ func fastForwardBranch(repo *git.Repository, baseBranch string, sourceBranch str
 	return nil
 }
 
-func pushBranch(ctx context.Context, repo *git.Repository, remoteName string, branchName string) error {
+func pushBranch(
+	ctx context.Context,
+	repo *git.Repository,
+	remoteName string,
+	branchName string,
+	auth transport.AuthMethod,
+) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -225,11 +234,82 @@ func pushBranch(ctx context.Context, repo *git.Repository, remoteName string, br
 	err := repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: trimmedRemote,
 		RefSpecs:   []gitconfig.RefSpec{refspec},
+		Auth:       auth,
 	})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
 	return err
+}
+
+func pushAuthMethodForRemote(
+	ctx context.Context,
+	remoteURL string,
+	tokenProvider GitHubTokenProvider,
+) (transport.AuthMethod, error) {
+	if tokenProvider == nil {
+		return nil, nil
+	}
+
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return nil, nil
+	}
+	if isLocalPathRemote(remoteURL) {
+		return nil, nil
+	}
+	if isSSHRemote(remoteURL) {
+		return nil, fmt.Errorf("github app auth requires an HTTPS remote URL, got %q", remoteURL)
+	}
+
+	u, err := url.Parse(remoteURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse remote URL %q: %w", remoteURL, err)
+	}
+	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return nil, nil
+	}
+
+	token, err := tokenProvider.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve GitHub installation token: %w", err)
+	}
+	return &githttp.BasicAuth{
+		Username: "x-access-token",
+		Password: token,
+	}, nil
+}
+
+func isLocalPathRemote(remoteURL string) bool {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return false
+	}
+	if strings.HasPrefix(remoteURL, "/") || strings.HasPrefix(remoteURL, "./") || strings.HasPrefix(remoteURL, "../") {
+		return true
+	}
+	if strings.HasPrefix(remoteURL, "file://") {
+		return true
+	}
+	if strings.Contains(remoteURL, "://") {
+		return false
+	}
+	return !strings.Contains(remoteURL, "@") && !strings.Contains(remoteURL, ":")
+}
+
+func isSSHRemote(remoteURL string) bool {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return false
+	}
+	if strings.HasPrefix(remoteURL, "ssh://") {
+		return true
+	}
+	if strings.HasPrefix(remoteURL, "git@") && strings.Contains(remoteURL, ":") {
+		return true
+	}
+	return false
 }
 
 func remoteURL(repo *git.Repository, remoteName string) (string, error) {

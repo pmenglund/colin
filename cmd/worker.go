@@ -7,6 +7,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/codexexec"
 	"github.com/pmenglund/colin/internal/config"
+	"github.com/pmenglund/colin/internal/githubapp"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/logging"
 	"github.com/pmenglund/colin/internal/worker"
@@ -53,8 +54,12 @@ func runWorker(cmd *cobra.Command, rootOpts *RootOptions, opts workerRunOptions)
 	}
 
 	executor := newInProgressExecutor(cfg, cwd, cmd.ErrOrStderr(), noColor)
-	mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates, noColor)
-	pullRequestManager := newPullRequestManager(cfg, cwd)
+	githubTokenProvider, err := newGitHubTokenProvider(cfg)
+	if err != nil {
+		return err
+	}
+	mergeExecutor := newMergeExecutor(cfg, cwd, cmd.ErrOrStderr(), runtimeStates, noColor, githubTokenProvider)
+	pullRequestManager := newPullRequestManager(cfg, cwd, githubTokenProvider)
 	bootstrapper := newTaskBootstrapper(cfg, cwd)
 
 	runner := &worker.Runner{
@@ -112,7 +117,14 @@ func newInProgressExecutor(cfg config.Config, cwd string, stderr io.Writer, noCo
 	})
 }
 
-func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer, states workflow.States, noColor bool) worker.MergeExecutor {
+func newMergeExecutor(
+	cfg config.Config,
+	cwd string,
+	stderr io.Writer,
+	states workflow.States,
+	noColor bool,
+	tokenProvider worker.GitHubTokenProvider,
+) worker.MergeExecutor {
 	if cfg.LinearBackend == config.LinearBackendFake {
 		return worker.NoopMergeExecutor{}
 	}
@@ -129,22 +141,46 @@ func newMergeExecutor(cfg config.Config, cwd string, stderr io.Writer, states wo
 		RepoRoot:       cwd,
 		BaseBranch:     cfg.BaseBranch,
 		PushBaseBranch: &pushBaseBranch,
+		TokenProvider:  tokenProvider,
 		MergePreparer:  mergePreparer,
 		States:         states,
 	})
 }
 
-func newPullRequestManager(cfg config.Config, cwd string) worker.PullRequestManager {
+func newPullRequestManager(cfg config.Config, cwd string, tokenProvider worker.GitHubTokenProvider) worker.PullRequestManager {
 	if cfg.LinearBackend == config.LinearBackendFake {
 		return nil
 	}
 
 	return worker.NewGitPullRequestManager(worker.GitPullRequestManagerOptions{
-		RepoRoot:   cwd,
-		BaseBranch: cfg.BaseBranch,
-		RemoteName: "origin",
-		Binary:     "gh",
+		RepoRoot:      cwd,
+		BaseBranch:    cfg.BaseBranch,
+		RemoteName:    "origin",
+		APIBaseURL:    cfg.GitHubAPIURL,
+		TokenProvider: tokenProvider,
 	})
+}
+
+func newGitHubTokenProvider(cfg config.Config) (worker.GitHubTokenProvider, error) {
+	if cfg.LinearBackend == config.LinearBackendFake {
+		return nil, nil
+	}
+
+	privateKey, err := cfg.ResolvedGitHubAppPrivateKey()
+	if err != nil {
+		return nil, err
+	}
+
+	provider, err := githubapp.NewInstallationTokenProvider(githubapp.InstallationTokenProviderOptions{
+		AppID:          cfg.GitHubAppID,
+		InstallationID: cfg.GitHubAppInstallationID,
+		PrivateKeyPEM:  privateKey,
+		APIBaseURL:     cfg.GitHubAPIURL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure GitHub App installation token provider: %w", err)
+	}
+	return provider, nil
 }
 
 func newTaskBootstrapper(cfg config.Config, cwd string) worker.TaskBootstrapper {

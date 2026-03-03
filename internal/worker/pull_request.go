@@ -1,15 +1,19 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
+	"io"
+	"net/http"
+	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/workflow"
 )
@@ -17,7 +21,7 @@ import (
 const (
 	defaultPullRequestBaseBranch = "main"
 	defaultPullRequestRemoteName = "origin"
-	defaultPullRequestBinary     = "gh"
+	defaultGitHubAPIURL          = "https://api.github.com"
 )
 
 // PullRequestManager ensures review-ready issues have a pull request URL.
@@ -27,26 +31,25 @@ type PullRequestManager interface {
 
 // GitPullRequestManagerOptions configures GitPullRequestManager.
 type GitPullRequestManagerOptions struct {
-	RepoRoot   string
-	BaseBranch string
-	RemoteName string
-	Binary     string
+	RepoRoot      string
+	BaseBranch    string
+	RemoteName    string
+	APIBaseURL    string
+	HTTPClient    *http.Client
+	TokenProvider GitHubTokenProvider
 }
 
-type commandOutput struct {
-	Stdout string
-	Stderr string
-}
-
-type commandRunner func(ctx context.Context, dir string, binary string, args []string) (commandOutput, error)
-
-// GitPullRequestManager creates and looks up GitHub pull requests via gh CLI.
+// GitPullRequestManager creates and looks up GitHub pull requests via REST API.
 type GitPullRequestManager struct {
-	repoRoot   string
-	baseBranch string
-	remoteName string
-	binary     string
-	runCommand commandRunner
+	repoRoot       string
+	baseBranch     string
+	remoteName     string
+	apiBaseURL     string
+	httpClient     *http.Client
+	tokenProvider  GitHubTokenProvider
+	pushBranchFn   func(context.Context, *git.Repository, string, string, transport.AuthMethod) error
+	resolveRepoURL func(string) (string, string, error)
+	pushAuthFn     func(context.Context, string, GitHubTokenProvider) (transport.AuthMethod, error)
 }
 
 // NewGitPullRequestManager builds a git-backed pull-request manager.
@@ -59,17 +62,25 @@ func NewGitPullRequestManager(opts GitPullRequestManagerOptions) *GitPullRequest
 	if remoteName == "" {
 		remoteName = defaultPullRequestRemoteName
 	}
-	binary := strings.TrimSpace(opts.Binary)
-	if binary == "" {
-		binary = defaultPullRequestBinary
+	apiBaseURL := strings.TrimSpace(opts.APIBaseURL)
+	if apiBaseURL == "" {
+		apiBaseURL = defaultGitHubAPIURL
+	}
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
 
 	return &GitPullRequestManager{
-		repoRoot:   filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
-		baseBranch: baseBranch,
-		remoteName: remoteName,
-		binary:     binary,
-		runCommand: runExternalCommand,
+		repoRoot:       filepath.Clean(strings.TrimSpace(opts.RepoRoot)),
+		baseBranch:     baseBranch,
+		remoteName:     remoteName,
+		apiBaseURL:     strings.TrimRight(apiBaseURL, "/"),
+		httpClient:     httpClient,
+		tokenProvider:  opts.TokenProvider,
+		pushBranchFn:   pushBranch,
+		resolveRepoURL: parseGitHubRepository,
+		pushAuthFn:     pushAuthMethodForRemote,
 	}
 }
 
@@ -85,6 +96,9 @@ func (m *GitPullRequestManager) EnsurePullRequest(ctx context.Context, issue lin
 	existing := strings.TrimSpace(issue.Metadata[workflow.MetaPRURL])
 	if existing != "" {
 		return existing, nil
+	}
+	if m.tokenProvider == nil {
+		return "", errors.New("github token provider is required")
 	}
 
 	branchName, err := pullRequestBranchName(issue)
@@ -103,14 +117,25 @@ func (m *GitPullRequestManager) EnsurePullRequest(ctx context.Context, issue lin
 	if !exists {
 		return "", fmt.Errorf("source branch %q does not exist in %q", branchName, m.repoRoot)
 	}
-	if _, err := remoteURL(repo, m.remoteName); err != nil {
+
+	remoteRefURL, err := remoteURL(repo, m.remoteName)
+	if err != nil {
 		return "", fmt.Errorf("verify remote %q in %q: %w", m.remoteName, m.repoRoot, err)
 	}
-	if err := pushBranch(ctx, repo, m.remoteName, branchName); err != nil {
+	auth, err := m.pushAuthFn(ctx, remoteRefURL, m.tokenProvider)
+	if err != nil {
+		return "", fmt.Errorf("resolve push auth for remote %q: %w", m.remoteName, err)
+	}
+	if err := m.pushBranchFn(ctx, repo, m.remoteName, branchName, auth); err != nil {
 		return "", fmt.Errorf("push branch %q to remote %q: %w", branchName, m.remoteName, err)
 	}
 
-	prURL, err := m.findPullRequestURL(ctx, branchName, "open")
+	owner, repoName, err := m.resolveRepoURL(remoteRefURL)
+	if err != nil {
+		return "", fmt.Errorf("resolve GitHub repository from remote %q: %w", m.remoteName, err)
+	}
+
+	prURL, err := m.findPullRequestURL(ctx, owner, repoName, branchName, "open")
 	if err != nil {
 		return "", err
 	}
@@ -118,11 +143,11 @@ func (m *GitPullRequestManager) EnsurePullRequest(ctx context.Context, issue lin
 		return prURL, nil
 	}
 
-	if err := m.createPullRequest(ctx, issue, branchName); err != nil {
+	if err := m.createPullRequest(ctx, owner, repoName, issue, branchName); err != nil {
 		return "", err
 	}
 
-	prURL, err = m.findPullRequestURL(ctx, branchName, "open")
+	prURL, err = m.findPullRequestURL(ctx, owner, repoName, branchName, "open")
 	if err != nil {
 		return "", err
 	}
@@ -144,43 +169,64 @@ func pullRequestBranchName(issue linear.Issue) (string, error) {
 	return "colin/" + identifier, nil
 }
 
-func (m *GitPullRequestManager) findPullRequestURL(ctx context.Context, branchName string, state string) (string, error) {
-	args := []string{
-		"pr", "list",
-		"--head", strings.TrimSpace(branchName),
-		"--base", strings.TrimSpace(m.baseBranch),
-		"--state", strings.TrimSpace(state),
-		"--limit", "1",
-		"--json", "url",
-	}
-	out, err := m.runGH(ctx, args)
+func (m *GitPullRequestManager) findPullRequestURL(
+	ctx context.Context,
+	owner string,
+	repoName string,
+	branchName string,
+	state string,
+) (string, error) {
+	head := url.QueryEscape(owner + ":" + strings.TrimSpace(branchName))
+	base := url.QueryEscape(strings.TrimSpace(m.baseBranch))
+	stateQuery := url.QueryEscape(strings.TrimSpace(state))
+	endpoint := fmt.Sprintf(
+		"/repos/%s/%s/pulls?head=%s&base=%s&state=%s&per_page=1",
+		url.PathEscape(owner),
+		url.PathEscape(repoName),
+		head,
+		base,
+		stateQuery,
+	)
+
+	body, err := m.doGitHubRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", fmt.Errorf("lookup pull request for branch %q: %w", branchName, err)
 	}
 
 	var listed []struct {
-		URL string `json:"url"`
+		HTMLURL string `json:"html_url"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out.Stdout)), &listed); err != nil {
+	if err := json.Unmarshal(body, &listed); err != nil {
 		return "", fmt.Errorf("decode pull request lookup output for branch %q: %w", branchName, err)
 	}
 	if len(listed) == 0 {
 		return "", nil
 	}
-	return strings.TrimSpace(listed[0].URL), nil
+	return strings.TrimSpace(listed[0].HTMLURL), nil
 }
 
-func (m *GitPullRequestManager) createPullRequest(ctx context.Context, issue linear.Issue, branchName string) error {
+func (m *GitPullRequestManager) createPullRequest(
+	ctx context.Context,
+	owner string,
+	repoName string,
+	issue linear.Issue,
+	branchName string,
+) error {
 	title := buildPullRequestTitle(issue)
 	body := buildPullRequestBody(issue)
-	args := []string{
-		"pr", "create",
-		"--head", strings.TrimSpace(branchName),
-		"--base", strings.TrimSpace(m.baseBranch),
-		"--title", title,
-		"--body", body,
+
+	payload, err := json.Marshal(map[string]string{
+		"title": title,
+		"head":  strings.TrimSpace(branchName),
+		"base":  strings.TrimSpace(m.baseBranch),
+		"body":  body,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal pull request payload for branch %q: %w", branchName, err)
 	}
-	if _, err := m.runGH(ctx, args); err != nil {
+
+	endpoint := fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repoName))
+	if _, err := m.doGitHubRequest(ctx, http.MethodPost, endpoint, strings.NewReader(string(payload))); err != nil {
 		return fmt.Errorf("create pull request for branch %q: %w", branchName, err)
 	}
 	return nil
@@ -209,34 +255,97 @@ func buildPullRequestBody(issue linear.Issue) string {
 	return "Automated pull request created by Colin for Linear issue " + identifier + "."
 }
 
-func (m *GitPullRequestManager) runGH(ctx context.Context, args []string) (commandOutput, error) {
-	if m.runCommand == nil {
-		m.runCommand = runExternalCommand
+func (m *GitPullRequestManager) doGitHubRequest(
+	ctx context.Context,
+	method string,
+	endpoint string,
+	body io.Reader,
+) ([]byte, error) {
+	if m.tokenProvider == nil {
+		return nil, errors.New("github token provider is required")
 	}
-	out, err := m.runCommand(ctx, m.repoRoot, m.binary, args)
+	if m.httpClient == nil {
+		m.httpClient = http.DefaultClient
+	}
+
+	token, err := m.tokenProvider.Token(ctx)
 	if err != nil {
-		summary := strings.TrimSpace(strings.Join([]string{
-			strings.TrimSpace(out.Stdout),
-			strings.TrimSpace(out.Stderr),
-		}, "\n"))
-		if summary != "" {
-			return out, fmt.Errorf("%w (%s)", err, summary)
-		}
-		return out, err
+		return nil, fmt.Errorf("resolve GitHub installation token: %w", err)
 	}
-	return out, nil
+
+	fullURL := strings.TrimRight(m.apiBaseURL, "/") + endpoint
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request %s %s: %w", method, endpoint, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request %s %s: %w", method, endpoint, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response %s %s: %w", method, endpoint, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf(
+			"request %s %s returned status %d: %s",
+			method,
+			endpoint,
+			resp.StatusCode,
+			strings.TrimSpace(string(responseBody)),
+		)
+	}
+	return responseBody, nil
 }
 
-func runExternalCommand(ctx context.Context, dir string, binary string, args []string) (commandOutput, error) {
-	cmd := exec.CommandContext(ctx, strings.TrimSpace(binary), args...)
-	cmd.Dir = strings.TrimSpace(dir)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return commandOutput{
-		Stdout: strings.TrimSpace(stdout.String()),
-		Stderr: strings.TrimSpace(stderr.String()),
-	}, err
+func parseGitHubRepository(remoteURL string) (string, string, error) {
+	trimmed := strings.TrimSpace(remoteURL)
+	if trimmed == "" {
+		return "", "", errors.New("remote URL is required")
+	}
+
+	var repositoryPath string
+	switch {
+	case strings.HasPrefix(trimmed, "git@") && strings.Contains(trimmed, ":"):
+		parts := strings.SplitN(trimmed, ":", 2)
+		repositoryPath = parts[1]
+	case strings.Contains(trimmed, "://"):
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return "", "", fmt.Errorf("parse remote URL %q: %w", trimmed, err)
+		}
+		repositoryPath = parsed.Path
+	default:
+		return "", "", fmt.Errorf("unsupported remote URL format %q", trimmed)
+	}
+
+	repositoryPath = strings.TrimSpace(repositoryPath)
+	repositoryPath = strings.TrimPrefix(repositoryPath, "/")
+	repositoryPath = strings.TrimSuffix(repositoryPath, ".git")
+	repositoryPath = path.Clean(repositoryPath)
+	if repositoryPath == "." || repositoryPath == "" {
+		return "", "", fmt.Errorf("remote URL %q does not contain repository path", trimmed)
+	}
+
+	segments := strings.Split(repositoryPath, "/")
+	if len(segments) < 2 {
+		return "", "", fmt.Errorf("remote URL %q does not include owner and repository", trimmed)
+	}
+
+	owner := strings.TrimSpace(segments[len(segments)-2])
+	repoName := strings.TrimSpace(segments[len(segments)-1])
+	if owner == "" || repoName == "" {
+		return "", "", fmt.Errorf("remote URL %q does not include owner and repository", trimmed)
+	}
+
+	return owner, repoName, nil
 }

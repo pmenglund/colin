@@ -16,7 +16,7 @@ This lets the user decide to either accept the change, and move it to the `Merge
 
 - Go (latest stable)
 - A Linear API token and team ID (for the default HTTP backend)
-- GitHub CLI (`gh`) installed and authenticated for automatic PR creation before `Review`
+- GitHub App credentials (app ID, installation ID, private key) for authenticated push/PR operations
 
 ### 2) Build the `colin` binary
 
@@ -44,6 +44,9 @@ Edit `colin.toml` and set:
 
 - `linear_api_token`
 - `linear_team_id`
+- `github_app_id`
+- `github_app_installation_id`
+- `github_app_private_key` or `github_app_private_key_path`
 - `worker_id` (recommended)
 - Optional: `base_branch` (defaults to `main`; set to `master` or another branch when needed)
 - Optional: `push_after_merge` (defaults to `true`; when `false`, Colin skips pushing the base branch after merge)

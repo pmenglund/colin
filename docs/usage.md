@@ -72,6 +72,9 @@ Most important values:
 
 - `linear_api_token`
 - `linear_team_id`
+- `github_app_id`
+- `github_app_installation_id`
+- `github_app_private_key` or `github_app_private_key_path`
 - `worker_id`
 - `linear_backend` (`http` or `fake`)
 - `base_branch` (branch used for worktree bootstrap and merge target)

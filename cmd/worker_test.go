@@ -2,6 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,10 +55,14 @@ func TestWorkerRunRequiresLinearEnv(t *testing.T) {
 func TestWorkerRunLoadsFromConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "colin.toml")
-	content := `linear_api_token = "file-token"
+	keyPath := writeTestGitHubAppKey(t)
+	content := fmt.Sprintf(`linear_api_token = "file-token"
 linear_team_id = "file-team"
+github_app_id = "123"
+github_app_installation_id = "456"
+github_app_private_key_path = %q
 dry_run = true
-`
+`, keyPath)
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -101,4 +110,22 @@ dry_run = true
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("Execute() returned error: %v", err)
 	}
+}
+
+func writeTestGitHubAppKey(t *testing.T) string {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+	path := filepath.Join(t.TempDir(), "github-app.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+	return path
 }

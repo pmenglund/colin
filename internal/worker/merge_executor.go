@@ -26,6 +26,7 @@ type GitMergeExecutorOptions struct {
 	RemoteName     string
 	GitBinary      string
 	PushBaseBranch *bool
+	TokenProvider  GitHubTokenProvider
 	MergePreparer  MergePreparer
 	States         workflow.States
 }
@@ -36,6 +37,7 @@ type GitMergeExecutor struct {
 	baseBranch           string
 	remoteName           string
 	shouldPushBaseBranch bool
+	tokenProvider        GitHubTokenProvider
 	mergePreparer        MergePreparer
 	states               workflow.States
 }
@@ -60,6 +62,7 @@ func NewGitMergeExecutor(opts GitMergeExecutorOptions) *GitMergeExecutor {
 		baseBranch:           baseBranch,
 		remoteName:           remoteName,
 		shouldPushBaseBranch: pushBaseBranch,
+		tokenProvider:        opts.TokenProvider,
 		mergePreparer:        opts.MergePreparer,
 		states:               opts.States.WithDefaults(),
 	}
@@ -333,13 +336,18 @@ func (e *GitMergeExecutor) pushBaseBranch(ctx context.Context) error {
 		return fmt.Errorf("verify remote %q in %q: %w", e.remoteName, e.repoRoot, err)
 	}
 
-	if _, err := remoteURL(repo, e.remoteName); err != nil {
+	remoteRefURL, err := remoteURL(repo, e.remoteName)
+	if err != nil {
 		if errors.Is(err, git.ErrRemoteNotFound) {
 			return nil
 		}
 		return fmt.Errorf("verify remote %q in %q: %w", e.remoteName, e.repoRoot, err)
 	}
-	if err := pushBranch(ctx, repo, e.remoteName, e.baseBranch); err != nil {
+	auth, err := pushAuthMethodForRemote(ctx, remoteRefURL, e.tokenProvider)
+	if err != nil {
+		return fmt.Errorf("resolve push auth for remote %q: %w", e.remoteName, err)
+	}
+	if err := pushBranch(ctx, repo, e.remoteName, e.baseBranch, auth); err != nil {
 		return fmt.Errorf("push %q to remote %q: %w", e.baseBranch, e.remoteName, err)
 	}
 	return nil

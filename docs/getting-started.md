@@ -7,7 +7,7 @@ This guide helps first-time users get Colin running end-to-end.
 - Go installed and available on `PATH`
 - Access to a Linear workspace
 - Linear API token and team ID
-- GitHub CLI (`gh`) installed and authenticated (required for automatic PR creation)
+- GitHub App credentials (app ID, installation ID, private key)
 
 ## 1. Build the binary
 
@@ -29,6 +29,9 @@ Set at minimum:
 
 - `linear_api_token`
 - `linear_team_id`
+- `github_app_id`
+- `github_app_installation_id`
+- `github_app_private_key` or `github_app_private_key_path`
 - `worker_id` (recommended for shared environments)
 
 Optional but common:

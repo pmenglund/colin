@@ -12,6 +12,7 @@ import (
 func TestLoadFromEnvWithDefaults(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("LINEAR_BASE_URL", "")
 	t.Setenv("COLIN_LINEAR_BACKEND", "")
 	t.Setenv("COLIN_BASE_BRANCH", "")
@@ -36,6 +37,9 @@ func TestLoadFromEnvWithDefaults(t *testing.T) {
 	}
 	if cfg.LinearBackend != defaultLinearBackend {
 		t.Fatalf("LinearBackend = %q, want %q", cfg.LinearBackend, defaultLinearBackend)
+	}
+	if cfg.GitHubAPIURL != defaultGitHubAPIURL {
+		t.Fatalf("GitHubAPIURL = %q, want %q", cfg.GitHubAPIURL, defaultGitHubAPIURL)
 	}
 	if cfg.BaseBranch != defaultBaseBranch {
 		t.Fatalf("BaseBranch = %q, want %q", cfg.BaseBranch, defaultBaseBranch)
@@ -194,6 +198,7 @@ func TestLoadFromEnvRejectsInvalidBackend(t *testing.T) {
 func TestLoadFromEnvRejectsInvalidMaxConcurrency(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("COLIN_MAX_CONCURRENCY", "0")
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 
@@ -205,6 +210,7 @@ func TestLoadFromEnvRejectsInvalidMaxConcurrency(t *testing.T) {
 func TestLoadFromEnvRejectsInvalidPushAfterMerge(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("COLIN_PUSH_AFTER_MERGE", "not-a-bool")
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 
@@ -221,6 +227,10 @@ linear_api_token = "file-token"
 linear_team_id = "file-team"
 linear_base_url = "https://file.invalid/graphql"
 linear_backend = "http"
+github_api_url = "https://api.github.com"
+github_app_id = "123"
+github_app_installation_id = "456"
+github_app_private_key = "pem-value"
 base_branch = "master"
 push_after_merge = false
 project_filter = "PROJ-123, Website Revamp , proj-123"
@@ -367,6 +377,7 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 func TestLoadWithoutFileFallsBackToEnv(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	if _, err := LoadFromPath(filepath.Join(t.TempDir(), "missing.toml")); err != nil {
@@ -405,6 +416,7 @@ func TestLoadUsesCOLIN_CONFIGByDefault(t *testing.T) {
 	t.Setenv("COLIN_CONFIG", configPath)
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	cfg, err := Load()
@@ -424,6 +436,9 @@ func TestLoadFromFileWorkflowStatesPartialOverride(t *testing.T) {
 	configPath := filepath.Join(dir, "colin.toml")
 	content := `linear_api_token = "file-token"
 linear_team_id = "file-team"
+github_app_id = "123"
+github_app_installation_id = "456"
+github_app_private_key = "pem-value"
 
 [workflow_states]
 review = "Human Review"
@@ -435,6 +450,7 @@ refine = "Needs Spec"
 
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	cfg, err := LoadFromPath(configPath)
@@ -455,6 +471,9 @@ func TestLoadFromPathRejectsDuplicateWorkflowStates(t *testing.T) {
 	configPath := filepath.Join(dir, "colin.toml")
 	content := `linear_api_token = "file-token"
 linear_team_id = "file-team"
+github_app_id = "123"
+github_app_installation_id = "456"
+github_app_private_key = "pem-value"
 
 [workflow_states]
 todo = "Todo"
@@ -466,6 +485,7 @@ in_progress = "todo"
 
 	t.Setenv("LINEAR_API_TOKEN", "")
 	t.Setenv("LINEAR_TEAM_ID", "")
+	setRequiredGitHubAppEnv(t)
 	t.Setenv("COLIN_PROJECT_FILTER", "")
 
 	_, err := LoadFromPath(configPath)
@@ -475,4 +495,41 @@ in_progress = "todo"
 	if !strings.Contains(err.Error(), "workflow_states") {
 		t.Fatalf("error = %q, want workflow_states context", err.Error())
 	}
+}
+
+func TestResolvedGitHubAppPrivateKeyUsesInlineValue(t *testing.T) {
+	cfg := Config{GitHubAppPrivateKey: "inline-key"}
+
+	got, err := cfg.ResolvedGitHubAppPrivateKey()
+	if err != nil {
+		t.Fatalf("ResolvedGitHubAppPrivateKey() error = %v", err)
+	}
+	if got != "inline-key" {
+		t.Fatalf("ResolvedGitHubAppPrivateKey() = %q", got)
+	}
+}
+
+func TestResolvedGitHubAppPrivateKeyReadsFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(path, []byte("file-key\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg := Config{GitHubAppPrivateKeyPath: path}
+	got, err := cfg.ResolvedGitHubAppPrivateKey()
+	if err != nil {
+		t.Fatalf("ResolvedGitHubAppPrivateKey() error = %v", err)
+	}
+	if got != "file-key" {
+		t.Fatalf("ResolvedGitHubAppPrivateKey() = %q", got)
+	}
+}
+
+func setRequiredGitHubAppEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GITHUB_API_URL", "https://api.github.com")
+	t.Setenv("GITHUB_APP_ID", "123")
+	t.Setenv("GITHUB_APP_INSTALLATION_ID", "456")
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "pem-value")
+	t.Setenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
 }
