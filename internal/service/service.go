@@ -77,6 +77,8 @@ func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error)
 		"project_slug", cfg.Tracker.ProjectSlug,
 		"poll_interval", cfg.Polling.Interval.String(),
 		"workspace_root", cfg.Workspace.Root,
+		"publish_states", cfg.Repo.PublishStates,
+		"merge_states", cfg.Repo.MergeStates,
 		"max_concurrent_agents", cfg.Agent.MaxConcurrentAgents,
 	)
 	return orchestrator.Runtime{

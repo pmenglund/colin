@@ -15,7 +15,7 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
 		return false
 	}
-	if !o.isActive(issue.State) || o.isTerminal(issue.State) {
+	if o.isTerminal(issue.State) || !o.isDispatchable(issue.State) {
 		return false
 	}
 	if _, ok := o.running[issue.ID]; ok {
@@ -23,6 +23,12 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	}
 	if _, ok := o.claimed[issue.ID]; ok {
 		return false
+	}
+	if completedState, ok := o.completed[issue.ID]; ok {
+		if config.StateKey(completedState) == config.StateKey(issue.State) {
+			return false
+		}
+		delete(o.completed, issue.ID)
 	}
 	if !o.hasStateSlots(issue.State) {
 		return false
@@ -59,12 +65,19 @@ func (o *Orchestrator) hasStateSlots(state string) bool {
 	return count < limit
 }
 
-func (o *Orchestrator) dispatch(parent context.Context, issue domain.Issue, attempt *int) {
+func (o *Orchestrator) dispatch(parent context.Context, issue domain.Issue, attempt *int, comment *commentThreadState) {
 	ctx, cancel := context.WithCancel(parent)
+	if comment != nil && comment.RunType != runTypeForState(o, issue.State) {
+		comment = nil
+	}
+	if comment == nil {
+		comment = &commentThreadState{RunType: runTypeForState(o, issue.State)}
+	}
 	entry := &runningEntry{
 		issue:        issue,
 		identifier:   issue.Identifier,
 		startedAt:    time.Now().UTC(),
+		comment:      comment,
 		retryAttempt: attemptValue(attempt),
 		cancel:       cancel,
 	}
@@ -78,6 +91,9 @@ func (o *Orchestrator) dispatch(parent context.Context, issue domain.Issue, atte
 		"attempt", attemptValue(attempt),
 	)
 	if existing, ok := o.retrying[issue.ID]; ok {
+		if entry.comment == nil {
+			entry.comment = existing.comment
+		}
 		existing.timer.Stop()
 		delete(o.retrying, issue.ID)
 	}
@@ -121,13 +137,21 @@ func issueCreated(issue domain.Issue) time.Time {
 }
 
 func (o *Orchestrator) isActive(state string) bool {
-	key := config.StateKey(state)
-	_, ok := config.NormalizedStateSet(o.runtime.Config.Tracker.ActiveStates)[key]
-	return ok
+	return config.ContainsState(o.runtime.Config.Tracker.ActiveStates, state)
+}
+
+func (o *Orchestrator) isPublishState(state string) bool {
+	return config.ContainsState(o.runtime.Config.Repo.PublishStates, state)
+}
+
+func (o *Orchestrator) isMergeState(state string) bool {
+	return config.ContainsState(o.runtime.Config.Repo.MergeStates, state)
+}
+
+func (o *Orchestrator) isDispatchable(state string) bool {
+	return o.isActive(state) || o.isPublishState(state) || o.isMergeState(state)
 }
 
 func (o *Orchestrator) isTerminal(state string) bool {
-	key := config.StateKey(state)
-	_, ok := config.NormalizedStateSet(o.runtime.Config.Tracker.TerminalStates)[key]
-	return ok
+	return config.ContainsState(o.runtime.Config.Tracker.TerminalStates, state)
 }

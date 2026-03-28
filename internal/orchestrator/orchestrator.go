@@ -18,7 +18,7 @@ func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 		running:   map[string]*runningEntry{},
 		claimed:   map[string]struct{}{},
 		retrying:  map[string]*retryState{},
-		completed: map[string]struct{}{},
+		completed: map[string]string{},
 	}
 }
 
@@ -62,7 +62,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				}
 				tick.Reset(o.runtime.Config.Polling.Interval)
 			case codexEvent:
-				o.handleCodexEvent(event.event)
+				o.handleCodexEvent(ctx, event.event)
 			case workerExitedEvent:
 				o.handleWorkerExit(ctx, event)
 			case retryFiredEvent:
@@ -73,12 +73,18 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 }
 
 func (o *Orchestrator) handleTick(ctx context.Context) {
-	o.logger.Info(
-		"poll tick started",
+	args := []any{
 		"running", len(o.running),
 		"retrying", len(o.retrying),
 		"claimed", len(o.claimed),
-	)
+	}
+	if summaries := o.runningIssueSummaries(time.Now().UTC()); len(summaries) > 0 {
+		args = append(args, "running_issues", summaries)
+	}
+	if summaries := o.retrySummaries(); len(summaries) > 0 {
+		args = append(args, "retry_issues", summaries)
+	}
+	o.logger.Info("poll tick started", args...)
 	o.reconcileRunning(ctx)
 	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
 		o.logger.Error("dispatch validation failed", "error", err)
@@ -100,24 +106,31 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if !o.hasGlobalSlots() {
 			break
 		}
-		o.dispatch(ctx, issue, nil)
+		o.dispatch(ctx, issue, nil, nil)
 		dispatched++
 	}
-	o.logger.Info(
-		"poll tick completed",
+	args = []any{
 		"candidate_count", len(issues),
 		"eligible_count", eligible,
 		"dispatched_count", dispatched,
 		"running", len(o.running),
 		"retrying", len(o.retrying),
-	)
+	}
+	if summaries := o.runningIssueSummaries(time.Now().UTC()); len(summaries) > 0 {
+		args = append(args, "running_issues", summaries)
+	}
+	if summaries := o.retrySummaries(); len(summaries) > 0 {
+		args = append(args, "retry_issues", summaries)
+	}
+	o.logger.Info("poll tick completed", args...)
 }
 
-func (o *Orchestrator) handleCodexEvent(event codex.Event) {
+func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) {
 	entry, ok := o.running[event.IssueID]
 	if !ok {
 		return
 	}
+	o.handleCommentEvent(ctx, entry, event)
 	entry.session.SessionID = event.SessionID
 	entry.session.ThreadID = event.ThreadID
 	entry.session.TurnID = event.TurnID
@@ -125,6 +138,9 @@ func (o *Orchestrator) handleCodexEvent(event codex.Event) {
 	entry.session.LastCodexEvent = event.Event
 	entry.session.LastCodexMessage = event.Message
 	entry.session.LastCodexTimestamp = &event.Timestamp
+	if event.State != "" {
+		entry.issue.State = event.State
+	}
 	if event.Event == codex.EventSessionStarted {
 		entry.session.TurnCount++
 	}
@@ -139,6 +155,18 @@ func (o *Orchestrator) handleCodexEvent(event codex.Event) {
 			"issue_id", event.IssueID,
 			"issue_identifier", event.Identifier,
 			"session_id", event.SessionID,
+			"thread_id", event.ThreadID,
+			"turn_id", event.TurnID,
+			"turn_count", entry.session.TurnCount,
+			"state", entry.issue.State,
+		)
+	case codex.EventApprovalAutoApproved:
+		o.logger.Info(
+			"codex approval auto-approved",
+			"issue_id", event.IssueID,
+			"issue_identifier", event.Identifier,
+			"session_id", event.SessionID,
+			"turn_id", event.TurnID,
 		)
 	case codex.EventTurnCompleted, codex.EventTurnFailed, codex.EventTurnCancelled, codex.EventTurnInputRequired:
 		o.logger.Info(
@@ -146,8 +174,14 @@ func (o *Orchestrator) handleCodexEvent(event codex.Event) {
 			"issue_id", event.IssueID,
 			"issue_identifier", event.Identifier,
 			"session_id", event.SessionID,
+			"turn_id", event.TurnID,
+			"turn_count", entry.session.TurnCount,
+			"state", entry.issue.State,
 			"event", event.Event,
 			"message", event.Message,
+			"input_tokens", entry.session.CodexInputTokens,
+			"output_tokens", entry.session.CodexOutputTokens,
+			"total_tokens", entry.session.CodexTotalTokens,
 		)
 	}
 }

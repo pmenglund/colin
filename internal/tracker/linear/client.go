@@ -42,7 +42,7 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		endpoint: cfg.Tracker.Endpoint,
 		apiKey:   cfg.Tracker.APIKey,
 		project:  cfg.Tracker.ProjectSlug,
-		active:   slices.Clone(cfg.Tracker.ActiveStates),
+		active:   slices.Clone(config.CandidateStates(cfg)),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -97,6 +97,51 @@ query IssueStates($ids: [ID!]!) {
 		issues = append(issues, issue)
 	}
 	return issues, nil
+}
+
+// CreateIssueComment creates a top-level comment on a Linear issue.
+func (c *Client) CreateIssueComment(ctx context.Context, issueID string, body string) (string, error) {
+	const query = `
+mutation CreateIssueComment($input: CommentCreateInput!) {
+  commentCreate(input: $input) {
+    success
+    comment { id }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"input": map[string]any{
+			"issueId": issueID,
+			"body":    body,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return parseCreatedCommentID(resp)
+}
+
+// CreateCommentReply creates a reply comment under an existing issue comment.
+func (c *Client) CreateCommentReply(ctx context.Context, issueID string, parentCommentID string, body string) (string, error) {
+	const query = `
+mutation CreateCommentReply($input: CommentCreateInput!) {
+  commentCreate(input: $input) {
+    success
+    comment { id }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"input": map[string]any{
+			"issueId":  issueID,
+			"parentId": parentCommentID,
+			"body":     body,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return parseCreatedCommentID(resp)
 }
 
 func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
@@ -275,6 +320,18 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 		}
 	}
 	return issue, nil
+}
+
+func parseCreatedCommentID(resp map[string]any) (string, error) {
+	success, _ := nestedBool(resp, "data", "commentCreate", "success")
+	if !success {
+		return "", ErrUnknownPayload
+	}
+	commentID, ok := nestedString(resp, "data", "commentCreate", "comment", "id")
+	if !ok || strings.TrimSpace(commentID) == "" {
+		return "", ErrUnknownPayload
+	}
+	return commentID, nil
 }
 
 func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {

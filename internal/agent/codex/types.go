@@ -8,14 +8,29 @@ import (
 )
 
 const (
+	RunTypeCoding        = "coding"
+	RunTypeReviewPublish = "review_publish"
+	RunTypeMerge         = "merge"
+
 	EventSessionStarted       = "session_started"
 	EventStartupFailed        = "startup_failed"
+	EventWorkspacePrepared    = "workspace_prepared"
 	EventTurnCompleted        = "turn_completed"
 	EventTurnFailed           = "turn_failed"
 	EventTurnCancelled        = "turn_cancelled"
 	EventTurnEndedWithError   = "turn_ended_with_error"
 	EventTurnInputRequired    = "turn_input_required"
 	EventApprovalAutoApproved = "approval_auto_approved"
+	EventIssueStateRefreshed  = "issue_state_refreshed"
+	EventContinuationNeeded   = "continuation_needed"
+	EventRetryScheduled       = "retry_scheduled"
+	EventRetryFired           = "retry_fired"
+	EventRunFailed            = "run_failed"
+	EventRunSucceeded         = "run_succeeded"
+	EventReviewPublishStarted = "review_publish_started"
+	EventReviewPublishDone    = "review_publish_completed"
+	EventMergeStarted         = "merge_started"
+	EventMergeDone            = "merge_completed"
 	EventUnsupportedToolCall  = "unsupported_tool_call"
 	EventNotification         = "notification"
 	EventOtherMessage         = "other_message"
@@ -36,23 +51,35 @@ var (
 // Event is a normalized runtime event emitted from the Codex app-server session.
 type Event struct {
 	Event      string
+	RunType    string
 	Timestamp  time.Time
 	SessionID  string
 	ThreadID   string
 	TurnID     string
 	PID        *int
 	Message    string
+	Attempt    int
+	State      string
+	PrevState  string
+	Duration   time.Duration
 	Usage      map[string]int64
 	RateLimits map[string]any
 	Raw        map[string]any
 	IssueID    string
 	Identifier string
 	Workspace  string
+	Branch     string
+	BaseRef    string
+	PRNumber   int
+	PRURL      string
+	PRState    string
+	Action     string
 }
 
 // Result is the terminal outcome of one runner invocation for a single issue.
 type Result struct {
 	Issue         domain.Issue
+	RunType       string
 	WorkspacePath string
 	Status        string
 	Err           error

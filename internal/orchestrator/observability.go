@@ -70,3 +70,70 @@ func (o *Orchestrator) StartupTerminalCleanup(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (o *Orchestrator) runningIssueSummaries(now time.Time) []string {
+	if len(o.running) == 0 {
+		return nil
+	}
+
+	issueIDs := make([]string, 0, len(o.running))
+	for issueID := range o.running {
+		issueIDs = append(issueIDs, issueID)
+	}
+	sort.Strings(issueIDs)
+
+	summaries := make([]string, 0, len(issueIDs))
+	for _, issueID := range issueIDs {
+		entry := o.running[issueID]
+		if entry == nil {
+			continue
+		}
+		idle := "unknown"
+		if entry.session.LastCodexTimestamp != nil {
+			idle = now.Sub(*entry.session.LastCodexTimestamp).Round(time.Second).String()
+		}
+		lastEvent := entry.session.LastCodexEvent
+		if lastEvent == "" {
+			lastEvent = "none"
+		}
+		summaries = append(summaries, fmt.Sprintf(
+			"%s(state=%s,turns=%d,last_event=%s,age=%s,idle=%s)",
+			entry.identifier,
+			entry.issue.State,
+			entry.session.TurnCount,
+			lastEvent,
+			now.Sub(entry.startedAt).Round(time.Second),
+			idle,
+		))
+	}
+	return summaries
+}
+
+func (o *Orchestrator) retrySummaries() []string {
+	if len(o.retrying) == 0 {
+		return nil
+	}
+
+	issueIDs := make([]string, 0, len(o.retrying))
+	for issueID := range o.retrying {
+		issueIDs = append(issueIDs, issueID)
+	}
+	sort.Strings(issueIDs)
+
+	summaries := make([]string, 0, len(issueIDs))
+	now := time.Now().UTC()
+	for _, issueID := range issueIDs {
+		entry := o.retrying[issueID]
+		if entry == nil {
+			continue
+		}
+		summaries = append(summaries, fmt.Sprintf(
+			"%s(attempt=%d,due_in=%s,error=%s)",
+			entry.entry.Identifier,
+			entry.entry.Attempt,
+			entry.entry.DueAt.Sub(now).Round(time.Second),
+			entry.entry.Error,
+		))
+	}
+	return summaries
+}

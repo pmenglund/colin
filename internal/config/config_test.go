@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/pmenglund/colin/internal/domain"
@@ -69,5 +70,88 @@ func TestValidateDispatchRequiresTrackerAndCodex(t *testing.T) {
 	cfg.Codex.Command = " "
 	if err := ValidateDispatch(cfg); err != ErrMissingCodexCommand {
 		t.Fatalf("ValidateDispatch() error = %v", err)
+	}
+}
+
+func TestBuildNormalizesTurnSandboxPolicy(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "cli",
+				"api_key":      "token",
+			},
+			"codex": map[string]any{
+				"turn_sandbox_policy": map[string]any{
+					"mode": "danger-full-access",
+				},
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Codex.TurnSandboxPolicy["type"]; got != "dangerFullAccess" {
+		t.Fatalf("sandbox policy type = %v", got)
+	}
+	if _, ok := cfg.Codex.TurnSandboxPolicy["mode"]; ok {
+		t.Fatal("sandbox policy still contains mode")
+	}
+}
+
+func TestBuildMakesWorkspaceRootAbsolute(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "cli",
+				"api_key":      "token",
+			},
+			"workspace": map[string]any{
+				"root": "./.colin/workspaces",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	want, err := filepath.Abs(filepath.Clean("./.colin/workspaces"))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	if cfg.Workspace.Root != want {
+		t.Fatalf("cfg.Workspace.Root = %q, want %q", cfg.Workspace.Root, want)
+	}
+}
+
+func TestCandidateStatesIncludesRepoAutomationStatesOnce(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress", "Review"}},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+	}
+
+	got := CandidateStates(cfg)
+	want := []string{"Todo", "In Progress", "Review", "Merge"}
+	if len(got) != len(want) {
+		t.Fatalf("CandidateStates() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("CandidateStates()[%d] = %q, want %q (%v)", i, got[i], want[i], got)
+		}
 	}
 }

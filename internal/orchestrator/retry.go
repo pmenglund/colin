@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
 )
 
@@ -104,14 +105,44 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		o.logger.Info("worker stopped", "issue_id", event.issueID, "issue_identifier", entry.identifier, "reason", entry.stopReason)
 		return
 	case "stalled":
-		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "worker stalled", 10*time.Second)
+		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "worker stalled", 10*time.Second, entry.comment)
 		return
 	}
 
 	if event.result.Status == "succeeded" {
-		o.completed[event.issueID] = struct{}{}
-		o.logger.Info("worker completed", "issue_id", event.issueID, "issue_identifier", entry.identifier, "status", event.result.Status)
-		o.scheduleRetry(event.issueID, entry.identifier, 1, "", time.Second)
+		if event.result.RunType == codex.RunTypeReviewPublish || event.result.RunType == codex.RunTypeMerge {
+			o.completed[event.issueID] = event.result.Issue.State
+			delete(o.claimed, event.issueID)
+			o.logger.Info(
+				"handoff automation completed; waiting for next tracker state change",
+				"issue_id", event.issueID,
+				"issue_identifier", entry.identifier,
+				"status", event.result.Status,
+				"run_type", event.result.RunType,
+				"current_state", event.result.Issue.State,
+			)
+			return
+		}
+		if o.isActive(event.result.Issue.State) {
+			o.logger.Info(
+				"worker run completed but issue is still active; scheduling continuation retry",
+				"issue_id", event.issueID,
+				"issue_identifier", entry.identifier,
+				"status", event.result.Status,
+				"current_state", event.result.Issue.State,
+				"turn_count", entry.session.TurnCount,
+				"last_event", entry.session.LastCodexEvent,
+			)
+		} else {
+			o.logger.Info(
+				"worker completed and issue is no longer active; scheduling verification retry",
+				"issue_id", event.issueID,
+				"issue_identifier", entry.identifier,
+				"status", event.result.Status,
+				"current_state", event.result.Issue.State,
+			)
+		}
+		o.scheduleRetry(event.issueID, entry.identifier, 1, "", time.Second, entry.comment)
 		return
 	}
 	o.logger.Warn(
@@ -121,16 +152,27 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		"status", event.result.Status,
 		"error", errorString(event.result.Err),
 	)
+	o.handleCommentEvent(ctx, entry, codex.Event{
+		Event:      codex.EventRunFailed,
+		RunType:    event.result.RunType,
+		Timestamp:  time.Now().UTC(),
+		IssueID:    event.result.Issue.ID,
+		Identifier: event.result.Issue.Identifier,
+		Workspace:  event.result.WorkspacePath,
+		State:      event.result.Issue.State,
+		Message:    errorString(event.result.Err),
+	})
 	o.scheduleRetry(
 		event.issueID,
 		entry.identifier,
 		nextAttempt(entry.retryAttempt),
 		errorString(event.result.Err),
 		backoff(o.runtime.Config.Agent.MaxRetryBackoff, nextAttempt(entry.retryAttempt)),
+		entry.comment,
 	)
 }
 
-func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration) {
+func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration, comment *commentThreadState) {
 	if current, ok := o.retrying[issueID]; ok {
 		current.timer.Stop()
 	}
@@ -143,6 +185,7 @@ func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, er
 			DueAt:      dueAt,
 			Error:      errText,
 		},
+		comment: comment,
 	}
 	state.timer = time.AfterFunc(delay, func() {
 		o.eventCh <- retryFiredEvent{issueID: issueID}
@@ -157,6 +200,7 @@ func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, er
 		"delay", delay.String(),
 		"error", errText,
 	)
+	o.postRetryScheduledReply(context.Background(), comment, issueID, identifier, attempt, delay, errText)
 }
 
 func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
@@ -171,9 +215,10 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		"issue_identifier", state.entry.Identifier,
 		"attempt", state.entry.Attempt,
 	)
+	o.postRetryFiredReply(ctx, issueID, state)
 	issues, err := o.runtime.Tracker.FetchCandidateIssues(ctx)
 	if err != nil {
-		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt+1, "retry poll failed", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1))
+		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt+1, "retry poll failed", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment)
 		return
 	}
 	var issue *domain.Issue
@@ -189,11 +234,11 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		return
 	}
 	if !o.hasGlobalSlots() || !o.hasStateSlots(issue.State) {
-		o.scheduleRetry(issueID, issue.Identifier, state.entry.Attempt+1, "no available orchestrator slots", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1))
+		o.scheduleRetry(issueID, issue.Identifier, state.entry.Attempt+1, "no available orchestrator slots", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment)
 		return
 	}
 	o.logger.Info("retry dispatching issue", "issue_id", issueID, "issue_identifier", issue.Identifier, "attempt", state.entry.Attempt)
-	o.dispatch(ctx, *issue, intPtr(state.entry.Attempt))
+	o.dispatch(ctx, *issue, intPtr(state.entry.Attempt), state.comment)
 }
 
 func backoff(max time.Duration, attempt int) time.Duration {

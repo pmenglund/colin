@@ -38,6 +38,7 @@ type ServiceConfig struct {
 	Tracker      TrackerConfig
 	Polling      PollingConfig
 	Workspace    WorkspaceConfig
+	Repo         RepoConfig
 	Hooks        HookConfig
 	Agent        AgentConfig
 	Codex        CodexConfig
@@ -64,6 +65,14 @@ type WorkspaceConfig struct {
 	Root    string
 	RepoURL string
 	BaseRef string
+}
+
+// RepoConfig configures GitHub publish and merge automation tied to tracker states.
+type RepoConfig struct {
+	PublishStates []string
+	MergeStates   []string
+	RemoteName    string
+	MergeMethod   string
 }
 
 // HookConfig configures workspace lifecycle hooks.

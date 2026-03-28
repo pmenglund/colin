@@ -28,7 +28,7 @@ type Orchestrator struct {
 	running     map[string]*runningEntry
 	claimed     map[string]struct{}
 	retrying    map[string]*retryState
-	completed   map[string]struct{}
+	completed   map[string]string
 	totalTokens domain.Totals
 	rateLimits  map[string]any
 }
@@ -38,6 +38,7 @@ type runningEntry struct {
 	identifier    string
 	startedAt     time.Time
 	session       domain.LiveSession
+	comment       *commentThreadState
 	retryAttempt  int
 	cancel        context.CancelFunc
 	stopReason    string
@@ -45,8 +46,14 @@ type runningEntry struct {
 }
 
 type retryState struct {
-	entry domain.RetryEntry
-	timer *time.Timer
+	entry   domain.RetryEntry
+	timer   *time.Timer
+	comment *commentThreadState
+}
+
+type commentThreadState struct {
+	RunType       string
+	RootCommentID string
 }
 
 type configUpdatedEvent struct{ runtime Runtime }

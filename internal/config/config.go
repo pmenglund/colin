@@ -18,6 +18,7 @@ var (
 	ErrMissingWorkflowPath     = errors.New("missing_workflow_file")
 	ErrInvalidWorkflowConfig   = errors.New("invalid_workflow_config")
 	ErrInvalidWorkspaceGitConf = errors.New("invalid_workspace_git_config")
+	ErrInvalidRepoMergeMethod  = errors.New("invalid_repo_merge_method")
 )
 
 // Build converts a workflow definition into typed runtime configuration with defaults applied.
@@ -32,6 +33,12 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 		Polling: domain.PollingConfig{Interval: 30 * time.Second},
 		Workspace: domain.WorkspaceConfig{
 			Root: filepath.Join(os.TempDir(), "symphony_workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+			RemoteName:    "origin",
+			MergeMethod:   "merge",
 		},
 		Hooks: domain.HookConfig{
 			Timeout: 60 * time.Second,
@@ -50,7 +57,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			ApprovalPolicy: "never",
 			ThreadSandbox:  "danger-full-access",
 			TurnSandboxPolicy: map[string]any{
-				"mode": "danger-full-access",
+				"type": "dangerFullAccess",
 			},
 		},
 	}
@@ -62,6 +69,9 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 		return domain.ServiceConfig{}, err
 	}
 	if err := applyWorkspaceConfig(&cfg, readMap(def.Config, "workspace")); err != nil {
+		return domain.ServiceConfig{}, err
+	}
+	if err := applyRepoConfig(&cfg, readMap(def.Config, "repo")); err != nil {
 		return domain.ServiceConfig{}, err
 	}
 	if err := applyHooksConfig(&cfg, readMap(def.Config, "hooks")); err != nil {
@@ -79,6 +89,8 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 
 	normalizeStateList(cfg.Tracker.ActiveStates)
 	normalizeStateList(cfg.Tracker.TerminalStates)
+	normalizeStateList(cfg.Repo.PublishStates)
+	normalizeStateList(cfg.Repo.MergeStates)
 
 	if cfg.Hooks.Timeout <= 0 {
 		cfg.Hooks.Timeout = 60 * time.Second
@@ -89,6 +101,10 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			return domain.ServiceConfig{}, ErrInvalidWorkspaceGitConf
 		}
 	}
+	if !validMergeMethod(cfg.Repo.MergeMethod) {
+		return domain.ServiceConfig{}, ErrInvalidRepoMergeMethod
+	}
+	cfg.Codex.TurnSandboxPolicy = normalizeSandboxPolicy(cfg.Codex.TurnSandboxPolicy)
 
 	return cfg, nil
 }
@@ -129,6 +145,31 @@ func NormalizedStateSet(values []string) map[string]struct{} {
 // StateKey normalizes a tracker state name for map lookups.
 func StateKey(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// ContainsState reports whether the normalized state name exists in the supplied list.
+func ContainsState(values []string, state string) bool {
+	_, ok := NormalizedStateSet(values)[StateKey(state)]
+	return ok
+}
+
+// CandidateStates returns the union of coding and repo-automation states that should be polled.
+func CandidateStates(cfg domain.ServiceConfig) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, state := range append(append([]string{}, cfg.Tracker.ActiveStates...), append(cfg.Repo.PublishStates, cfg.Repo.MergeStates...)...) {
+		normalized := strings.TrimSpace(state)
+		if normalized == "" {
+			continue
+		}
+		key := StateKey(normalized)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func readMap(root map[string]any, key string) map[string]any {
@@ -226,6 +267,25 @@ func applyHooksConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	return nil
 }
 
+func applyRepoConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
+	if raw == nil {
+		return nil
+	}
+	if value, ok := readStringSlice(raw, "publish_states"); ok && len(value) > 0 {
+		cfg.Repo.PublishStates = value
+	}
+	if value, ok := readStringSlice(raw, "merge_states"); ok && len(value) > 0 {
+		cfg.Repo.MergeStates = value
+	}
+	if value, ok := readString(raw, "remote_name"); ok {
+		cfg.Repo.RemoteName = value
+	}
+	if value, ok := readString(raw, "merge_method"); ok {
+		cfg.Repo.MergeMethod = strings.ToLower(value)
+	}
+	return nil
+}
+
 func applyAgentConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	if raw == nil {
 		return nil
@@ -288,4 +348,13 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 		cfg.Server.Port = &value
 	}
 	return nil
+}
+
+func validMergeMethod(value string) bool {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "merge", "squash", "rebase":
+		return true
+	default:
+		return false
+	}
 }

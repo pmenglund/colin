@@ -40,6 +40,12 @@ This project is primarily written in **Go**. All code contributions should adher
 - **Debugging:** It’s fine to use `println` or `log.Printf` for local debugging, but remove those before committing. Instead, write tests or use the debugger for ongoing verification.
 - **CLI and scripts:** Use the standard Go CLI flags and `cobra` (if this project uses Cobra/Viper for CLI) according to project norms. Document any new command-line flags you add in the README or help text.
 
+## Documentation
+
+- **README maintenance:** Keep `README.md` up to date whenever Colin's behavior changes in a way a user or operator would care about.
+- **Linear workflow description:** `README.md` must include a high-level description of how Colin works and a clear description of how Colin handles Linear issue state transitions, including which states Colin actively works, which states are handoff states, and which states require human action.
+- **State transition changes:** If Colin starts acting on new Linear states, stops acting on existing states, or changes what happens in states such as `Todo`, `In Progress`, `Review`, `Merge`, or `Done`, update `README.md` in the same change.
+
 ## Example and References
 
 - **Examples in Repo:** Look at existing code for style guidance. E.g., follow patterns from `pkg/handlers/example.go` or similar modules to see how things are implemented in this project.

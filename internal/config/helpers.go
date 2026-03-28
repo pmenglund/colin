@@ -9,6 +9,53 @@ import (
 	"time"
 )
 
+func normalizeSandboxPolicy(policy map[string]any) map[string]any {
+	if len(policy) == 0 {
+		return policy
+	}
+
+	normalized := make(map[string]any, len(policy))
+	for key, value := range policy {
+		normalized[key] = value
+	}
+
+	if mode, ok := readSandboxMode(normalized["mode"]); ok {
+		normalized["type"] = sandboxPolicyType(mode)
+		delete(normalized, "mode")
+	}
+	if policyType, ok := readSandboxMode(normalized["type"]); ok {
+		normalized["type"] = sandboxPolicyType(policyType)
+	}
+	return normalized
+}
+
+func readSandboxMode(value any) (string, bool) {
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+func sandboxPolicyType(value string) string {
+	switch strings.TrimSpace(value) {
+	case "danger-full-access", "dangerFullAccess":
+		return "dangerFullAccess"
+	case "read-only", "readOnly":
+		return "readOnly"
+	case "workspace-write", "workspaceWrite":
+		return "workspaceWrite"
+	case "external-sandbox", "externalSandbox":
+		return "externalSandbox"
+	default:
+		return value
+	}
+}
+
 func readString(raw map[string]any, key string) (string, bool) {
 	value, ok := raw[key]
 	if !ok || value == nil {
@@ -110,10 +157,12 @@ func expandPath(value string) string {
 			}
 		}
 	}
-	if strings.ContainsRune(value, os.PathSeparator) {
-		return filepath.Clean(value)
+
+	cleaned := filepath.Clean(value)
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		return abs
 	}
-	return value
+	return cleaned
 }
 
 func normalizeStateList(values []string) {
