@@ -1,3 +1,56 @@
+---
+tracker:
+  kind: linear
+  endpoint: $LINEAR_BASE_URL
+  api_key: $LINEAR_API_TOKEN
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Cancelled
+polling:
+  interval_ms: 30000
+workspace:
+  root: $COLIN_WORKSPACE_ROOT
+hooks:
+  timeout_ms: 60000
+agent:
+  max_concurrent_agents: 8
+  max_turns: 1
+  max_retry_backoff_ms: 300000
+codex:
+  command: codex app-server
+  read_timeout_ms: 5000
+  turn_timeout_ms: 3600000
+  stall_timeout_ms: 300000
+colin:
+  linear_backend: $COLIN_LINEAR_BACKEND
+  team_id: $LINEAR_TEAM_ID
+  github_api_url: $GITHUB_API_URL
+  github_app_id: $GITHUB_APP_ID
+  github_app_installation_id: $GITHUB_APP_INSTALLATION_ID
+  github_app_private_key: $GITHUB_APP_PRIVATE_KEY
+  github_app_private_key_path: $GITHUB_APP_PRIVATE_KEY_PATH
+  base_branch: $COLIN_BASE_BRANCH
+  push_after_merge: $COLIN_PUSH_AFTER_MERGE
+  project_filter: $COLIN_PROJECT_FILTER
+  work_prompt_path: prompts/work.md
+  merge_prompt_path: prompts/merge.md
+  colin_home: $COLIN_HOME
+  worker_id: $COLIN_WORKER_ID
+  lease_ttl: $COLIN_LEASE_TTL
+  dry_run: $COLIN_DRY_RUN
+  workflow_states:
+    todo: Todo
+    in_progress: In Progress
+    refine: Refine
+    review: Review
+    merge: Merge
+    merged: Merged
+    done: Done
+---
+
 # Workflow and Process Guidelines (Linear)
 
 This document describes our development workflow, from task planning to coding, testing, and deployment. It also outlines how **ExecPlans** tie into our tracking system (Linear) to ensure every significant effort is planned and documented.

@@ -12,6 +12,7 @@ import (
 	"github.com/pmenglund/codex-sdk-go"
 
 	"github.com/pmenglund/colin/internal/linear"
+	"github.com/pmenglund/colin/internal/workflowfile"
 	"github.com/pmenglund/colin/prompts"
 )
 
@@ -177,16 +178,31 @@ func (m *MergePreparer) buildPrompt(
 		return "", err
 	}
 
-	replacements := strings.NewReplacer(
-		"{{ LINEAR_ID }}", strings.TrimSpace(issue.Identifier),
-		"{{ LINEAR_TITLE }}", strings.TrimSpace(issue.Title),
-		"{{ LINEAR_DESCRIPTION }}", issuePromptDescription(issue),
-		"{{ SOURCE_BRANCH }}", strings.TrimSpace(branchName),
-		"{{ BASE_BRANCH }}", strings.TrimSpace(baseBranch),
-		"{{ REMOTE_NAME }}", strings.TrimSpace(remoteName),
-		"{{ WORKTREE_PATH }}", strings.TrimSpace(worktreePath),
-	)
-	prompt := strings.TrimSpace(replacements.Replace(template))
+	prompt, err := workflowfile.RenderPrompt(template, workflowfile.PromptData{
+		Issue: workflowfile.PromptIssue{
+			ID:          strings.TrimSpace(issue.ID),
+			Identifier:  strings.TrimSpace(issue.Identifier),
+			Title:       strings.TrimSpace(issue.Title),
+			Description: issuePromptDescription(issue),
+			ProjectID:   strings.TrimSpace(issue.ProjectID),
+			ProjectName: strings.TrimSpace(issue.ProjectName),
+			State:       strings.TrimSpace(issue.StateName),
+			Blocked:     issue.Blocked,
+			BlockedBy:   append([]string(nil), issue.BlockedBy...),
+			Metadata:    mapsClone(issue.Metadata),
+		},
+		LinearID:          strings.TrimSpace(issue.Identifier),
+		LinearTitle:       strings.TrimSpace(issue.Title),
+		LinearDescription: issuePromptDescription(issue),
+		SourceBranch:      strings.TrimSpace(branchName),
+		BaseBranch:        strings.TrimSpace(baseBranch),
+		RemoteName:        strings.TrimSpace(remoteName),
+		WorktreePath:      strings.TrimSpace(worktreePath),
+	})
+	if err != nil {
+		return "", err
+	}
+	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return "", errors.New("merge prompt template is empty")
 	}

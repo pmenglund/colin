@@ -53,6 +53,33 @@ type HTTPClient struct {
 	states     workflow.States
 }
 
+type issueNode struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	Project    *struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		SlugID string `json:"slugId"`
+	} `json:"project"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	Priority    any    `json:"priority"`
+	State       struct {
+		Name string `json:"name"`
+	} `json:"state"`
+	Labels struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
+	InverseRelations struct {
+		Nodes []inverseRelation `json:"nodes"`
+	} `json:"inverseRelations"`
+}
+
 // NewHTTPClient creates a Linear GraphQL client with sane defaults.
 func NewHTTPClient(endpoint, token, teamID string, httpClient *http.Client) *HTTPClient {
 	if strings.TrimSpace(endpoint) == "" {
@@ -101,6 +128,54 @@ func (c *HTTPClient) SetStateIDs(stateIDs map[string]string) {
 	}
 }
 
+func normalizeIssueFromNode(node issueNode, metadata map[string]string, states workflow.States) Issue {
+	createdAt, _ := time.Parse(time.RFC3339, node.CreatedAt)
+	updatedAt, _ := time.Parse(time.RFC3339, node.UpdatedAt)
+	labels := make([]string, 0, len(node.Labels.Nodes))
+	for _, label := range node.Labels.Nodes {
+		name := strings.ToLower(strings.TrimSpace(label.Name))
+		if name == "" {
+			continue
+		}
+		labels = append(labels, name)
+	}
+	branchName := strings.TrimSpace(metadata[workflow.MetaBranchName])
+	return Issue{
+		ID:          node.ID,
+		Identifier:  node.Identifier,
+		Title:       node.Title,
+		ProjectID:   projectID(node.Project),
+		ProjectName: projectName(node.Project),
+		ProjectSlug: projectSlug(node.Project),
+		Description: node.Description,
+		URL:         strings.TrimSpace(node.URL),
+		Labels:      labels,
+		Priority:    normalizePriority(node.Priority),
+		CreatedAt:   createdAt,
+		StateName:   node.State.Name,
+		UpdatedAt:   updatedAt,
+		Blocked:     hasActiveBlockingInverseRelation(node.ID, node.InverseRelations.Nodes, states),
+		Metadata:    metadata,
+		BranchName:  branchName,
+	}
+}
+
+func normalizePriority(raw any) *int {
+	switch typed := raw.(type) {
+	case float64:
+		value := int(typed)
+		return &value
+	case int:
+		value := typed
+		return &value
+	case int64:
+		value := int(typed)
+		return &value
+	default:
+		return nil
+	}
+}
+
 func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]Issue, error) {
 	states := c.runtimeStates()
 
@@ -113,10 +188,19 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
       project {
         id
         name
+        slugId
       }
       description
+      url
+      createdAt
       updatedAt
+      priority
       state { name }
+      labels(first: 20) {
+        nodes {
+          name
+        }
+      }
       inverseRelations(first: 20) {
         nodes {
           type
@@ -140,23 +224,7 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 
 	var resp struct {
 		Issues struct {
-			Nodes []struct {
-				ID         string `json:"id"`
-				Identifier string `json:"identifier"`
-				Title      string `json:"title"`
-				Project    *struct {
-					ID   string `json:"id"`
-					Name string `json:"name"`
-				} `json:"project"`
-				Description string `json:"description"`
-				UpdatedAt   string `json:"updatedAt"`
-				State       struct {
-					Name string `json:"name"`
-				} `json:"state"`
-				InverseRelations struct {
-					Nodes []inverseRelation `json:"nodes"`
-				} `json:"inverseRelations"`
-			} `json:"nodes"`
+			Nodes []issueNode `json:"nodes"`
 		} `json:"issues"`
 	}
 	if err := c.graphQL(ctx, query, map[string]any{"teamKey": teamID}, func(data json.RawMessage) error {
@@ -167,30 +235,11 @@ func (c *HTTPClient) ListCandidateIssues(ctx context.Context, teamID string) ([]
 
 	issues := make([]Issue, 0, len(resp.Issues.Nodes))
 	for _, n := range resp.Issues.Nodes {
-		blocked := hasActiveBlockingInverseRelation(n.ID, n.InverseRelations.Nodes, states)
-
 		meta, err := c.getIssueMetadata(ctx, n.ID)
 		if err != nil {
 			return nil, fmt.Errorf("read issue %s metadata attachment: %w", n.ID, err)
 		}
-
-		updatedAt, err := time.Parse(time.RFC3339, n.UpdatedAt)
-		if err != nil {
-			updatedAt = time.Time{}
-		}
-
-		issues = append(issues, Issue{
-			ID:          n.ID,
-			Identifier:  n.Identifier,
-			Title:       n.Title,
-			ProjectID:   projectID(n.Project),
-			ProjectName: projectName(n.Project),
-			Description: n.Description,
-			StateName:   n.State.Name,
-			UpdatedAt:   updatedAt,
-			Blocked:     blocked,
-			Metadata:    meta,
-		})
+		issues = append(issues, normalizeIssueFromNode(n, meta, states))
 	}
 
 	return issues, nil
@@ -202,9 +251,22 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
     id
     identifier
     title
+    project {
+      id
+      name
+      slugId
+    }
     description
+    url
+    createdAt
     updatedAt
+    priority
     state { name }
+    labels(first: 20) {
+      nodes {
+        name
+      }
+    }
     inverseRelations(first: 20) {
       nodes {
         type
@@ -222,19 +284,7 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 }`
 
 	var resp struct {
-		Issue *struct {
-			ID          string `json:"id"`
-			Identifier  string `json:"identifier"`
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			UpdatedAt   string `json:"updatedAt"`
-			State       struct {
-				Name string `json:"name"`
-			} `json:"state"`
-			InverseRelations struct {
-				Nodes []inverseRelation `json:"nodes"`
-			} `json:"inverseRelations"`
-		} `json:"issue"`
+		Issue *issueNode `json:"issue"`
 	}
 
 	if err := c.graphQL(ctx, query, map[string]any{"issueId": issueID}, func(data json.RawMessage) error {
@@ -251,21 +301,7 @@ func (c *HTTPClient) GetIssue(ctx context.Context, issueID string) (Issue, error
 		return Issue{}, fmt.Errorf("read issue metadata attachment: %w", err)
 	}
 
-	updatedAt, err := time.Parse(time.RFC3339, resp.Issue.UpdatedAt)
-	if err != nil {
-		updatedAt = time.Time{}
-	}
-
-	return Issue{
-		ID:          resp.Issue.ID,
-		Identifier:  resp.Issue.Identifier,
-		Title:       resp.Issue.Title,
-		Description: resp.Issue.Description,
-		StateName:   resp.Issue.State.Name,
-		UpdatedAt:   updatedAt,
-		Blocked:     hasActiveBlockingInverseRelation(resp.Issue.ID, resp.Issue.InverseRelations.Nodes, c.runtimeStates()),
-		Metadata:    meta,
-	}, nil
+	return normalizeIssueFromNode(*resp.Issue, meta, c.runtimeStates()), nil
 }
 
 // GetIssueByIdentifier returns one issue snapshot by identifier.
@@ -310,6 +346,150 @@ func (c *HTTPClient) GetIssueByIdentifier(ctx context.Context, issueIdentifier s
 	}
 
 	return c.GetIssue(ctx, resp.Issues.Nodes[0].ID)
+}
+
+// FetchIssueStatesByIDs refreshes issue snapshots for the provided IDs.
+func (c *HTTPClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]Issue, error) {
+	ids := normalizeIDList(issueIDs)
+	if len(ids) == 0 {
+		return map[string]Issue{}, nil
+	}
+
+	query := `query FetchIssueStatesByIDs($ids: [ID!]!) {
+  issues(filter: { id: { in: $ids } }, first: 50) {
+    nodes {
+      id
+      identifier
+      title
+      project {
+        id
+        name
+        slugId
+      }
+      description
+      url
+      createdAt
+      updatedAt
+      priority
+      state { name }
+      labels(first: 20) {
+        nodes {
+          name
+        }
+      }
+      inverseRelations(first: 20) {
+        nodes {
+          type
+          issue {
+            id
+            state { name }
+          }
+          relatedIssue {
+            id
+            state { name }
+          }
+        }
+      }
+    }
+  }
+}`
+
+	var resp struct {
+		Issues struct {
+			Nodes []issueNode `json:"nodes"`
+		} `json:"issues"`
+	}
+	if err := c.graphQL(ctx, query, map[string]any{"ids": ids}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]Issue, len(resp.Issues.Nodes))
+	states := c.runtimeStates()
+	for _, node := range resp.Issues.Nodes {
+		meta, err := c.getIssueMetadata(ctx, node.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read issue %s metadata attachment: %w", node.ID, err)
+		}
+		out[node.ID] = normalizeIssueFromNode(node, meta, states)
+	}
+	return out, nil
+}
+
+// FetchIssuesByStates returns issue snapshots for the requested states.
+func (c *HTTPClient) FetchIssuesByStates(ctx context.Context, teamID string, stateNames []string) ([]Issue, error) {
+	statesFilter := normalizeStringList(stateNames)
+	if len(statesFilter) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(teamID) == "" {
+		teamID = c.teamID
+	}
+
+	query := `query FetchIssuesByStates($teamKey: String!, $stateNames: [String!]!) {
+  issues(filter: { team: { key: { eq: $teamKey } }, state: { name: { in: $stateNames } } }, first: 50) {
+    nodes {
+      id
+      identifier
+      title
+      project {
+        id
+        name
+        slugId
+      }
+      description
+      url
+      createdAt
+      updatedAt
+      priority
+      state { name }
+      labels(first: 20) {
+        nodes {
+          name
+        }
+      }
+      inverseRelations(first: 20) {
+        nodes {
+          type
+          issue {
+            id
+            state { name }
+          }
+          relatedIssue {
+            id
+            state { name }
+          }
+        }
+      }
+    }
+  }
+}`
+
+	var resp struct {
+		Issues struct {
+			Nodes []issueNode `json:"nodes"`
+		} `json:"issues"`
+	}
+	if err := c.graphQL(ctx, query, map[string]any{
+		"teamKey":    teamID,
+		"stateNames": statesFilter,
+	}, func(data json.RawMessage) error {
+		return json.Unmarshal(data, &resp)
+	}); err != nil {
+		return nil, err
+	}
+
+	out := make([]Issue, 0, len(resp.Issues.Nodes))
+	states := c.runtimeStates()
+	for _, node := range resp.Issues.Nodes {
+		meta, err := c.getIssueMetadata(ctx, node.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read issue %s metadata attachment: %w", node.ID, err)
+		}
+		out = append(out, normalizeIssueFromNode(node, meta, states))
+	}
+	return out, nil
 }
 
 func (c *HTTPClient) UpdateIssueState(ctx context.Context, issueID string, toState string) error {
@@ -797,8 +977,9 @@ func relationBlockerIssue(issueID string, relation inverseRelation) *inverseRela
 }
 
 func projectID(project *struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	SlugID string `json:"slugId"`
 }) string {
 	if project == nil {
 		return ""
@@ -807,11 +988,58 @@ func projectID(project *struct {
 }
 
 func projectName(project *struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	SlugID string `json:"slugId"`
 }) string {
 	if project == nil {
 		return ""
 	}
 	return strings.TrimSpace(project.Name)
+}
+
+func projectSlug(project *struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	SlugID string `json:"slugId"`
+}) string {
+	if project == nil {
+		return ""
+	}
+	return strings.TrimSpace(project.SlugID)
+}
+
+func normalizeIDList(ids []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func normalizeStringList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }

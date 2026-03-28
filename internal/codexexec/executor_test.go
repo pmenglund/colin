@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/pmenglund/codex-sdk-go"
+	"github.com/pmenglund/codex-sdk-go/rpc"
+	"github.com/pmenglund/colin/internal/execution"
 	"github.com/pmenglund/colin/internal/linear"
 	"github.com/pmenglund/colin/internal/workflow"
 )
@@ -20,6 +23,8 @@ type fakeThread struct {
 	id             string
 	turnResult     *codex.TurnResult
 	runErr         error
+	streamNotes    []rpc.Notification
+	streamErr      error
 	lastInputs     []codex.Input
 	lastTurnOpts   *codex.TurnOptions
 	startThreadErr error
@@ -34,6 +39,59 @@ func (f *fakeThread) RunInputs(_ context.Context, inputs []codex.Input, opts *co
 		return nil, f.runErr
 	}
 	return f.turnResult, nil
+}
+
+func (f *fakeThread) RunStreamed(_ context.Context, inputs []codex.Input, opts *codex.TurnOptions) (codexTurnStream, error) {
+	f.lastInputs = append([]codex.Input(nil), inputs...)
+	f.lastTurnOpts = opts
+	if f.runErr != nil {
+		return nil, f.runErr
+	}
+	notes := append([]rpc.Notification(nil), f.streamNotes...)
+	if len(notes) == 0 && f.turnResult != nil {
+		notes = append(notes,
+			rpc.Notification{
+				Method: "turn/started",
+				Raw:    mustJSONRaw(map[string]any{"threadId": f.id, "turn": map[string]any{"id": "turn_1", "status": "running"}}),
+			},
+			rpc.Notification{
+				Method: "item/completed",
+				Raw:    mustJSONRaw(map[string]any{"threadId": f.id, "item": map[string]any{"text": f.turnResult.FinalResponse}}),
+			},
+			rpc.Notification{
+				Method: "turn/completed",
+				Raw:    mustJSONRaw(map[string]any{"threadId": f.id, "turn": map[string]any{"id": "turn_1", "status": "completed"}}),
+			},
+		)
+	}
+	return &fakeTurnStream{notes: notes, err: f.streamErr}, nil
+}
+
+type fakeTurnStream struct {
+	notes []rpc.Notification
+	err   error
+}
+
+func (f *fakeTurnStream) Next(context.Context) (rpc.Notification, error) {
+	if len(f.notes) == 0 {
+		if f.err != nil {
+			return rpc.Notification{}, f.err
+		}
+		return rpc.Notification{}, io.EOF
+	}
+	note := f.notes[0]
+	f.notes = f.notes[1:]
+	return note, nil
+}
+
+func (f *fakeTurnStream) Close() {}
+
+func mustJSONRaw(v any) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 type fakeClient struct {
@@ -200,6 +258,117 @@ func TestExecutorEvaluateAndExecuteWellSpecified(t *testing.T) {
 	}
 	if !strings.Contains(outputSchema, "\"after_evidence_ref\"") {
 		t.Fatalf("output schema missing after_evidence_ref: %s", outputSchema)
+	}
+}
+
+func TestExecutorEvaluateAndExecuteStreamedEmitsSessionUpdates(t *testing.T) {
+	thread := &fakeThread{
+		id: "thr_stream",
+		streamNotes: []rpc.Notification{
+			{
+				Method: "turn/started",
+				Raw:    mustJSONRaw(map[string]any{"threadId": "thr_stream", "turn": map[string]any{"id": "turn_stream", "status": "running"}}),
+			},
+			{
+				Method: "thread/tokenUsage/updated",
+				Raw: mustJSONRaw(map[string]any{
+					"threadId": "thr_stream",
+					"turnId":   "turn_stream",
+					"tokenUsage": map[string]any{
+						"last":  map[string]any{"inputTokens": 3, "outputTokens": 5, "totalTokens": 8},
+						"total": map[string]any{"inputTokens": 11, "outputTokens": 13, "totalTokens": 24},
+					},
+				}),
+			},
+			{
+				Method: "item/completed",
+				Raw: mustJSONRaw(map[string]any{
+					"threadId": "thr_stream",
+					"item":     map[string]any{"text": `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"done","before_evidence_ref":"","after_evidence_ref":""}`},
+				}),
+			},
+			{
+				Method: "turn/completed",
+				Raw:    mustJSONRaw(map[string]any{"threadId": "thr_stream", "turn": map[string]any{"id": "turn_stream", "status": "completed"}}),
+			},
+		},
+	}
+	client := &fakeClient{thread: thread}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	var updates []execution.SessionUpdate
+	result, err := executor.EvaluateAndExecuteStreamed(context.Background(), linear.Issue{Identifier: "COLIN-1", Title: "Title", Description: "Spec"}, func(update execution.SessionUpdate) {
+		updates = append(updates, update)
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecuteStreamed() error = %v", err)
+	}
+	if !result.IsWellSpecified {
+		t.Fatal("expected well specified result")
+	}
+	if len(updates) != 4 {
+		t.Fatalf("session update count = %d, want 4", len(updates))
+	}
+	var tokenUpdate execution.SessionUpdate
+	for _, update := range updates {
+		if update.TotalTokens > 0 {
+			tokenUpdate = update
+			break
+		}
+	}
+	if tokenUpdate.ThreadID != "thr_stream" {
+		t.Fatalf("ThreadID = %q, want %q", tokenUpdate.ThreadID, "thr_stream")
+	}
+	if tokenUpdate.TurnID != "turn_stream" {
+		t.Fatalf("TurnID = %q, want %q", tokenUpdate.TurnID, "turn_stream")
+	}
+	if tokenUpdate.TotalTokens != 24 {
+		t.Fatalf("TotalTokens = %d, want 24", tokenUpdate.TotalTokens)
+	}
+	if tokenUpdate.ReportedTotalTokens != 8 {
+		t.Fatalf("ReportedTotalTokens = %d, want 8", tokenUpdate.ReportedTotalTokens)
+	}
+}
+
+func TestExecutorRunAttemptUsesContinuationPrompt(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_continue",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"done","before_evidence_ref":"","after_evidence_ref":""}`},
+	}
+	client := &fakeClient{resumeThread: thread}
+	executor := &Executor{
+		cwd:   "/tmp",
+		model: "gpt-5",
+		newClient: func(context.Context) (codexClient, error) {
+			return client, nil
+		},
+	}
+
+	attempt := 2
+	_, err := executor.RunAttempt(context.Background(), execution.AttemptRequest{
+		Issue: linear.Issue{
+			Identifier: "COLIN-2",
+			Metadata: map[string]string{
+				workflow.MetaThreadID: "thr_existing",
+			},
+		},
+		Attempt:      &attempt,
+		Continuation: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunAttempt() error = %v", err)
+	}
+	if len(thread.lastInputs) != 1 {
+		t.Fatalf("expected one input, got %d", len(thread.lastInputs))
+	}
+	if !strings.Contains(thread.lastInputs[0].Text, "continuation attempt 2") {
+		t.Fatalf("continuation prompt = %q", thread.lastInputs[0].Text)
 	}
 }
 
@@ -429,6 +598,36 @@ func TestExecutorEvaluateAndExecuteUsesPromptTemplateFromMarkdown(t *testing.T) 
 	}
 	if strings.Contains(prompt, "colin:metadata") {
 		t.Fatalf("prompt should strip metadata block, got %q", prompt)
+	}
+}
+
+func TestExecutorEvaluateAndExecuteUsesWorkflowPromptBodyWhenNoOverridePath(t *testing.T) {
+	thread := &fakeThread{
+		id:         "thr_workflow_prompt",
+		turnResult: &codex.TurnResult{FinalResponse: `{"is_well_specified":true,"needs_input_summary":"","execution_summary":"Implemented","before_evidence_ref":"","after_evidence_ref":""}`},
+	}
+
+	executor := &Executor{
+		cwd:                "/workspace",
+		model:              "gpt-5",
+		workflowPromptBody: "Issue {{ .Issue.Identifier }} / {{ LINEAR_TITLE }} / {{ .Issue.Description }}",
+		newClient: func(context.Context) (codexClient, error) {
+			return &fakeClient{thread: thread}, nil
+		},
+	}
+
+	_, err := executor.EvaluateAndExecute(context.Background(), linear.Issue{
+		Identifier:  "COLIN-120",
+		Title:       "Workflow prompt path test",
+		Description: "<!-- colin:metadata {\"k\":\"v\"} -->\nActual description",
+	})
+	if err != nil {
+		t.Fatalf("EvaluateAndExecute() error = %v", err)
+	}
+
+	prompt := thread.lastInputs[0].Text
+	if !strings.Contains(prompt, "Issue COLIN-120 / Workflow prompt path test / Actual description") {
+		t.Fatalf("prompt = %q", prompt)
 	}
 }
 

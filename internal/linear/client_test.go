@@ -885,6 +885,122 @@ func TestGetIssueReturnsRateLimitErrorWithRetryIn(t *testing.T) {
 	}
 }
 
+func TestFetchIssueStatesByIDsReturnsNormalizedFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch {
+		case strings.Contains(req.Query, "query FetchIssueStatesByIDs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":          "1",
+								"identifier":  "COL-1",
+								"title":       "Example",
+								"description": "spec",
+								"url":         "https://linear.app/example/COL-1",
+								"createdAt":   "2026-03-10T00:00:00Z",
+								"updatedAt":   "2026-03-11T00:00:00Z",
+								"priority":    2,
+								"project": map[string]any{
+									"id":     "project-1",
+									"name":   "Alpha",
+									"slugId": "alpha",
+								},
+								"state":            map[string]any{"name": "In Progress"},
+								"labels":           map[string]any{"nodes": []map[string]any{{"name": "Backend"}}},
+								"inverseRelations": map[string]any{"nodes": []map[string]any{}},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentsForURL": map[string]any{
+						"nodes": []map[string]any{
+							{"id": "att-1", "updatedAt": "2026-03-11T00:00:00Z", "metadata": map[string]any{"colin.branch_name": "colin/COL-1"}, "issue": map[string]any{"id": "1"}},
+						},
+					},
+				},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	issues, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs() error = %v", err)
+	}
+	issue := issues["1"]
+	if issue.ProjectSlug != "alpha" {
+		t.Fatalf("ProjectSlug = %q", issue.ProjectSlug)
+	}
+	if issue.Priority == nil || *issue.Priority != 2 {
+		t.Fatalf("Priority = %#v", issue.Priority)
+	}
+	if issue.URL != "https://linear.app/example/COL-1" {
+		t.Fatalf("URL = %q", issue.URL)
+	}
+	if len(issue.Labels) != 1 || issue.Labels[0] != "backend" {
+		t.Fatalf("Labels = %#v", issue.Labels)
+	}
+	if issue.BranchName != "colin/COL-1" {
+		t.Fatalf("BranchName = %q", issue.BranchName)
+	}
+}
+
+func TestFetchIssuesByStatesFiltersRequestedStates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch {
+		case strings.Contains(req.Query, "query FetchIssuesByStates"):
+			if got := req.Variables["stateNames"].([]any); len(got) != 2 {
+				t.Fatalf("stateNames len = %d, want 2", len(got))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"nodes": []map[string]any{
+							{"id": "1", "identifier": "COL-1", "title": "Done", "description": "spec", "createdAt": "2026-03-10T00:00:00Z", "updatedAt": "2026-03-11T00:00:00Z", "state": map[string]any{"name": "Done"}, "labels": map[string]any{"nodes": []map[string]any{}}, "inverseRelations": map[string]any{"nodes": []map[string]any{}}},
+						},
+					},
+				},
+			})
+		case strings.Contains(req.Query, "query AttachmentsForURL"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"attachmentsForURL": map[string]any{"nodes": []map[string]any{}}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, "token", "team", srv.Client())
+	issues, err := client.FetchIssuesByStates(context.Background(), "team", []string{"Done", "Cancelled"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates() error = %v", err)
+	}
+	if len(issues) != 1 || issues[0].StateName != "Done" {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func stringVariable(variables map[string]any, key string) string {
 	if len(variables) == 0 {
 		return ""

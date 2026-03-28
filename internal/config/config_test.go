@@ -142,6 +142,235 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadWithOptionsAppliesWorkflowFrontMatter(t *testing.T) {
+	t.Setenv("LINEAR_API_TOKEN", "")
+	t.Setenv("LINEAR_TEAM_ID", "")
+	t.Setenv("COLIN_LINEAR_BACKEND", "")
+	t.Setenv("COLIN_WORKFLOW_PATH", "")
+	t.Setenv("COLIN_WORKSPACE_ROOT", "")
+
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	content := `---
+tracker:
+  kind: fake
+  endpoint: https://workflow.invalid/graphql
+polling:
+  interval_ms: 45000
+workspace:
+  root: /tmp/workflow-root
+agent:
+  max_concurrent_agents: 3
+colin:
+  linear_backend: fake
+  worker_id: workflow-worker
+  work_prompt_path: prompts/work.md
+  merge_prompt_path: prompts/merge.md
+  lease_ttl: 7m
+  dry_run: true
+  workflow_states:
+    review: Human Review
+---
+Issue {{ LINEAR_ID }}
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		ConfigPath:     filepath.Join(dir, "missing.toml"),
+		WorkflowPath:   workflowPath,
+		SkipConfigFile: true,
+	})
+	if err != nil {
+		t.Fatalf("LoadWithOptions() error = %v", err)
+	}
+
+	if cfg.LinearBackend != LinearBackendFake {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
+	}
+	if cfg.LinearBaseURL != "https://workflow.invalid/graphql" {
+		t.Fatalf("LinearBaseURL = %q", cfg.LinearBaseURL)
+	}
+	if cfg.PollEvery != 45*time.Second {
+		t.Fatalf("PollEvery = %s", cfg.PollEvery)
+	}
+	if cfg.MaxConcurrency != 3 {
+		t.Fatalf("MaxConcurrency = %d", cfg.MaxConcurrency)
+	}
+	if cfg.WorkerID != "workflow-worker" {
+		t.Fatalf("WorkerID = %q", cfg.WorkerID)
+	}
+	if cfg.ResolvedWorkspaceRoot() != "/tmp/workflow-root" {
+		t.Fatalf("ResolvedWorkspaceRoot() = %q", cfg.ResolvedWorkspaceRoot())
+	}
+	if cfg.WorkPromptPath != "prompts/work.md" {
+		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
+	}
+	if cfg.MergePromptPath != "prompts/merge.md" {
+		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
+	}
+	if cfg.LeaseTTL != 7*time.Minute {
+		t.Fatalf("LeaseTTL = %s", cfg.LeaseTTL)
+	}
+	if !cfg.DryRun {
+		t.Fatal("DryRun = false, want true")
+	}
+	if cfg.WorkflowPromptTemplate != "Issue {{ LINEAR_ID }}" {
+		t.Fatalf("WorkflowPromptTemplate = %q", cfg.WorkflowPromptTemplate)
+	}
+	if cfg.WorkflowStates.Review != "Human Review" {
+		t.Fatalf("WorkflowStates.Review = %q", cfg.WorkflowStates.Review)
+	}
+}
+
+func TestLoadWithOptionsEnvOverridesWorkflowFrontMatter(t *testing.T) {
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_WORKER_ID", "env-worker")
+	t.Setenv("COLIN_POLL_EVERY", "12s")
+
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	content := `---
+polling:
+  interval_ms: 45000
+colin:
+  linear_backend: http
+  worker_id: workflow-worker
+---
+Issue {{ LINEAR_ID }}
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkflowPath:   workflowPath,
+		SkipConfigFile: true,
+	})
+	if err != nil {
+		t.Fatalf("LoadWithOptions() error = %v", err)
+	}
+
+	if cfg.LinearBackend != LinearBackendFake {
+		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
+	}
+	if cfg.WorkerID != "env-worker" {
+		t.Fatalf("WorkerID = %q", cfg.WorkerID)
+	}
+	if cfg.PollEvery != 12*time.Second {
+		t.Fatalf("PollEvery = %s", cfg.PollEvery)
+	}
+}
+
+func TestProviderReloadKeepsLastKnownGoodConfig(t *testing.T) {
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+	t.Setenv("COLIN_WORKFLOW_PATH", "")
+
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(workflowPath, []byte(`---
+polling:
+  interval_ms: 30000
+colin:
+  linear_backend: fake
+  worker_id: workflow-worker
+---
+Issue {{ LINEAR_ID }}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	provider, err := NewProvider(LoadOptions{
+		WorkflowPath:   workflowPath,
+		SkipConfigFile: true,
+	})
+	if err != nil {
+		t.Fatalf("NewProvider() error = %v", err)
+	}
+
+	if provider.Current().PollEvery != 30*time.Second {
+		t.Fatalf("initial PollEvery = %s", provider.Current().PollEvery)
+	}
+
+	if err := os.WriteFile(workflowPath, []byte("---\n- invalid\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := provider.Reload(); err == nil {
+		t.Fatal("Reload() error = nil, want error")
+	}
+	if provider.Current().PollEvery != 30*time.Second {
+		t.Fatalf("PollEvery after failed reload = %s, want previous good value", provider.Current().PollEvery)
+	}
+}
+
+func TestLoadWithOptionsReadsExtendedWorkflowRuntimeConfig(t *testing.T) {
+	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
+
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	content := `---
+tracker:
+  kind: fake
+  active_states: [Todo, In Progress, Review]
+  terminal_states: [Done, Cancelled]
+hooks:
+  before_run: echo before
+  after_run: echo after
+  timeout_ms: 1200
+agent:
+  max_concurrent_agents: 4
+  max_turns: 7
+  max_retry_backoff_ms: 90000
+  max_concurrent_agents_by_state:
+    review: 1
+codex:
+  command: codex app-server --json
+  read_timeout_ms: 2000
+  turn_timeout_ms: 3000
+  stall_timeout_ms: 4000
+colin:
+  linear_backend: fake
+---
+Issue {{ LINEAR_ID }}
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkflowPath: workflowPath, SkipConfigFile: true})
+	if err != nil {
+		t.Fatalf("LoadWithOptions() error = %v", err)
+	}
+	if want := []string{"Todo", "In Progress", "Review"}; !slices.Equal(cfg.ActiveStates, want) {
+		t.Fatalf("ActiveStates = %#v, want %#v", cfg.ActiveStates, want)
+	}
+	if want := []string{"Done", "Cancelled"}; !slices.Equal(cfg.TerminalStates, want) {
+		t.Fatalf("TerminalStates = %#v, want %#v", cfg.TerminalStates, want)
+	}
+	if cfg.MaxTurns != 7 {
+		t.Fatalf("MaxTurns = %d, want 7", cfg.MaxTurns)
+	}
+	if cfg.MaxRetryBackoff != 90*time.Second {
+		t.Fatalf("MaxRetryBackoff = %s, want 90s", cfg.MaxRetryBackoff)
+	}
+	if cfg.MaxConcurrencyByState["review"] != 1 {
+		t.Fatalf("MaxConcurrencyByState = %#v", cfg.MaxConcurrencyByState)
+	}
+	if cfg.Hooks.BeforeRun != "echo before" || cfg.Hooks.AfterRun != "echo after" {
+		t.Fatalf("Hooks = %#v", cfg.Hooks)
+	}
+	if cfg.Hooks.Timeout != 1200*time.Millisecond {
+		t.Fatalf("Hooks.Timeout = %s", cfg.Hooks.Timeout)
+	}
+	if cfg.Codex.Command != "codex app-server --json" {
+		t.Fatalf("Codex.Command = %q", cfg.Codex.Command)
+	}
+	if cfg.Codex.ReadTimeout != 2*time.Second || cfg.Codex.TurnTimeout != 3*time.Second || cfg.Codex.StallTimeout != 4*time.Second {
+		t.Fatalf("Codex = %#v", cfg.Codex)
+	}
+}
+
 func TestLoadFromEnvParsesQuotedProjectFilterCSV(t *testing.T) {
 	t.Setenv("LINEAR_API_TOKEN", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team")

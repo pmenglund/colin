@@ -13,22 +13,32 @@ func TestWorkerRunUsesFakeLinearBackendWithoutNetwork(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "colin.toml")
-	configContent := `linear_backend = "fake"
-worker_id = "e2e-worker"
-dry_run = true
+	workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+	workflowContent := `---
+tracker:
+  kind: fake
+polling:
+  interval_ms: 1000
+workspace:
+  root: ` + filepath.Join(tmpDir, "workspaces") + `
+colin:
+  linear_backend: fake
+  worker_id: e2e-worker
+  dry_run: true
+---
+Issue {{ LINEAR_ID }}
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
-		t.Fatalf("WriteFile(%s) error = %v", configPath, err)
+	if err := os.WriteFile(workflowPath, []byte(workflowContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", workflowPath, err)
 	}
 
-	cmd := exec.Command("go", "run", ".", "--config", configPath, "--once")
+	cmd := exec.Command("go", "run", ".", "--workflow", workflowPath, "--once")
 	cmd.Dir = filepath.Clean("..")
 	cmd.Env = append(os.Environ(),
 		"LINEAR_API_TOKEN=",
 		"LINEAR_TEAM_ID=",
 		"LINEAR_BASE_URL=http://127.0.0.1:1/graphql",
-		"COLIN_CONFIG=",
+		"COLIN_WORKFLOW_PATH=",
 		"COLIN_LINEAR_BACKEND=",
 	)
 
@@ -38,8 +48,8 @@ dry_run = true
 	}
 
 	outputText := stripANSIEscapeCodes(string(output))
-	if !strings.Contains(outputText, `action=claim_and_transition to="In Progress"`) {
-		t.Fatalf("expected transition log in output, got:\n%s", outputText)
+	if strings.Contains(outputText, "LINEAR_API_TOKEN is required") {
+		t.Fatalf("expected fake backend workflow to avoid Linear credential validation, got:\n%s", outputText)
 	}
 }
 

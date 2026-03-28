@@ -268,3 +268,36 @@ func TestInMemoryClientUsesConfiguredRuntimeStatesForBlockedCalculation(t *testi
 		t.Fatal("blocked issue should be marked blocked with configured done state")
 	}
 }
+
+func TestInMemoryClientFetchIssueStatesByIDs(t *testing.T) {
+	client := NewInMemoryClient([]Issue{
+		{ID: "1", Identifier: "COL-1", StateName: "Todo", Labels: []string{"backend"}},
+		{ID: "2", Identifier: "COL-2", StateName: "Done"},
+	})
+
+	issues, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1", "2"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs() error = %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("issue count = %d, want 2", len(issues))
+	}
+	if got := issues["1"].Labels[0]; got != "backend" {
+		t.Fatalf("labels = %#v", issues["1"].Labels)
+	}
+}
+
+func TestInMemoryClientFetchIssuesByStates(t *testing.T) {
+	client := NewInMemoryClient([]Issue{
+		{ID: "1", Identifier: "COL-1", StateName: "Todo"},
+		{ID: "2", Identifier: "COL-2", StateName: "Done"},
+	})
+
+	issues, err := client.FetchIssuesByStates(context.Background(), "team", []string{"Done"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates() error = %v", err)
+	}
+	if len(issues) != 1 || issues[0].Identifier != "COL-2" {
+		t.Fatalf("issues = %#v", issues)
+	}
+}

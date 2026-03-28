@@ -14,3 +14,15 @@ type InProgressExecutionResult = execution.InProgressExecutionResult
 type InProgressExecutor interface {
 	EvaluateAndExecute(ctx context.Context, issue linear.Issue) (InProgressExecutionResult, error)
 }
+
+// SessionUpdate is live Codex execution metadata.
+type SessionUpdate = execution.SessionUpdate
+
+// StreamingInProgressExecutor emits live execution updates during a turn.
+type StreamingInProgressExecutor interface {
+	EvaluateAndExecuteStreamed(
+		ctx context.Context,
+		issue linear.Issue,
+		sink func(SessionUpdate),
+	) (InProgressExecutionResult, error)
+}

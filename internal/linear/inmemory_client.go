@@ -135,6 +135,60 @@ func (c *InMemoryClient) GetIssueByIdentifier(ctx context.Context, issueIdentifi
 	return *selected, nil
 }
 
+// FetchIssueStatesByIDs returns snapshots for the provided issue IDs.
+func (c *InMemoryClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]Issue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	out := make(map[string]Issue, len(issueIDs))
+	for _, issueID := range normalizeIDList(issueIDs) {
+		issue, ok := c.issues[issueID]
+		if !ok {
+			continue
+		}
+		issueCopy := cloneInMemoryIssue(issue)
+		issueCopy.Blocked = issueHasBlockingDependency(issue, c.issues, c.states.WithDefaults())
+		out[issueID] = issueCopy
+	}
+	return out, nil
+}
+
+// FetchIssuesByStates returns issue snapshots limited to the provided state names.
+func (c *InMemoryClient) FetchIssuesByStates(ctx context.Context, _ string, stateNames []string) ([]Issue, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	allowed := map[string]struct{}{}
+	for _, state := range normalizeStringList(stateNames) {
+		allowed[strings.ToLower(state)] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		return nil, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	out := make([]Issue, 0, len(c.issues))
+	for _, issue := range c.issues {
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(issue.StateName))]; !ok {
+			continue
+		}
+		issueCopy := cloneInMemoryIssue(issue)
+		issueCopy.Blocked = issueHasBlockingDependency(issue, c.issues, c.states.WithDefaults())
+		out = append(out, issueCopy)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Identifier < out[j].Identifier
+	})
+	return out, nil
+}
+
 // UpdateIssueState updates issue workflow state.
 func (c *InMemoryClient) UpdateIssueState(ctx context.Context, issueID string, toState string) error {
 	if err := ctx.Err(); err != nil {
@@ -230,6 +284,11 @@ func cloneInMemoryIssue(issue Issue) Issue {
 		out.Metadata[k] = v
 	}
 	out.BlockedBy = append([]string(nil), issue.BlockedBy...)
+	out.Labels = append([]string(nil), issue.Labels...)
+	if issue.Priority != nil {
+		value := *issue.Priority
+		out.Priority = &value
+	}
 	return out
 }
 

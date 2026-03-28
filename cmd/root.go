@@ -6,9 +6,10 @@ import (
 
 // RootOptions stores flags shared across all commands.
 type RootOptions struct {
-	Verbose    bool
-	ConfigPath string
-	NoColor    bool
+	Verbose      bool
+	ConfigPath   string
+	WorkflowPath string
+	NoColor      bool
 }
 
 // NewRootCommand constructs the root colin command.
@@ -27,6 +28,7 @@ func NewRootCommand() *cobra.Command {
 
 	rootCmd.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", "", "Path to config file (default: ./colin.toml or $COLIN_CONFIG)")
+	rootCmd.PersistentFlags().StringVar(&opts.WorkflowPath, "workflow", "", "Path to workflow file (default: ./WORKFLOW.md or $COLIN_WORKFLOW_PATH)")
 	rootCmd.PersistentFlags().BoolVar(&opts.NoColor, "no-color", false, "Disable ANSI color output")
 	addWorkerRunFlags(rootCmd, runOpts)
 	rootCmd.AddCommand(newMetadataCommand(opts))

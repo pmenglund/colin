@@ -4,19 +4,20 @@ This file captures application-specific context that should stay stable across t
 
 ## Purpose
 
-Colin is an automation tool that executes a deterministic workflow on top of Linear issues, also referred to as **tasks**.
+Colin is now a repository-driven orchestration service. It continuously reads eligible Linear issues, creates or reuses a per-issue workspace, runs a Codex session inside that workspace, reconciles active runs against tracker state, and exposes an in-memory runtime snapshot for observability.
 
-It aims to work tasks automatically and autonomously, so a human only needs to define the task and decide whether Codex implemented it correctly.
+The repository-owned `WORKFLOW.md` file is the primary runtime contract. YAML front matter controls tracker, polling, workspace, hook, and Codex settings; the Markdown body or referenced prompt assets provide the agent instructions.
 
-Colin can operate on multiple tasks at the same time, each using its own codex thread, which runs in a separate go routine.
-
-Linear issue dependencies determine which tasks Colin can work on. A task is considered blocked when Linear returns an inverse relation with `type = "blocks"` for that task, and blocked tasks are skipped until the blocking issue is in `Done`.
-
-When Colin starts working on a task, it will create a git worktree in `COLIN_HOME/worktrees` for it and a branch named using the Linear issue ID, e.g. `colin/COL-123`.
+Colin can operate on multiple issues at the same time. The orchestrator owns concurrency, claims, retries, and live session telemetry. Linear issue dependencies still determine whether `Todo` work is blocked.
 
 ## State
 
-Colin uses the Linear states to track the tasks.
+Colin now has two distinct state layers:
+
+- Tracker state: Linear states such as `Todo`, `In Progress`, `Review`, or `Done`.
+- Runtime state: orchestrator-owned `claimed`, `running`, and `retry_attempts` entries.
+
+Tracker state decides whether an issue is active or terminal. Runtime state decides whether Colin may dispatch, retry, or cancel a worker attempt.
 
 ### Todo
 
@@ -53,13 +54,15 @@ Colin also reconciles `Done` for stale merge state: if a `colin/*` source branch
 
 ## Starting a Task
 
-The first time a task is being worked on
+When Colin dispatches an issue it:
 
-1. create a git worktree
-2. create a git branch
-3. create a Codex thread
-4. update the Linear issue with the worktree path, branch name, and Codex session ID
-5. add the Codex session ID as git branch metadata
+1. claims the issue in orchestrator memory
+2. creates or reuses the per-issue workspace
+3. runs configured workspace hooks
+4. starts or resumes a Codex thread in that workspace
+5. tracks live session metadata in memory while the turn runs
+
+Git worktree/bootstrap behavior remains available as a workspace-population adapter, but it is no longer the orchestrator’s core abstraction.
 
 ### Canonical Metadata Keys
 
@@ -85,8 +88,8 @@ If merge coordinates are inconsistent (for example: missing branch or missing wo
 ## System Boundaries
 
 - Primary runtime(s): macOS (CLI process)
-- External services: Linear GraphQL API
-- Data stores: Linear issue state and metadata stored in Linear attachments, plus metadata stored in git branch metadata
+- External services: Linear GraphQL API and Codex app-server
+- Data stores: Linear issue state and metadata stored in Linear attachments, plus optional git branch metadata for the git workspace compatibility path
 
 ## Repository Layout
 
@@ -102,17 +105,21 @@ If merge coordinates are inconsistent (for example: missing branch or missing wo
 
 ## Core Components
 
-- `internal/linear`: transport adapter for querying and mutating Linear issues.
-- `internal/codexexec`: side-effect adapter that starts Codex, opens threads, and returns structured execution outcomes.
-- `internal/workflow`: pure transition engine and lease semantics used for deterministic decisions.
-- `internal/worker`: execution loop that reconciles issue snapshots with the workflow engine.
+- `internal/config`: workflow-derived runtime config and reload provider.
+- `internal/workflowfile`: `WORKFLOW.md` loader, front matter parser, and strict prompt renderer.
+- `internal/linear`: transport adapter for tracker reads plus legacy metadata writes.
+- `internal/workspace`: sanitized workspace lifecycle manager with hooks and cleanup.
+- `internal/codexexec`: streamed Codex runner with live session updates.
+- `internal/orchestrator`: runtime scheduler, reconciliation loop, retry queue, and snapshot state.
+- `internal/worker`: legacy compatibility runner and git-oriented adapters that still back the Colin-specific workflow path.
 
 ## Architecture Rules
 
-- Keep all transition decisions in `internal/workflow`; this package should remain pure and testable without network calls.
-- Keep Linear API specifics in `internal/linear`; other packages must rely on the `linear.Client` interface.
-- Keep Codex SDK specifics in `internal/codexexec`; other packages should depend on `worker.InProgressExecutor`.
-- Keep orchestration and retries in `internal/worker`; do not embed state-machine logic in Cobra command files.
+- Keep repository-owned runtime behavior in `WORKFLOW.md` and `internal/config`; avoid re-hard-coding workflow policy in the service.
+- Keep tracker reads in `internal/linear` and runtime scheduling in `internal/orchestrator`.
+- Keep filesystem safety and hook execution in `internal/workspace`.
+- Keep Codex SDK specifics in `internal/codexexec`; orchestration should consume streamed attempt results rather than SDK internals directly.
+- Treat `internal/worker` as the Colin compatibility layer for git/bootstrap/merge behavior, not as the primary scheduler.
 - Record significant architecture tradeoffs in the active ExecPlan decision log.
 
 ## Local Development

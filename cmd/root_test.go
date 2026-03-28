@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,17 @@ func TestRootCommandVerboseFlag(t *testing.T) {
 	}
 }
 
+func TestRootLogLevel(t *testing.T) {
+	t.Parallel()
+
+	if got := rootLogLevel(nil); got != slog.LevelInfo {
+		t.Fatalf("rootLogLevel(nil) = %v, want %v", got, slog.LevelInfo)
+	}
+	if got := rootLogLevel(&RootOptions{Verbose: true}); got != slog.LevelDebug {
+		t.Fatalf("rootLogLevel(verbose) = %v, want %v", got, slog.LevelDebug)
+	}
+}
+
 func TestRootCommandUsesCOLIN_CONFIGWhenConfigFlagUnset(t *testing.T) {
 	configPath := writeRootTestConfig(t)
 	t.Setenv("COLIN_CONFIG", configPath)
@@ -50,6 +62,9 @@ func TestRootCommandRootFlagsIncludeWorkerExecutionFlags(t *testing.T) {
 	if rootCmd.PersistentFlags().Lookup("no-color") == nil {
 		t.Fatal("expected root command to expose --no-color")
 	}
+	if rootCmd.PersistentFlags().Lookup("workflow") == nil {
+		t.Fatal("expected root command to expose --workflow")
+	}
 }
 
 func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
@@ -69,6 +84,9 @@ func TestRootCommandHelpIncludesVerboseFlag(t *testing.T) {
 	}
 	if !strings.Contains(helpOutput, "--config") {
 		t.Fatalf("expected help output to contain --config, got: %q", helpOutput)
+	}
+	if !strings.Contains(helpOutput, "--workflow") {
+		t.Fatalf("expected help output to contain --workflow, got: %q", helpOutput)
 	}
 	if !strings.Contains(helpOutput, "--once") {
 		t.Fatalf("expected help output to contain --once, got: %q", helpOutput)

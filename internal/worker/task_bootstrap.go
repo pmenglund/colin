@@ -33,10 +33,11 @@ type TaskSessionMetadataWriter interface {
 
 // GitTaskBootstrapperOptions configures a git-backed TaskBootstrapper.
 type GitTaskBootstrapperOptions struct {
-	RepoRoot   string
-	ColinHome  string
-	BaseBranch string
-	GitBinary  string
+	RepoRoot      string
+	ColinHome     string
+	WorkspaceRoot string
+	BaseBranch    string
+	GitBinary     string
 }
 
 // GitTaskBootstrapper creates and reuses per-issue worktrees and branches.
@@ -54,12 +55,16 @@ func NewGitTaskBootstrapper(opts GitTaskBootstrapperOptions) *GitTaskBootstrappe
 	if baseBranch == "" {
 		baseBranch = defaultTaskBaseBranch
 	}
+	workspaceRoot := strings.TrimSpace(opts.WorkspaceRoot)
+	if workspaceRoot == "" {
+		workspaceRoot = filepath.Join(strings.TrimSpace(opts.ColinHome), worktreesDirName)
+	}
 	branchMetadataStore := NewGitBranchMetadataStore(GitBranchMetadataStoreOptions{
 		RepoRoot: repoRoot,
 	})
 	return &GitTaskBootstrapper{
 		repoRoot:            repoRoot,
-		colinHome:           filepath.Clean(strings.TrimSpace(opts.ColinHome)),
+		colinHome:           filepath.Clean(workspaceRoot),
 		baseBranch:          baseBranch,
 		branchMetadataStore: branchMetadataStore,
 	}
@@ -82,7 +87,7 @@ func (b *GitTaskBootstrapper) EnsureTaskWorkspace(ctx context.Context, issueIden
 		return TaskBootstrapResult{}, errors.New("colin home is required")
 	}
 
-	worktreePath := filepath.Join(b.colinHome, worktreesDirName, identifier)
+	worktreePath := filepath.Join(b.colinHome, identifier)
 	branchName := issueBranchPrefix + identifier
 	result := TaskBootstrapResult{
 		WorktreePath: worktreePath,

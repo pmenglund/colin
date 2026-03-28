@@ -16,12 +16,18 @@ type Issue struct {
 	Title       string
 	ProjectID   string
 	ProjectName string
+	ProjectSlug string
 	Description string
+	URL         string
+	Labels      []string
+	Priority    *int
+	CreatedAt   time.Time
 	StateName   string
 	UpdatedAt   time.Time
 	Blocked     bool
 	Metadata    map[string]string
 	BlockedBy   []string
+	BranchName  string
 }
 
 // IssueComment is the subset of Linear comment fields used by worker logic.
