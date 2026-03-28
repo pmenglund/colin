@@ -276,16 +276,28 @@ func notificationIDs(note sdkrpc.Notification) (threadID string, turnID string) 
 }
 
 func notificationMessage(note sdkrpc.Notification) map[string]any {
-	params := map[string]any{}
-	if len(note.Raw) > 0 {
-		if err := json.Unmarshal(note.Raw, &params); err != nil {
-			params["raw"] = string(note.Raw)
-		}
-	}
-	return map[string]any{
+	msg := map[string]any{
 		"method": note.Method,
-		"params": params,
 	}
+	if len(note.Raw) > 0 {
+		raw := map[string]any{}
+		if err := json.Unmarshal(note.Raw, &raw); err != nil {
+			msg["raw"] = string(note.Raw)
+			return msg
+		}
+		if params, ok := raw["params"].(map[string]any); ok {
+			msg["params"] = params
+		}
+		for key, value := range raw {
+			if key == "params" {
+				continue
+			}
+			msg[key] = value
+		}
+		return msg
+	}
+	msg["params"] = map[string]any{}
+	return msg
 }
 
 func notificationRuntimeError(note sdkrpc.Notification) error {

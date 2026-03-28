@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -105,6 +106,31 @@ func TestMapRuntimeError(t *testing.T) {
 				t.Fatalf("expected %v, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestNotificationMessageUsesTopLevelParams(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(map[string]any{
+		"method": "item/completed",
+		"params": map[string]any{
+			"threadId": "thread-1",
+			"item": map[string]any{
+				"text": "Investigating worker output",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	msg := notificationMessage(sdkrpc.Notification{
+		Method: "item/completed",
+		Raw:    raw,
+	})
+	if got := summarizeMessage(msg); got != "Investigating worker output" {
+		t.Fatalf("summarizeMessage() = %q, want %q", got, "Investigating worker output")
 	}
 }
 

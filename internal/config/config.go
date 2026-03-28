@@ -60,6 +60,9 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 				"type": "dangerFullAccess",
 			},
 		},
+		Server: domain.ServerConfig{
+			Port: intPtr(8888),
+		},
 	}
 
 	if err := applyTrackerConfig(&cfg, readMap(def.Config, "tracker")); err != nil {
@@ -357,4 +360,8 @@ func validMergeMethod(value string) bool {
 	default:
 		return false
 	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }

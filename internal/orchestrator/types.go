@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
@@ -25,12 +26,14 @@ type Orchestrator struct {
 	logger      *slog.Logger
 	eventCh     chan any
 	runtime     Runtime
+	loopStarted atomic.Bool
 	running     map[string]*runningEntry
 	claimed     map[string]struct{}
 	retrying    map[string]*retryState
 	completed   map[string]string
 	totalTokens domain.Totals
 	rateLimits  map[string]any
+	issueStates map[string]int
 }
 
 type runningEntry struct {
@@ -38,6 +41,7 @@ type runningEntry struct {
 	identifier    string
 	startedAt     time.Time
 	session       domain.LiveSession
+	outputLog     []domain.OutputLog
 	comment       *commentThreadState
 	retryAttempt  int
 	cancel        context.CancelFunc
@@ -63,3 +67,4 @@ type workerExitedEvent struct {
 	result  codex.Result
 }
 type retryFiredEvent struct{ issueID string }
+type snapshotRequestEvent struct{ response chan domain.Snapshot }

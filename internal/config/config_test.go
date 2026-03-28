@@ -37,6 +37,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Agent.MaxTurns != 20 {
 		t.Fatalf("cfg.Agent.MaxTurns = %d", cfg.Agent.MaxTurns)
 	}
+	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
+		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
+	}
 }
 
 func TestBuildRejectsPartialWorkspaceGitConfig(t *testing.T) {

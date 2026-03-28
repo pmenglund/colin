@@ -1,0 +1,11 @@
+{
+  "name": "goth-web-ui-e2e",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.45.1"
+  },
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
+  }
+}

@@ -1,0 +1,129 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
+)
+
+func TestObservabilityServerRoutes(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewObservabilityServer(func(context.Context) (domain.Snapshot, error) {
+		now := time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC)
+		return domain.Snapshot{
+			GeneratedAt: now,
+			Counts:      map[string]int{"running": 1, "retrying": 0},
+			IssueStates: map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
+			Running: []domain.SnapshotRunning{{
+				Identifier:   "COLIN-93",
+				Title:        "Add dashboard",
+				State:        "In Progress",
+				SessionID:    "session-1",
+				TurnCount:    4,
+				LastEvent:    "turn_completed",
+				LastMessage:  "refresh complete",
+				StartedAt:    now.Add(-time.Minute),
+				LastEventAt:  ptr(now.Add(-2 * time.Second)),
+				InputTokens:  11,
+				OutputTokens: 12,
+				TotalTokens:  23,
+			}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	t.Run("full page", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/")
+		if err != nil {
+			t.Fatalf("GET / error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		text := string(body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		if !strings.Contains(text, "<html") {
+			t.Fatalf("expected full document, got %s", text)
+		}
+		if !strings.Contains(text, `data-testid="shell-instance"`) {
+			t.Fatalf("missing shell marker: %s", text)
+		}
+		if !strings.Contains(text, `data-testid="worker-card-COLIN-93"`) {
+			t.Fatalf("missing worker card: %s", text)
+		}
+	})
+
+	t.Run("fragment", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+		req.Header.Set("HX-Request", "true")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET / fragment error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		text := string(body)
+		if strings.Contains(text, "<html") {
+			t.Fatalf("expected fragment, got %s", text)
+		}
+		if !strings.Contains(text, `id="dashboard-root"`) {
+			t.Fatalf("missing dashboard root: %s", text)
+		}
+	})
+
+	t.Run("api", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/api/v1/state")
+		if err != nil {
+			t.Fatalf("GET /api/v1/state error = %v", err)
+		}
+		defer resp.Body.Close()
+		var snapshot domain.Snapshot
+		if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if got := snapshot.Counts["running"]; got != 1 {
+			t.Fatalf("running count = %d, want 1", got)
+		}
+		if got := snapshot.IssueStates["Review"]; got != 2 {
+			t.Fatalf("review count = %d, want 2", got)
+		}
+	})
+
+	t.Run("assets", func(t *testing.T) {
+		for _, path := range []string{"/assets/app.css", "/assets/htmx.min.js"} {
+			resp, err := http.Get(server.URL + path)
+			if err != nil {
+				t.Fatalf("GET %s error = %v", path, err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200", path, resp.StatusCode)
+			}
+			if len(body) == 0 {
+				t.Fatalf("%s returned empty body", path)
+			}
+		}
+	})
+}
+
+func ptr(value time.Time) *time.Time {
+	return &value
+}

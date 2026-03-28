@@ -47,7 +47,54 @@ func summarizeMessage(msg map[string]any) string {
 			}
 		}
 	}
+	for _, path := range [][]string{
+		{"params", "item", "text"},
+		{"params", "turn", "error", "message"},
+		{"params", "error", "message"},
+	} {
+		if value, ok := nestedString(msg, path...); ok && value != "" {
+			return value
+		}
+	}
+	if values := collectTextValues(msg); len(values) > 0 {
+		return strings.Join(values, "\n")
+	}
 	return ""
+}
+
+func collectTextValues(value any) []string {
+	seen := map[string]struct{}{}
+	var out []string
+
+	var walk func(any)
+	walk = func(current any) {
+		switch v := current.(type) {
+		case map[string]any:
+			for key, item := range v {
+				switch strings.ToLower(key) {
+				case "text", "message", "summary":
+					if text, ok := stringValue(item); ok {
+						text = strings.TrimSpace(text)
+						if text != "" {
+							if _, exists := seen[text]; !exists {
+								seen[text] = struct{}{}
+								out = append(out, text)
+							}
+						}
+					}
+				default:
+					walk(item)
+				}
+			}
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		}
+	}
+
+	walk(value)
+	return out
 }
 
 func extractUsage(msg map[string]any) map[string]int64 {

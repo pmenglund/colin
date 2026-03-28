@@ -11,12 +11,34 @@ import (
 )
 
 // Snapshot returns a read-only summary of current runtime state for logs and future status surfaces.
-func (o *Orchestrator) Snapshot() domain.Snapshot {
+func (o *Orchestrator) Snapshot(ctx context.Context) (domain.Snapshot, error) {
+	if !o.loopStarted.Load() {
+		return o.snapshotAt(time.Now().UTC()), nil
+	}
+
+	response := make(chan domain.Snapshot, 1)
+	select {
+	case o.eventCh <- snapshotRequestEvent{response: response}:
+	case <-ctx.Done():
+		return domain.Snapshot{}, ctx.Err()
+	}
+
+	select {
+	case snapshot := <-response:
+		return snapshot, nil
+	case <-ctx.Done():
+		return domain.Snapshot{}, ctx.Err()
+	}
+}
+
+func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 	running := make([]domain.SnapshotRunning, 0, len(o.running))
 	for _, entry := range o.running {
 		running = append(running, domain.SnapshotRunning{
 			IssueID:      entry.issue.ID,
 			Identifier:   entry.issue.Identifier,
+			Title:        entry.issue.Title,
+			URL:          entry.issue.URL,
 			State:        entry.issue.State,
 			SessionID:    entry.session.SessionID,
 			TurnCount:    entry.session.TurnCount,
@@ -27,6 +49,7 @@ func (o *Orchestrator) Snapshot() domain.Snapshot {
 			InputTokens:  entry.session.CodexInputTokens,
 			OutputTokens: entry.session.CodexOutputTokens,
 			TotalTokens:  entry.session.CodexTotalTokens,
+			OutputLog:    append([]domain.OutputLog(nil), entry.outputLog...),
 		})
 	}
 	sort.Slice(running, func(i, j int) bool { return running[i].Identifier < running[j].Identifier })
@@ -39,10 +62,10 @@ func (o *Orchestrator) Snapshot() domain.Snapshot {
 
 	totals := o.totalTokens
 	for _, entry := range o.running {
-		totals.SecondsRunning += time.Since(entry.startedAt).Seconds()
+		totals.SecondsRunning += now.Sub(entry.startedAt).Seconds()
 	}
 	return domain.Snapshot{
-		GeneratedAt: time.Now().UTC(),
+		GeneratedAt: now,
 		Running:     running,
 		Retrying:    retrying,
 		CodexTotals: totals,
@@ -51,7 +74,19 @@ func (o *Orchestrator) Snapshot() domain.Snapshot {
 			"running":  len(running),
 			"retrying": len(retrying),
 		},
+		IssueStates: cloneCounts(o.issueStates),
 	}
+}
+
+func cloneCounts(input map[string]int) map[string]int {
+	if len(input) == 0 {
+		return map[string]int{}
+	}
+	out := make(map[string]int, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }
 
 // StartupTerminalCleanup removes stale workspaces for issues already in terminal tracker states.

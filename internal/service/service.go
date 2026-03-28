@@ -5,11 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
+	"github.com/pmenglund/colin/internal/app"
 	"github.com/pmenglund/colin/internal/config"
+	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/workflow"
@@ -21,22 +27,30 @@ type Service struct {
 	logger       *slog.Logger
 	loader       workflow.Loader
 	workflowPath string
+	serverPort   *int
+	serverMu     sync.RWMutex
+	serverURL    string
 	orch         *orchestrator.Orchestrator
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
-func New(logger *slog.Logger, workflowPath string) (*Service, error) {
+func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Service, error) {
 	loader := workflow.Loader{}
 	path := loader.ResolvePath(workflowPath)
 	runtime, err := loadRuntime(path, logger)
 	if err != nil {
 		return nil, err
 	}
+	options := buildOptions(optionFns...)
+	if options.serverPortOverride != nil {
+		runtime.Config.Server.Port = intPtr(*options.serverPortOverride)
+	}
 	orch := orchestrator.New(runtime, logger)
 	return &Service{
 		logger:       logger,
 		loader:       loader,
 		workflowPath: path,
+		serverPort:   clonePort(runtime.Config.Server.Port),
 		orch:         orch,
 	}, nil
 }
@@ -44,12 +58,22 @@ func New(logger *slog.Logger, workflowPath string) (*Service, error) {
 // Run starts startup cleanup, workflow reload watching, and the orchestrator loop.
 func (s *Service) Run(ctx context.Context) error {
 	s.logger.Info("service starting", "workflow_path", s.workflowPath)
+	if err := s.startHTTPServer(ctx); err != nil {
+		return err
+	}
 	if err := s.orch.StartupTerminalCleanup(ctx); err != nil {
 		s.logger.Warn("startup cleanup skipped", "error", err)
 	}
 	s.logger.Info("workflow watch started", "path", s.workflowPath, "interval_seconds", 2)
 	go s.watchWorkflow(ctx)
 	return s.orch.Run(ctx)
+}
+
+// DashboardURL returns the dashboard bind URL when the HTTP server is enabled.
+func (s *Service) DashboardURL() string {
+	s.serverMu.RLock()
+	defer s.serverMu.RUnlock()
+	return s.serverURL
 }
 
 func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error) {
@@ -130,6 +154,62 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 			s.orch.UpdateRuntime(runtime)
 		}
 	}
+}
+
+func (s *Service) startHTTPServer(ctx context.Context) error {
+	if s.serverPort == nil {
+		return nil
+	}
+
+	handler, err := app.NewObservabilityServer(func(snapshotCtx context.Context) (domain.Snapshot, error) {
+		return s.orch.Snapshot(snapshotCtx)
+	})
+	if err != nil {
+		return fmt.Errorf("create dashboard server: %w", err)
+	}
+
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*s.serverPort)))
+	if err != nil {
+		return fmt.Errorf("listen dashboard server: %w", err)
+	}
+
+	s.serverMu.Lock()
+	s.serverURL = "http://" + listener.Addr().String()
+	s.serverMu.Unlock()
+	s.logger.Info("dashboard server started", "url", s.DashboardURL())
+
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Warn("dashboard shutdown failed", "error", err)
+		}
+	}()
+
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("dashboard server exited", "error", err)
+		}
+	}()
+
+	return nil
+}
+
+func clonePort(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	return intPtr(*value)
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 // NewDefaultLogger returns the repo-default structured logger.

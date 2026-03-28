@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,16 +14,31 @@ import (
 func main() {
 	logger := service.NewDefaultLogger()
 
-	var workflowPath string
-	if len(os.Args) > 2 {
-		fmt.Fprintln(os.Stderr, "usage: colin [path-to-WORKFLOW.md]")
+	flags := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	port := flags.Int("port", -1, "dashboard port override; default is 8888")
+	flags.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: colin [--port PORT] [path-to-WORKFLOW.md]")
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
-	if len(os.Args) == 2 {
-		workflowPath = os.Args[1]
+	if flags.NArg() > 1 {
+		flags.Usage()
+		os.Exit(2)
 	}
 
-	svc, err := service.New(logger, workflowPath)
+	workflowPath := ""
+	if flags.NArg() == 1 {
+		workflowPath = flags.Arg(0)
+	}
+
+	var options []service.Option
+	if *port >= 0 {
+		options = append(options, service.WithServerPortOverride(*port))
+	}
+
+	svc, err := service.New(logger, workflowPath, options...)
 	if err != nil {
 		logger.Error("startup failed", "error", service.DescribeStartupError(err))
 		os.Exit(1)

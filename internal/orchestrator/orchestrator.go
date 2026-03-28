@@ -3,22 +3,25 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/config"
+	"github.com/pmenglund/colin/internal/domain"
 )
 
 // New constructs an Orchestrator for the supplied runtime dependencies.
 func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 	return &Orchestrator{
-		logger:    logger,
-		eventCh:   make(chan any, 256),
-		runtime:   runtime,
-		running:   map[string]*runningEntry{},
-		claimed:   map[string]struct{}{},
-		retrying:  map[string]*retryState{},
-		completed: map[string]string{},
+		logger:      logger,
+		eventCh:     make(chan any, 256),
+		runtime:     runtime,
+		running:     map[string]*runningEntry{},
+		claimed:     map[string]struct{}{},
+		retrying:    map[string]*retryState{},
+		completed:   map[string]string{},
+		issueStates: map[string]int{},
 	}
 }
 
@@ -29,6 +32,9 @@ func (o *Orchestrator) UpdateRuntime(runtime Runtime) {
 
 // Run starts the main event loop and exits when the provided context is canceled.
 func (o *Orchestrator) Run(ctx context.Context) error {
+	o.loopStarted.Store(true)
+	defer o.loopStarted.Store(false)
+
 	o.logger.Info(
 		"orchestrator started",
 		"poll_interval", o.runtime.Config.Polling.Interval.String(),
@@ -67,6 +73,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				o.handleWorkerExit(ctx, event)
 			case retryFiredEvent:
 				o.handleRetry(ctx, event.issueID)
+			case snapshotRequestEvent:
+				event.response <- o.snapshotAt(time.Now().UTC())
 			}
 		}
 	}
@@ -86,6 +94,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	}
 	o.logger.Info("poll tick started", args...)
 	o.reconcileRunning(ctx)
+	o.refreshIssueStateCounts(ctx)
 	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
@@ -125,6 +134,43 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.logger.Info("poll tick completed", args...)
 }
 
+func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
+	stateNames := trackedStateNames(o.runtime.Config)
+	if len(stateNames) == 0 {
+		o.issueStates = map[string]int{}
+		return
+	}
+
+	issues, err := o.runtime.Tracker.FetchIssuesByStates(ctx, stateNames)
+	if err != nil {
+		o.logger.Warn("issue state count refresh failed", "error", err)
+		return
+	}
+
+	counts := make(map[string]int, len(stateNames))
+	for _, issue := range issues {
+		counts[issue.State]++
+	}
+	o.issueStates = counts
+}
+
+func trackedStateNames(cfg domain.ServiceConfig) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, state := range append(config.CandidateStates(cfg), cfg.Tracker.TerminalStates...) {
+		key := config.StateKey(state)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, state)
+	}
+	return out
+}
+
 func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) {
 	entry, ok := o.running[event.IssueID]
 	if !ok {
@@ -145,6 +191,7 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 		entry.session.TurnCount++
 	}
 	o.applyUsage(entry, event.Usage)
+	o.appendOutput(entry, event)
 	if event.RateLimits != nil {
 		o.rateLimits = event.RateLimits
 	}
@@ -183,6 +230,33 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 			"output_tokens", entry.session.CodexOutputTokens,
 			"total_tokens", entry.session.CodexTotalTokens,
 		)
+	}
+}
+
+func (o *Orchestrator) appendOutput(entry *runningEntry, event codex.Event) {
+	if entry == nil {
+		return
+	}
+
+	message := strings.TrimSpace(event.Message)
+	if message == "" {
+		switch event.Event {
+		case codex.EventSessionStarted:
+			message = "session started"
+		case codex.EventApprovalAutoApproved:
+			message = "approval auto-approved"
+		default:
+			message = event.Event
+		}
+	}
+
+	entry.outputLog = append(entry.outputLog, domain.OutputLog{
+		Timestamp: event.Timestamp,
+		Event:     event.Event,
+		Message:   message,
+	})
+	if len(entry.outputLog) > 200 {
+		entry.outputLog = append([]domain.OutputLog(nil), entry.outputLog[len(entry.outputLog)-200:]...)
 	}
 }
 

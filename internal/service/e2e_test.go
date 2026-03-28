@@ -71,6 +71,8 @@ codex:
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
     type: dangerFullAccess
+server:
+  port: 0
 ---
 Work on {{ .issue.identifier }}.
 `, server.URL, relativeWorkspaceRoot, command)
@@ -145,6 +147,101 @@ Work on {{ .issue.identifier }}.
 	}
 	if linear.ReplyCount() == 0 {
 		t.Fatal("expected Linear progress replies")
+	}
+}
+
+func TestServiceExposesDashboardState(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	markerPath := filepath.Join(tempDir, "codex.marker")
+
+	linear := newFakeLinearServer(markerPath)
+	server := httptest.NewServer(linear)
+	defer server.Close()
+
+	workflowPath := filepath.Join(tempDir, "WORKFLOW.md")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_DELAY_MS=1500 %q -test.run=TestHelperProcessFakeCodex --",
+		os.Args[0],
+	)
+	workflow := fmt.Sprintf(`---
+tracker:
+  kind: linear
+  endpoint: %q
+  api_key: test-linear-key
+  project_slug: test-project
+polling:
+  interval_ms: 100
+workspace:
+  root: %q
+agent:
+  max_concurrent_agents: 1
+  max_turns: 1
+codex:
+  command: %q
+  turn_timeout_ms: 5000
+  read_timeout_ms: 1000
+  stall_timeout_ms: 5000
+server:
+  port: 0
+---
+Work on {{ .issue.identifier }}.
+`, server.URL, filepath.Join(tempDir, "workspaces"), command)
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc, err := New(logger, workflowPath)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Run(ctx)
+	}()
+
+	waitFor(t, 5*time.Second, func() bool {
+		return svc.DashboardURL() != ""
+	})
+
+	waitFor(t, 5*time.Second, func() bool {
+		resp, err := http.Get(svc.DashboardURL() + "/api/v1/state")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return strings.Contains(string(body), `"running":1`)
+	})
+
+	resp, err := http.Get(svc.DashboardURL() + "/")
+	if err != nil {
+		t.Fatalf("GET dashboard: %v", err)
+	}
+	defer resp.Body.Close()
+	html, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if !strings.Contains(string(html), "COLIN-93") {
+		t.Fatalf("dashboard body = %q, want issue identifier", string(html))
+	}
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("service did not stop after cancellation")
 	}
 }
 
@@ -248,20 +345,30 @@ func runFakeCodex() error {
 				return fmt.Errorf("approval decision = %q, want accept", decision)
 			}
 
-			if err := os.WriteFile(os.Getenv("COLIN_FAKE_CODEX_MARKER"), []byte("ran\n"), 0o644); err != nil {
-				return err
+			if markerPath := os.Getenv("COLIN_FAKE_CODEX_MARKER"); markerPath != "" {
+				if err := os.WriteFile(markerPath, []byte("ran\n"), 0o644); err != nil {
+					return err
+				}
 			}
-			cwdLog := os.Getenv("COLIN_FAKE_CODEX_CWD_LOG")
-			file, err := os.OpenFile(cwdLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-			if err != nil {
-				return err
+			if cwdLog := os.Getenv("COLIN_FAKE_CODEX_CWD_LOG"); cwdLog != "" {
+				file, err := os.OpenFile(cwdLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				if err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(file, cwd); err != nil {
+					_ = file.Close()
+					return err
+				}
+				if err := file.Close(); err != nil {
+					return err
+				}
 			}
-			if _, err := fmt.Fprintln(file, cwd); err != nil {
-				_ = file.Close()
-				return err
-			}
-			if err := file.Close(); err != nil {
-				return err
+			if delay, ok := os.LookupEnv("COLIN_FAKE_CODEX_DELAY_MS"); ok {
+				duration, err := time.ParseDuration(delay + "ms")
+				if err != nil {
+					return err
+				}
+				time.Sleep(duration)
 			}
 
 			if err := writeJSONMessage(writer, map[string]any{
