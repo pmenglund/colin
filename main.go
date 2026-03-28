@@ -1,36 +1,38 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
-	"github.com/pmenglund/colin/cmd"
+	"github.com/pmenglund/colin/internal/service"
 )
 
 func main() {
-	rootCmd := cmd.NewRootCommand()
-	if err := rootCmd.Execute(); err != nil {
-		noColor, getErr := rootCmd.PersistentFlags().GetBool("no-color")
-		if getErr != nil {
-			noColor = false
-		}
-		_ = printMainError(os.Stderr, err, noColor)
+	logger := service.NewDefaultLogger()
+
+	var workflowPath string
+	if len(os.Args) > 2 {
+		fmt.Fprintln(os.Stderr, "usage: colin [path-to-WORKFLOW.md]")
+		os.Exit(2)
+	}
+	if len(os.Args) == 2 {
+		workflowPath = os.Args[1]
+	}
+
+	svc, err := service.New(logger, workflowPath)
+	if err != nil {
+		logger.Error("startup failed", "error", service.DescribeStartupError(err))
 		os.Exit(1)
 	}
-}
 
-func printMainError(w io.Writer, err error, noColor bool) error {
-	renderer := lipgloss.NewRenderer(w)
-	if noColor {
-		renderer.SetColorProfile(termenv.Ascii)
-	} else {
-		renderer.SetColorProfile(termenv.TrueColor)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := svc.Run(ctx); err != nil {
+		logger.Error("service exited abnormally", "error", err)
+		os.Exit(1)
 	}
-	red := renderer.NewStyle().Foreground(lipgloss.Color("1"))
-
-	_, writeErr := fmt.Fprintln(w, red.Render(err.Error()))
-	return writeErr
 }

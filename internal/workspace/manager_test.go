@@ -2,172 +2,101 @@ package workspace
 
 import (
 	"context"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
 )
 
-type fakePopulator struct {
-	callCount int
-	lastPath  string
-	metadata  map[string]string
-	err       error
-}
-
-func (f *fakePopulator) Prepare(_ context.Context, _ string, workspacePath string) (map[string]string, error) {
-	f.callCount++
-	f.lastPath = workspacePath
-	if f.err != nil {
-		return nil, f.err
-	}
-	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
-		return nil, err
-	}
-	return f.metadata, nil
-}
-
-func TestSanitizeKey(t *testing.T) {
-	t.Parallel()
-
-	if got := SanitizeKey("COLIN-1 / weird?"); got != "COLIN-1___weird" {
-		t.Fatalf("SanitizeKey() = %q", got)
-	}
-}
-
-func TestManagerEnsureRunsAfterCreateOnlyOnce(t *testing.T) {
+func TestEnsureRunsAfterCreateOnlyOnce(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	hookFile := filepath.Join(root, "after-create.txt")
-	manager, err := New(ManagerOptions{
-		Root: root,
-		Hooks: HookConfig{
-			AfterCreate: "echo created >> " + filepath.Base(hookFile),
-			Timeout:     time.Second,
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{Root: root},
+		Hooks: domain.HookConfig{
+			AfterCreate: `if [ -e count.txt ]; then touch repeated.txt; fi
+touch count.txt`,
 		},
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
 	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	issue := domain.Issue{Identifier: "ABC-123"}
 
-	ws1, err := manager.Ensure(context.Background(), "COLIN-1")
+	ws, err := manager.Ensure(context.Background(), issue)
 	if err != nil {
 		t.Fatalf("Ensure() error = %v", err)
 	}
-	ws2, err := manager.Ensure(context.Background(), "COLIN-1")
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(ws.Path, "count.txt")); err != nil {
+		t.Fatalf("count.txt missing: %v", err)
+	}
+
+	if _, err := manager.Ensure(context.Background(), issue); err != nil {
 		t.Fatalf("Ensure() second error = %v", err)
 	}
-	if !ws1.CreatedNow {
-		t.Fatal("expected first ensure to create workspace")
-	}
-	if ws2.CreatedNow {
-		t.Fatal("expected second ensure to reuse workspace")
-	}
-	content, err := os.ReadFile(filepath.Join(ws1.Path, filepath.Base(hookFile)))
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if strings.Count(string(content), "created") != 1 {
-		t.Fatalf("hook output = %q, want one line", string(content))
+	if _, err := os.Stat(filepath.Join(ws.Path, "repeated.txt")); !os.IsNotExist(err) {
+		t.Fatalf("repeated.txt should not exist, err = %v", err)
 	}
 }
 
-func TestManagerBeforeRunFailureIsFatal(t *testing.T) {
+func TestEnsurePopulatesGitWorkspace(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	manager, err := New(ManagerOptions{
-		Root: root,
-		Hooks: HookConfig{
-			BeforeRun: "exit 9",
-			Timeout:   time.Second,
+	origin := filepath.Join(t.TempDir(), "origin")
+	mustRun(t, "", "git", "init", "-b", "main", origin)
+	mustRun(t, origin, "git", "config", "user.email", "test@example.com")
+	mustRun(t, origin, "git", "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, origin, "git", "add", "README.md")
+	mustRun(t, origin, "git", "commit", "-m", "init")
+
+	root := filepath.Join(t.TempDir(), "workspaces")
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			Root:    root,
+			RepoURL: origin,
+			BaseRef: "main",
 		},
+		Hooks: domain.HookConfig{},
+	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	branch := "feature/ABC-123"
+	ws, err := manager.Ensure(context.Background(), domain.Issue{
+		Identifier: "ABC-123",
+		BranchName: &branch,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ws, err := manager.Ensure(context.Background(), "COLIN-2")
-	if err != nil {
 		t.Fatalf("Ensure() error = %v", err)
 	}
-	if err := manager.BeforeRun(context.Background(), ws); err == nil {
-		t.Fatal("BeforeRun() error = nil, want failure")
+	data, err := os.ReadFile(filepath.Join(ws.Path, "README.md"))
+	if err != nil {
+		t.Fatalf("README.md missing: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "hello" {
+		t.Fatalf("README.md = %q", string(data))
+	}
+
+	output, err := exec.Command("git", "-C", ws.Path, "branch", "--show-current").CombinedOutput()
+	if err != nil {
+		t.Fatalf("branch --show-current: %v (%s)", err, string(output))
+	}
+	if got := strings.TrimSpace(string(output)); got != "feature_ABC-123" {
+		t.Fatalf("current branch = %q", got)
 	}
 }
 
-func TestManagerAfterRunIgnoresHookFailure(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	manager, err := New(ManagerOptions{
-		Root: root,
-		Hooks: HookConfig{
-			AfterRun: "exit 7",
-			Timeout:  time.Second,
-		},
-	})
+func mustRun(t *testing.T, cwd string, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = cwd
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ws, err := manager.Ensure(context.Background(), "COLIN-3")
-	if err != nil {
-		t.Fatalf("Ensure() error = %v", err)
-	}
-	manager.AfterRun(context.Background(), ws, nil)
-}
-
-func TestManagerCleanupTerminalRemovesOnlyManagedPaths(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	manager, err := New(ManagerOptions{Root: root})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ws, err := manager.Ensure(context.Background(), "COLIN-4")
-	if err != nil {
-		t.Fatalf("Ensure() error = %v", err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside")
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-
-	if err := manager.CleanupTerminal(context.Background(), []string{"COLIN-4"}); err != nil {
-		t.Fatalf("CleanupTerminal() error = %v", err)
-	}
-	if _, err := os.Stat(ws.Path); !os.IsNotExist(err) {
-		t.Fatalf("workspace should be removed, stat err = %v", err)
-	}
-	if _, err := os.Stat(outside); err != nil {
-		t.Fatalf("outside path should remain, stat err = %v", err)
-	}
-}
-
-func TestManagerEnsureUsesPopulatorMetadata(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	populator := &fakePopulator{metadata: map[string]string{"branch": "colin/COLIN-9"}}
-	manager, err := New(ManagerOptions{Root: root, Populator: populator})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ws, err := manager.Ensure(context.Background(), "COLIN-9")
-	if err != nil {
-		t.Fatalf("Ensure() error = %v", err)
-	}
-	if populator.callCount != 1 {
-		t.Fatalf("populator call count = %d, want 1", populator.callCount)
-	}
-	if ws.Metadata["branch"] != "colin/COLIN-9" {
-		t.Fatalf("metadata = %#v", ws.Metadata)
+		t.Fatalf("%s %v: %v (%s)", name, args, err, string(output))
 	}
 }

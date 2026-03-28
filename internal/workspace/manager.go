@@ -8,270 +8,224 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
 )
 
-// Workspace describes one managed per-issue workspace.
-type Workspace struct {
-	Path         string
-	WorkspaceKey string
-	CreatedNow   bool
-	Metadata     map[string]string
-}
+var (
+	ErrWorkspaceOutsideRoot = errors.New("invalid_workspace_cwd")
+	ErrWorkspacePathExists  = errors.New("workspace_path_not_directory")
+)
 
-// Populator prepares or reuses a workspace at the resolved path.
-type Populator interface {
-	Prepare(ctx context.Context, issueIdentifier string, workspacePath string) (map[string]string, error)
-}
+var invalidWorkspaceChar = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
-// HookConfig configures lifecycle hooks.
-type HookConfig struct {
-	AfterCreate  string
-	BeforeRun    string
-	AfterRun     string
-	BeforeRemove string
-	Timeout      time.Duration
-}
-
-// ManagerOptions configures a workspace manager.
-type ManagerOptions struct {
-	Root      string
-	Hooks     HookConfig
-	Populator Populator
-	Logger    *slog.Logger
-}
-
-// Manager creates, reuses, and removes per-issue workspaces safely.
+// Manager owns per-issue workspace lifecycle operations.
 type Manager struct {
-	root      string
-	hooks     HookConfig
-	populator Populator
-	logger    *slog.Logger
+	root   string
+	cfg    domain.ServiceConfig
+	logger *slog.Logger
 }
 
-// New returns a workspace manager rooted under opts.Root.
-func New(opts ManagerOptions) (*Manager, error) {
-	root := strings.TrimSpace(opts.Root)
-	if root == "" {
-		return nil, errors.New("workspace root is required")
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace root %q: %w", root, err)
-	}
-	hooks := opts.Hooks
-	if hooks.Timeout <= 0 {
-		hooks.Timeout = time.Minute
-	}
+// NewManager creates a workspace manager for the current runtime config.
+func NewManager(cfg domain.ServiceConfig, logger *slog.Logger) *Manager {
 	return &Manager{
-		root:      filepath.Clean(absRoot),
-		hooks:     hooks,
-		populator: opts.Populator,
-		logger:    opts.Logger,
-	}, nil
+		root:   cfg.Workspace.Root,
+		cfg:    cfg,
+		logger: logger,
+	}
 }
 
-// Ensure creates or reuses a workspace for the issue identifier.
-func (m *Manager) Ensure(ctx context.Context, issueIdentifier string) (Workspace, error) {
-	if m == nil {
-		return Workspace{}, errors.New("workspace manager is nil")
-	}
-	key := SanitizeKey(issueIdentifier)
-	if key == "" {
-		return Workspace{}, errors.New("issue identifier is required")
-	}
-	path, err := m.workspacePath(key)
-	if err != nil {
-		return Workspace{}, err
-	}
+// SanitizeWorkspaceKey converts an issue identifier into a safe directory name.
+func SanitizeWorkspaceKey(identifier string) string {
+	return invalidWorkspaceChar.ReplaceAllString(identifier, "_")
+}
 
-	createdNow := false
-	if info, statErr := os.Stat(path); statErr == nil {
-		if !info.IsDir() {
-			return Workspace{}, fmt.Errorf("workspace path %q exists and is not a directory", path)
-		}
-	} else if errors.Is(statErr, os.ErrNotExist) {
-		createdNow = true
-		if err := os.MkdirAll(m.root, 0o755); err != nil {
-			return Workspace{}, fmt.Errorf("ensure workspace root %q: %w", m.root, err)
-		}
-	} else {
-		return Workspace{}, fmt.Errorf("stat workspace path %q: %w", path, statErr)
+// Ensure creates or reuses the workspace for an issue and runs first-creation setup.
+func (m *Manager) Ensure(ctx context.Context, issue domain.Issue) (domain.Workspace, error) {
+	key := SanitizeWorkspaceKey(issue.Identifier)
+	path := filepath.Join(m.root, key)
+	if err := ensureWithinRoot(m.root, path); err != nil {
+		return domain.Workspace{}, err
 	}
-
-	metadata := map[string]string{}
-	if m.populator != nil {
-		populated, err := m.populator.Prepare(ctx, issueIdentifier, path)
-		if err != nil {
-			return Workspace{}, err
-		}
-		for key, value := range populated {
-			metadata[key] = value
-		}
-	} else if createdNow {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return Workspace{}, fmt.Errorf("create workspace %q: %w", path, err)
-		}
+	if err := os.MkdirAll(m.root, 0o755); err != nil {
+		return domain.Workspace{}, err
 	}
 
 	info, err := os.Stat(path)
-	if err != nil {
-		return Workspace{}, fmt.Errorf("stat workspace path %q after prepare: %w", path, err)
-	}
-	if !info.IsDir() {
-		return Workspace{}, fmt.Errorf("workspace path %q is not a directory", path)
+	createdNow := false
+	switch {
+	case err == nil && !info.IsDir():
+		return domain.Workspace{}, ErrWorkspacePathExists
+	case err == nil:
+	case os.IsNotExist(err):
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return domain.Workspace{}, err
+		}
+		createdNow = true
+	default:
+		return domain.Workspace{}, err
 	}
 
-	ws := Workspace{Path: path, WorkspaceKey: key, CreatedNow: createdNow, Metadata: metadata}
-	if createdNow && strings.TrimSpace(m.hooks.AfterCreate) != "" {
-		if err := m.runHook(ctx, "after_create", ws.Path, m.hooks.AfterCreate); err != nil {
-			_ = os.RemoveAll(ws.Path)
-			return Workspace{}, err
+	workspace := domain.Workspace{
+		Path:         path,
+		WorkspaceKey: key,
+		CreatedNow:   createdNow,
+	}
+
+	if m.cfg.Workspace.RepoURL != "" {
+		if err := m.populateGitWorkspace(ctx, workspace, issue); err != nil {
+			if createdNow {
+				if cleanupErr := os.RemoveAll(path); cleanupErr != nil {
+					m.logger.Warn("failed to clean up newly created workspace after git setup error", "workspace_path", path, "error", cleanupErr)
+				}
+			}
+			return domain.Workspace{}, err
 		}
 	}
-	return ws, nil
+
+	if createdNow && strings.TrimSpace(m.cfg.Hooks.AfterCreate) != "" {
+		if err := m.runHook(ctx, "after_create", m.cfg.Hooks.AfterCreate, workspace.Path); err != nil {
+			if cleanupErr := os.RemoveAll(path); cleanupErr != nil {
+				m.logger.Warn("failed to clean up newly created workspace after hook error", "workspace_path", path, "error", cleanupErr)
+			}
+			return domain.Workspace{}, err
+		}
+	}
+
+	return workspace, nil
 }
 
-// BeforeRun executes the configured before_run hook.
-func (m *Manager) BeforeRun(ctx context.Context, ws Workspace) error {
-	if m == nil || strings.TrimSpace(m.hooks.BeforeRun) == "" {
+// RunBeforeRun executes the pre-run hook if configured.
+func (m *Manager) RunBeforeRun(ctx context.Context, workspacePath string) error {
+	if strings.TrimSpace(m.cfg.Hooks.BeforeRun) == "" {
 		return nil
 	}
-	return m.runHook(ctx, "before_run", ws.Path, m.hooks.BeforeRun)
+	return m.runHook(ctx, "before_run", m.cfg.Hooks.BeforeRun, workspacePath)
 }
 
-// AfterRun executes the configured after_run hook and logs failures.
-func (m *Manager) AfterRun(ctx context.Context, ws Workspace, _ error) {
-	if m == nil || strings.TrimSpace(m.hooks.AfterRun) == "" {
-		return
+// RunAfterRun executes the post-run hook if configured.
+func (m *Manager) RunAfterRun(ctx context.Context, workspacePath string) error {
+	if strings.TrimSpace(m.cfg.Hooks.AfterRun) == "" {
+		return nil
 	}
-	if err := m.runHook(ctx, "after_run", ws.Path, m.hooks.AfterRun); err != nil {
-		m.log("workspace hook ignored", "hook", "after_run", "workspace", ws.Path, "error", err)
-	}
+	return m.runHook(ctx, "after_run", m.cfg.Hooks.AfterRun, workspacePath)
 }
 
-// Remove deletes a workspace after the optional before_remove hook.
-func (m *Manager) Remove(ctx context.Context, ws Workspace) error {
-	if m == nil {
+// Remove deletes a workspace after running the best-effort before-remove hook.
+func (m *Manager) Remove(ctx context.Context, workspacePath string) error {
+	if workspacePath == "" {
 		return nil
 	}
-	path := strings.TrimSpace(ws.Path)
-	if path == "" {
-		return nil
-	}
-	if err := m.ensureUnderRoot(path); err != nil {
+	if err := ensureWithinRoot(m.root, workspacePath); err != nil {
 		return err
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
 		return nil
 	}
-	if strings.TrimSpace(m.hooks.BeforeRemove) != "" {
-		if err := m.runHook(ctx, "before_remove", path, m.hooks.BeforeRemove); err != nil {
-			m.log("workspace hook ignored", "hook", "before_remove", "workspace", path, "error", err)
+	if strings.TrimSpace(m.cfg.Hooks.BeforeRemove) != "" {
+		if err := m.runHook(ctx, "before_remove", m.cfg.Hooks.BeforeRemove, workspacePath); err != nil {
+			m.logger.Warn("workspace hook failed", "hook", "before_remove", "workspace_path", workspacePath, "error", err)
 		}
 	}
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("remove workspace %q: %w", path, err)
-	}
-	return nil
+	return os.RemoveAll(workspacePath)
 }
 
-// CleanupTerminal removes workspaces for terminal issue identifiers.
-func (m *Manager) CleanupTerminal(ctx context.Context, issueIdentifiers []string) error {
-	for _, identifier := range issueIdentifiers {
-		path, err := m.workspacePath(SanitizeKey(identifier))
-		if err != nil {
-			return err
-		}
-		if err := m.Remove(ctx, Workspace{Path: path}); err != nil {
-			return err
+func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Workspace, issue domain.Issue) error {
+	gitDir := filepath.Join(workspace.Path, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "clone", m.cfg.Workspace.RepoURL, "."); err != nil {
+			return fmt.Errorf("git clone: %w", err)
 		}
 	}
-	return nil
-}
-
-// Root returns the normalized workspace root.
-func (m *Manager) Root() string {
-	if m == nil {
-		return ""
+	if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "fetch", "origin", "--prune"); err != nil {
+		return fmt.Errorf("git fetch: %w", err)
 	}
-	return m.root
-}
-
-// SanitizeKey converts an issue identifier into a safe workspace directory name.
-func SanitizeKey(issueIdentifier string) string {
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(issueIdentifier) {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '.', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
+	if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "checkout", m.cfg.Workspace.BaseRef); err != nil {
+		return fmt.Errorf("git checkout base ref: %w", err)
 	}
-	return strings.Trim(b.String(), "_")
-}
-
-func (m *Manager) workspacePath(key string) (string, error) {
-	if key == "" {
-		return "", errors.New("workspace key is required")
+	branch := workspace.WorkspaceKey
+	if issue.BranchName != nil && strings.TrimSpace(*issue.BranchName) != "" {
+		branch = SanitizeWorkspaceKey(*issue.BranchName)
 	}
-	path := filepath.Join(m.root, key)
-	if err := m.ensureUnderRoot(path); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func (m *Manager) ensureUnderRoot(path string) error {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("resolve workspace path %q: %w", path, err)
-	}
-	rel, err := filepath.Rel(m.root, absPath)
-	if err != nil {
-		return fmt.Errorf("resolve workspace path %q: %w", path, err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("workspace path %q escapes root %q", absPath, m.root)
-	}
-	return nil
-}
-
-func (m *Manager) runHook(ctx context.Context, name string, cwd string, script string) error {
-	if err := m.ensureUnderRoot(cwd); err != nil {
+	if err := ensureBranch(ctx, workspace.Path, branch); err != nil {
 		return err
 	}
-	hookCtx := ctx
-	if hookCtx == nil {
-		hookCtx = context.Background()
+	return nil
+}
+
+func ensureBranch(ctx context.Context, cwd, branch string) error {
+	if err := runCommand(ctx, cwd, 30*time.Second, "git", "rev-parse", "--verify", branch); err == nil {
+		return runCommand(ctx, cwd, 30*time.Second, "git", "checkout", branch)
 	}
-	var cancel context.CancelFunc
-	hookCtx, cancel = context.WithTimeout(hookCtx, m.hooks.Timeout)
+	return runCommand(ctx, cwd, 30*time.Second, "git", "checkout", "-b", branch)
+}
+
+func (m *Manager) runHook(parent context.Context, name, script, cwd string) error {
+	if err := ensureWithinRoot(m.root, cwd); err != nil {
+		return err
+	}
+	timeout := m.cfg.Hooks.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	m.log("workspace hook start", "hook", name, "workspace", cwd)
-	cmd := exec.CommandContext(hookCtx, "sh", "-lc", script)
+	cmd := exec.CommandContext(ctx, "bash", "-lc", script)
 	cmd.Dir = cwd
 	output, err := cmd.CombinedOutput()
-	if hookCtx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("%s hook timed out: %w", name, hookCtx.Err())
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%s hook timeout: %w", name, ctx.Err())
 	}
 	if err != nil {
-		return fmt.Errorf("%s hook failed: %w: %s", name, err, strings.TrimSpace(string(output)))
+		m.logger.Error("workspace hook failed", "hook", name, "workspace_path", cwd, "error", err, "output", truncateOutput(output))
+		return fmt.Errorf("%s hook failed: %w", name, err)
+	}
+	m.logger.Info("workspace hook completed", "hook", name, "workspace_path", cwd)
+	return nil
+}
+
+func runCommand(parent context.Context, cwd string, timeout time.Duration, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = cwd
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, truncateOutput(output))
 	}
 	return nil
 }
 
-func (m *Manager) log(msg string, args ...any) {
-	if m.logger != nil {
-		m.logger.Info(msg, args...)
+func ensureWithinRoot(root, candidate string) error {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
 	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ErrWorkspaceOutsideRoot
+	}
+	return nil
+}
+
+func truncateOutput(data []byte) string {
+	out := strings.TrimSpace(string(data))
+	if len(out) <= 4096 {
+		return out
+	}
+	return out[:4096]
 }

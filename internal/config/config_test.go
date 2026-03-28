@@ -1,764 +1,157 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
-	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
 )
 
-func TestLoadFromEnvWithDefaults(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("LINEAR_BASE_URL", "")
-	t.Setenv("COLIN_LINEAR_BACKEND", "")
-	t.Setenv("COLIN_BASE_BRANCH", "")
-	t.Setenv("COLIN_PUSH_AFTER_MERGE", "")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
-	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
-	t.Setenv("COLIN_HOME", "")
-	t.Setenv("COLIN_WORKER_ID", "")
-	t.Setenv("COLIN_POLL_EVERY", "")
-	t.Setenv("COLIN_LEASE_TTL", "")
-	t.Setenv("COLIN_MAX_CONCURRENCY", "")
-	t.Setenv("COLIN_DRY_RUN", "")
+func TestBuildResolvesEnvAndDefaults(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token-from-env")
+	t.Setenv("WS_ROOT", "/tmp/colin-workspaces")
 
-	cfg, err := LoadFromEnv()
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "cli",
+				"api_key":      "$LINEAR_API_KEY",
+			},
+			"workspace": map[string]any{
+				"root": "$WS_ROOT",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
 	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
-
-	if cfg.LinearBaseURL != defaultLinearBaseURL {
-		t.Fatalf("LinearBaseURL = %q, want %q", cfg.LinearBaseURL, defaultLinearBaseURL)
+	if cfg.Tracker.APIKey != "token-from-env" {
+		t.Fatalf("cfg.Tracker.APIKey = %q", cfg.Tracker.APIKey)
 	}
-	if cfg.LinearBackend != defaultLinearBackend {
-		t.Fatalf("LinearBackend = %q, want %q", cfg.LinearBackend, defaultLinearBackend)
+	if cfg.Workspace.Root != "/tmp/colin-workspaces" {
+		t.Fatalf("cfg.Workspace.Root = %q", cfg.Workspace.Root)
 	}
-	if cfg.GitHubAPIURL != defaultGitHubAPIURL {
-		t.Fatalf("GitHubAPIURL = %q, want %q", cfg.GitHubAPIURL, defaultGitHubAPIURL)
-	}
-	if cfg.BaseBranch != defaultBaseBranch {
-		t.Fatalf("BaseBranch = %q, want %q", cfg.BaseBranch, defaultBaseBranch)
-	}
-	if !cfg.PushAfterMerge {
-		t.Fatal("PushAfterMerge should default to true")
-	}
-	if cfg.ColinHome != defaultColinHome() {
-		t.Fatalf("ColinHome = %q, want %q", cfg.ColinHome, defaultColinHome())
-	}
-	if cfg.PollEvery != defaultPollEvery {
-		t.Fatalf("PollEvery = %s, want %s", cfg.PollEvery, defaultPollEvery)
-	}
-	if cfg.LeaseTTL != defaultLeaseTTL {
-		t.Fatalf("LeaseTTL = %s, want %s", cfg.LeaseTTL, defaultLeaseTTL)
-	}
-	if cfg.MaxConcurrency != defaultMaxConcurrency {
-		t.Fatalf("MaxConcurrency = %d, want %d", cfg.MaxConcurrency, defaultMaxConcurrency)
-	}
-	if cfg.WorkerID == "" {
-		t.Fatal("WorkerID should not be empty")
-	}
-	if cfg.DryRun {
-		t.Fatal("DryRun should default to false")
-	}
-	if cfg.WorkPromptPath != "" {
-		t.Fatalf("WorkPromptPath = %q, want empty", cfg.WorkPromptPath)
-	}
-	if cfg.MergePromptPath != "" {
-		t.Fatalf("MergePromptPath = %q, want empty", cfg.MergePromptPath)
-	}
-	if len(cfg.ProjectFilter) != 0 {
-		t.Fatalf("ProjectFilter = %#v, want empty", cfg.ProjectFilter)
-	}
-	if cfg.WorkflowStates != DefaultWorkflowStates() {
-		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
+	if cfg.Agent.MaxTurns != 20 {
+		t.Fatalf("cfg.Agent.MaxTurns = %d", cfg.Agent.MaxTurns)
 	}
 }
 
-func TestLoadFromEnvOverrides(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	t.Setenv("LINEAR_BASE_URL", "https://linear.invalid/graphql")
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-	t.Setenv("COLIN_BASE_BRANCH", "master")
-	t.Setenv("COLIN_PUSH_AFTER_MERGE", "false")
-	t.Setenv("COLIN_PROJECT_FILTER", "proj-a, Project One,proj-a,project one")
-	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/custom-work-prompt.md")
-	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/custom-merge-prompt.md")
-	t.Setenv("COLIN_HOME", "/tmp/colin-home")
-	t.Setenv("COLIN_WORKER_ID", "worker-a")
-	t.Setenv("COLIN_POLL_EVERY", "45s")
-	t.Setenv("COLIN_LEASE_TTL", "10m")
-	t.Setenv("COLIN_MAX_CONCURRENCY", "12")
-	t.Setenv("COLIN_DRY_RUN", "true")
+func TestBuildRejectsPartialWorkspaceGitConfig(t *testing.T) {
+	t.Parallel()
 
-	cfg, err := LoadFromEnv()
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"workspace": map[string]any{
+				"repo_url": "git@example.com/repo.git",
+			},
+		},
+	}
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err != ErrInvalidWorkspaceGitConf {
+		t.Fatalf("Build() error = %v, want %v", err, ErrInvalidWorkspaceGitConf)
+	}
+}
+
+func TestValidateDispatchRequiresTrackerAndCodex(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.ServiceConfig{}
+	if err := ValidateDispatch(cfg); err != ErrUnsupportedTrackerKind {
+		t.Fatalf("ValidateDispatch() error = %v", err)
+	}
+
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.APIKey = "token"
+	cfg.Tracker.ProjectSlug = "cli"
+	cfg.Codex.Command = " "
+	if err := ValidateDispatch(cfg); err != ErrMissingCodexCommand {
+		t.Fatalf("ValidateDispatch() error = %v", err)
+	}
+}
+
+func TestBuildNormalizesTurnSandboxPolicy(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "cli",
+				"api_key":      "token",
+			},
+			"codex": map[string]any{
+				"turn_sandbox_policy": map[string]any{
+					"mode": "danger-full-access",
+				},
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
 	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
-
-	if cfg.LinearBaseURL != "https://linear.invalid/graphql" {
-		t.Fatalf("LinearBaseURL = %q", cfg.LinearBaseURL)
+	if got := cfg.Codex.TurnSandboxPolicy["type"]; got != "dangerFullAccess" {
+		t.Fatalf("sandbox policy type = %v", got)
 	}
-	if cfg.LinearBackend != LinearBackendFake {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-	if cfg.BaseBranch != "master" {
-		t.Fatalf("BaseBranch = %q", cfg.BaseBranch)
-	}
-	if cfg.PushAfterMerge {
-		t.Fatal("PushAfterMerge = true, want false")
-	}
-	if cfg.ColinHome != "/tmp/colin-home" {
-		t.Fatalf("ColinHome = %q", cfg.ColinHome)
-	}
-	if cfg.WorkerID != "worker-a" {
-		t.Fatalf("WorkerID = %q", cfg.WorkerID)
-	}
-	if cfg.PollEvery != 45*time.Second {
-		t.Fatalf("PollEvery = %s", cfg.PollEvery)
-	}
-	if cfg.LeaseTTL != 10*time.Minute {
-		t.Fatalf("LeaseTTL = %s", cfg.LeaseTTL)
-	}
-	if cfg.MaxConcurrency != 12 {
-		t.Fatalf("MaxConcurrency = %d", cfg.MaxConcurrency)
-	}
-	if !cfg.DryRun {
-		t.Fatal("DryRun = false, want true")
-	}
-	if cfg.WorkPromptPath != "/tmp/custom-work-prompt.md" {
-		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
-	}
-	if cfg.MergePromptPath != "/tmp/custom-merge-prompt.md" {
-		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
-	}
-	if want := []string{"proj-a", "Project One"}; !slices.Equal(cfg.ProjectFilter, want) {
-		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
+	if _, ok := cfg.Codex.TurnSandboxPolicy["mode"]; ok {
+		t.Fatal("sandbox policy still contains mode")
 	}
 }
 
-func TestLoadWithOptionsAppliesWorkflowFrontMatter(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	t.Setenv("COLIN_LINEAR_BACKEND", "")
-	t.Setenv("COLIN_WORKFLOW_PATH", "")
-	t.Setenv("COLIN_WORKSPACE_ROOT", "")
+func TestBuildMakesWorkspaceRootAbsolute(t *testing.T) {
+	t.Parallel()
 
-	dir := t.TempDir()
-	workflowPath := filepath.Join(dir, "WORKFLOW.md")
-	content := `---
-tracker:
-  kind: fake
-  endpoint: https://workflow.invalid/graphql
-polling:
-  interval_ms: 45000
-workspace:
-  root: /tmp/workflow-root
-agent:
-  max_concurrent_agents: 3
-colin:
-  linear_backend: fake
-  worker_id: workflow-worker
-  work_prompt_path: prompts/work.md
-  merge_prompt_path: prompts/merge.md
-  lease_ttl: 7m
-  dry_run: true
-  workflow_states:
-    review: Human Review
----
-Issue {{ LINEAR_ID }}
-`
-	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "cli",
+				"api_key":      "token",
+			},
+			"workspace": map[string]any{
+				"root": "./.colin/workspaces",
+			},
+		},
 	}
 
-	cfg, err := LoadWithOptions(LoadOptions{
-		ConfigPath:     filepath.Join(dir, "missing.toml"),
-		WorkflowPath:   workflowPath,
-		SkipConfigFile: true,
-	})
+	cfg, err := Build(def, "WORKFLOW.md")
 	if err != nil {
-		t.Fatalf("LoadWithOptions() error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	if cfg.LinearBackend != LinearBackendFake {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-	if cfg.LinearBaseURL != "https://workflow.invalid/graphql" {
-		t.Fatalf("LinearBaseURL = %q", cfg.LinearBaseURL)
-	}
-	if cfg.PollEvery != 45*time.Second {
-		t.Fatalf("PollEvery = %s", cfg.PollEvery)
-	}
-	if cfg.MaxConcurrency != 3 {
-		t.Fatalf("MaxConcurrency = %d", cfg.MaxConcurrency)
-	}
-	if cfg.WorkerID != "workflow-worker" {
-		t.Fatalf("WorkerID = %q", cfg.WorkerID)
-	}
-	if cfg.ResolvedWorkspaceRoot() != "/tmp/workflow-root" {
-		t.Fatalf("ResolvedWorkspaceRoot() = %q", cfg.ResolvedWorkspaceRoot())
-	}
-	if cfg.WorkPromptPath != "prompts/work.md" {
-		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
-	}
-	if cfg.MergePromptPath != "prompts/merge.md" {
-		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
-	}
-	if cfg.LeaseTTL != 7*time.Minute {
-		t.Fatalf("LeaseTTL = %s", cfg.LeaseTTL)
-	}
-	if !cfg.DryRun {
-		t.Fatal("DryRun = false, want true")
-	}
-	if cfg.WorkflowPromptTemplate != "Issue {{ LINEAR_ID }}" {
-		t.Fatalf("WorkflowPromptTemplate = %q", cfg.WorkflowPromptTemplate)
-	}
-	if cfg.WorkflowStates.Review != "Human Review" {
-		t.Fatalf("WorkflowStates.Review = %q", cfg.WorkflowStates.Review)
-	}
-}
-
-func TestLoadWithOptionsEnvOverridesWorkflowFrontMatter(t *testing.T) {
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-	t.Setenv("COLIN_WORKER_ID", "env-worker")
-	t.Setenv("COLIN_POLL_EVERY", "12s")
-
-	dir := t.TempDir()
-	workflowPath := filepath.Join(dir, "WORKFLOW.md")
-	content := `---
-polling:
-  interval_ms: 45000
-colin:
-  linear_backend: http
-  worker_id: workflow-worker
----
-Issue {{ LINEAR_ID }}
-`
-	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	cfg, err := LoadWithOptions(LoadOptions{
-		WorkflowPath:   workflowPath,
-		SkipConfigFile: true,
-	})
+	want, err := filepath.Abs(filepath.Clean("./.colin/workspaces"))
 	if err != nil {
-		t.Fatalf("LoadWithOptions() error = %v", err)
+		t.Fatalf("filepath.Abs() error = %v", err)
 	}
-
-	if cfg.LinearBackend != LinearBackendFake {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-	if cfg.WorkerID != "env-worker" {
-		t.Fatalf("WorkerID = %q", cfg.WorkerID)
-	}
-	if cfg.PollEvery != 12*time.Second {
-		t.Fatalf("PollEvery = %s", cfg.PollEvery)
+	if cfg.Workspace.Root != want {
+		t.Fatalf("cfg.Workspace.Root = %q, want %q", cfg.Workspace.Root, want)
 	}
 }
 
-func TestProviderReloadKeepsLastKnownGoodConfig(t *testing.T) {
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-	t.Setenv("COLIN_WORKFLOW_PATH", "")
+func TestCandidateStatesIncludesRepoAutomationStatesOnce(t *testing.T) {
+	t.Parallel()
 
-	dir := t.TempDir()
-	workflowPath := filepath.Join(dir, "WORKFLOW.md")
-	if err := os.WriteFile(workflowPath, []byte(`---
-polling:
-  interval_ms: 30000
-colin:
-  linear_backend: fake
-  worker_id: workflow-worker
----
-Issue {{ LINEAR_ID }}
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress", "Review"}},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
 	}
 
-	provider, err := NewProvider(LoadOptions{
-		WorkflowPath:   workflowPath,
-		SkipConfigFile: true,
-	})
-	if err != nil {
-		t.Fatalf("NewProvider() error = %v", err)
+	got := CandidateStates(cfg)
+	want := []string{"Todo", "In Progress", "Review", "Merge"}
+	if len(got) != len(want) {
+		t.Fatalf("CandidateStates() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("CandidateStates()[%d] = %q, want %q (%v)", i, got[i], want[i], got)
+		}
 	}
-
-	if provider.Current().PollEvery != 30*time.Second {
-		t.Fatalf("initial PollEvery = %s", provider.Current().PollEvery)
-	}
-
-	if err := os.WriteFile(workflowPath, []byte("---\n- invalid\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := provider.Reload(); err == nil {
-		t.Fatal("Reload() error = nil, want error")
-	}
-	if provider.Current().PollEvery != 30*time.Second {
-		t.Fatalf("PollEvery after failed reload = %s, want previous good value", provider.Current().PollEvery)
-	}
-}
-
-func TestLoadWithOptionsReadsExtendedWorkflowRuntimeConfig(t *testing.T) {
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-
-	dir := t.TempDir()
-	workflowPath := filepath.Join(dir, "WORKFLOW.md")
-	content := `---
-tracker:
-  kind: fake
-  active_states: [Todo, In Progress, Review]
-  terminal_states: [Done, Cancelled]
-hooks:
-  before_run: echo before
-  after_run: echo after
-  timeout_ms: 1200
-agent:
-  max_concurrent_agents: 4
-  max_turns: 7
-  max_retry_backoff_ms: 90000
-  max_concurrent_agents_by_state:
-    review: 1
-codex:
-  command: codex app-server --json
-  read_timeout_ms: 2000
-  turn_timeout_ms: 3000
-  stall_timeout_ms: 4000
-colin:
-  linear_backend: fake
----
-Issue {{ LINEAR_ID }}
-`
-	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	cfg, err := LoadWithOptions(LoadOptions{WorkflowPath: workflowPath, SkipConfigFile: true})
-	if err != nil {
-		t.Fatalf("LoadWithOptions() error = %v", err)
-	}
-	if want := []string{"Todo", "In Progress", "Review"}; !slices.Equal(cfg.ActiveStates, want) {
-		t.Fatalf("ActiveStates = %#v, want %#v", cfg.ActiveStates, want)
-	}
-	if want := []string{"Done", "Cancelled"}; !slices.Equal(cfg.TerminalStates, want) {
-		t.Fatalf("TerminalStates = %#v, want %#v", cfg.TerminalStates, want)
-	}
-	if cfg.MaxTurns != 7 {
-		t.Fatalf("MaxTurns = %d, want 7", cfg.MaxTurns)
-	}
-	if cfg.MaxRetryBackoff != 90*time.Second {
-		t.Fatalf("MaxRetryBackoff = %s, want 90s", cfg.MaxRetryBackoff)
-	}
-	if cfg.MaxConcurrencyByState["review"] != 1 {
-		t.Fatalf("MaxConcurrencyByState = %#v", cfg.MaxConcurrencyByState)
-	}
-	if cfg.Hooks.BeforeRun != "echo before" || cfg.Hooks.AfterRun != "echo after" {
-		t.Fatalf("Hooks = %#v", cfg.Hooks)
-	}
-	if cfg.Hooks.Timeout != 1200*time.Millisecond {
-		t.Fatalf("Hooks.Timeout = %s", cfg.Hooks.Timeout)
-	}
-	if cfg.Codex.Command != "codex app-server --json" {
-		t.Fatalf("Codex.Command = %q", cfg.Codex.Command)
-	}
-	if cfg.Codex.ReadTimeout != 2*time.Second || cfg.Codex.TurnTimeout != 3*time.Second || cfg.Codex.StallTimeout != 4*time.Second {
-		t.Fatalf("Codex = %#v", cfg.Codex)
-	}
-}
-
-func TestLoadFromEnvParsesQuotedProjectFilterCSV(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-	t.Setenv("COLIN_PROJECT_FILTER", "\"Project, One\", project-two")
-
-	cfg, err := LoadFromEnv()
-	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
-	}
-
-	if want := []string{"Project, One", "project-two"}; !slices.Equal(cfg.ProjectFilter, want) {
-		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
-	}
-}
-
-func TestLoadFromEnvRequiresTokenAndTeam(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	t.Setenv("COLIN_LINEAR_BACKEND", "")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("expected error for missing required env vars")
-	}
-}
-
-func TestLoadFromEnvFakeBackendDoesNotRequireTokenAndTeam(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	cfg, err := LoadFromEnv()
-	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
-	}
-	if cfg.LinearBackend != LinearBackendFake {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidBackend(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	t.Setenv("COLIN_LINEAR_BACKEND", "unknown")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("expected error for invalid COLIN_LINEAR_BACKEND")
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidMaxConcurrency(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("COLIN_MAX_CONCURRENCY", "0")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("expected error for invalid COLIN_MAX_CONCURRENCY")
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidPushAfterMerge(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("COLIN_PUSH_AFTER_MERGE", "not-a-bool")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("expected error for invalid COLIN_PUSH_AFTER_MERGE")
-	}
-}
-
-func TestLoadFromFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	content := `
-linear_api_token = "file-token"
-linear_team_id = "file-team"
-linear_base_url = "https://file.invalid/graphql"
-linear_backend = "http"
-github_api_url = "https://api.github.com"
-github_app_id = "123"
-github_app_installation_id = "456"
-github_app_private_key = "pem-value"
-base_branch = "master"
-push_after_merge = false
-project_filter = "PROJ-123, Website Revamp , proj-123"
-work_prompt_path = "/tmp/file-work-prompt.md"
-merge_prompt_path = "/tmp/file-merge-prompt.md"
-colin_home = "/tmp/file-colin-home"
-worker_id = "file-worker"
-poll_every = "15s"
-	lease_ttl = "3m"
-	max_concurrency = 6
-	dry_run = true
-	`
-	if err := os.WriteFile(configPath, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("COLIN_CONFIG", filepath.Join(t.TempDir(), "other.toml"))
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	t.Setenv("LINEAR_BASE_URL", "")
-	t.Setenv("COLIN_LINEAR_BACKEND", "")
-	t.Setenv("COLIN_BASE_BRANCH", "")
-	t.Setenv("COLIN_PUSH_AFTER_MERGE", "")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-	t.Setenv("COLIN_WORK_PROMPT_PATH", "")
-	t.Setenv("COLIN_MERGE_PROMPT_PATH", "")
-	t.Setenv("COLIN_HOME", "")
-	t.Setenv("COLIN_WORKER_ID", "")
-	t.Setenv("COLIN_POLL_EVERY", "")
-	t.Setenv("COLIN_LEASE_TTL", "")
-	t.Setenv("COLIN_MAX_CONCURRENCY", "")
-	t.Setenv("COLIN_DRY_RUN", "")
-
-	cfg, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-
-	if cfg.LinearAPIToken != "file-token" {
-		t.Fatalf("LinearAPIToken = %q", cfg.LinearAPIToken)
-	}
-	if cfg.LinearTeamID != "file-team" {
-		t.Fatalf("LinearTeamID = %q", cfg.LinearTeamID)
-	}
-	if cfg.LinearBaseURL != "https://file.invalid/graphql" {
-		t.Fatalf("LinearBaseURL = %q", cfg.LinearBaseURL)
-	}
-	if cfg.LinearBackend != defaultLinearBackend {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-	if cfg.BaseBranch != "master" {
-		t.Fatalf("BaseBranch = %q", cfg.BaseBranch)
-	}
-	if cfg.PushAfterMerge {
-		t.Fatal("PushAfterMerge = true, want false")
-	}
-	if cfg.ColinHome != "/tmp/file-colin-home" {
-		t.Fatalf("ColinHome = %q", cfg.ColinHome)
-	}
-	if cfg.WorkerID != "file-worker" {
-		t.Fatalf("WorkerID = %q", cfg.WorkerID)
-	}
-	if cfg.PollEvery != 15*time.Second {
-		t.Fatalf("PollEvery = %s", cfg.PollEvery)
-	}
-	if cfg.LeaseTTL != 3*time.Minute {
-		t.Fatalf("LeaseTTL = %s", cfg.LeaseTTL)
-	}
-	if cfg.MaxConcurrency != 6 {
-		t.Fatalf("MaxConcurrency = %d", cfg.MaxConcurrency)
-	}
-	if !cfg.DryRun {
-		t.Fatal("DryRun = false, want true")
-	}
-	if cfg.WorkPromptPath != "/tmp/file-work-prompt.md" {
-		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
-	}
-	if cfg.MergePromptPath != "/tmp/file-merge-prompt.md" {
-		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
-	}
-	if want := []string{"PROJ-123", "Website Revamp"}; !slices.Equal(cfg.ProjectFilter, want) {
-		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
-	}
-	if cfg.WorkflowStates != DefaultWorkflowStates() {
-		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, DefaultWorkflowStates())
-	}
-}
-
-func TestLoadEnvOverridesFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	if err := os.WriteFile(configPath, []byte("linear_api_token = \"file-token\"\nlinear_team_id = \"file-team\"\npush_after_merge = false\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("LINEAR_API_TOKEN", "env-token")
-	t.Setenv("LINEAR_TEAM_ID", "env-team")
-	t.Setenv("COLIN_LINEAR_BACKEND", "fake")
-	t.Setenv("COLIN_BASE_BRANCH", "trunk")
-	t.Setenv("COLIN_PUSH_AFTER_MERGE", "true")
-	t.Setenv("COLIN_PROJECT_FILTER", "env-project,ENV-PROJECT, release train")
-	t.Setenv("COLIN_WORK_PROMPT_PATH", "/tmp/env-work-prompt.md")
-	t.Setenv("COLIN_MERGE_PROMPT_PATH", "/tmp/env-merge-prompt.md")
-	t.Setenv("COLIN_HOME", "/tmp/env-colin-home")
-	t.Setenv("COLIN_DRY_RUN", "true")
-
-	cfg, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-
-	if cfg.LinearAPIToken != "env-token" {
-		t.Fatalf("LinearAPIToken = %q", cfg.LinearAPIToken)
-	}
-	if cfg.LinearTeamID != "env-team" {
-		t.Fatalf("LinearTeamID = %q", cfg.LinearTeamID)
-	}
-	if cfg.LinearBackend != LinearBackendFake {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-	if cfg.BaseBranch != "trunk" {
-		t.Fatalf("BaseBranch = %q", cfg.BaseBranch)
-	}
-	if !cfg.PushAfterMerge {
-		t.Fatal("PushAfterMerge = false, want true from env override")
-	}
-	if cfg.ColinHome != "/tmp/env-colin-home" {
-		t.Fatalf("ColinHome = %q", cfg.ColinHome)
-	}
-	if !cfg.DryRun {
-		t.Fatal("DryRun = false, want true")
-	}
-	if cfg.WorkPromptPath != "/tmp/env-work-prompt.md" {
-		t.Fatalf("WorkPromptPath = %q", cfg.WorkPromptPath)
-	}
-	if cfg.MergePromptPath != "/tmp/env-merge-prompt.md" {
-		t.Fatalf("MergePromptPath = %q", cfg.MergePromptPath)
-	}
-	if want := []string{"env-project", "release train"}; !slices.Equal(cfg.ProjectFilter, want) {
-		t.Fatalf("ProjectFilter = %#v, want %#v", cfg.ProjectFilter, want)
-	}
-}
-
-func TestLoadWithoutFileFallsBackToEnv(t *testing.T) {
-	t.Setenv("LINEAR_API_TOKEN", "token")
-	t.Setenv("LINEAR_TEAM_ID", "team")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	if _, err := LoadFromPath(filepath.Join(t.TempDir(), "missing.toml")); err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-}
-
-func TestLoadFromFileFakeBackendWithoutCredentials(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	if err := os.WriteFile(configPath, []byte("linear_backend = \"fake\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	t.Setenv("COLIN_LINEAR_BACKEND", "")
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	cfg, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if cfg.LinearBackend != LinearBackendFake {
-		t.Fatalf("LinearBackend = %q", cfg.LinearBackend)
-	}
-}
-
-func TestLoadUsesCOLIN_CONFIGByDefault(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	if err := os.WriteFile(configPath, []byte("linear_api_token = \"file-token\"\nlinear_team_id = \"file-team\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("COLIN_CONFIG", configPath)
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.LinearAPIToken != "file-token" {
-		t.Fatalf("LinearAPIToken = %q", cfg.LinearAPIToken)
-	}
-	if cfg.LinearTeamID != "file-team" {
-		t.Fatalf("LinearTeamID = %q", cfg.LinearTeamID)
-	}
-}
-
-func TestLoadFromFileWorkflowStatesPartialOverride(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	content := `linear_api_token = "file-token"
-linear_team_id = "file-team"
-github_app_id = "123"
-github_app_installation_id = "456"
-github_app_private_key = "pem-value"
-
-[workflow_states]
-review = "Human Review"
-refine = "Needs Spec"
-`
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	cfg, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-
-	want := DefaultWorkflowStates()
-	want.Review = "Human Review"
-	want.Refine = "Needs Spec"
-	if cfg.WorkflowStates != want {
-		t.Fatalf("WorkflowStates = %#v, want %#v", cfg.WorkflowStates, want)
-	}
-}
-
-func TestLoadFromPathRejectsDuplicateWorkflowStates(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "colin.toml")
-	content := `linear_api_token = "file-token"
-linear_team_id = "file-team"
-github_app_id = "123"
-github_app_installation_id = "456"
-github_app_private_key = "pem-value"
-
-[workflow_states]
-todo = "Todo"
-in_progress = "todo"
-`
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("LINEAR_API_TOKEN", "")
-	t.Setenv("LINEAR_TEAM_ID", "")
-	setRequiredGitHubAppEnv(t)
-	t.Setenv("COLIN_PROJECT_FILTER", "")
-
-	_, err := LoadFromPath(configPath)
-	if err == nil {
-		t.Fatal("LoadFromPath() error = nil, want duplicate workflow states error")
-	}
-	if !strings.Contains(err.Error(), "workflow_states") {
-		t.Fatalf("error = %q, want workflow_states context", err.Error())
-	}
-}
-
-func TestResolvedGitHubAppPrivateKeyUsesInlineValue(t *testing.T) {
-	cfg := Config{GitHubAppPrivateKey: "inline-key"}
-
-	got, err := cfg.ResolvedGitHubAppPrivateKey()
-	if err != nil {
-		t.Fatalf("ResolvedGitHubAppPrivateKey() error = %v", err)
-	}
-	if got != "inline-key" {
-		t.Fatalf("ResolvedGitHubAppPrivateKey() = %q", got)
-	}
-}
-
-func TestResolvedGitHubAppPrivateKeyReadsFromFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "key.pem")
-	if err := os.WriteFile(path, []byte("file-key\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	cfg := Config{GitHubAppPrivateKeyPath: path}
-	got, err := cfg.ResolvedGitHubAppPrivateKey()
-	if err != nil {
-		t.Fatalf("ResolvedGitHubAppPrivateKey() error = %v", err)
-	}
-	if got != "file-key" {
-		t.Fatalf("ResolvedGitHubAppPrivateKey() = %q", got)
-	}
-}
-
-func setRequiredGitHubAppEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv("GITHUB_API_URL", "https://api.github.com")
-	t.Setenv("GITHUB_APP_ID", "123")
-	t.Setenv("GITHUB_APP_INSTALLATION_ID", "456")
-	t.Setenv("GITHUB_APP_PRIVATE_KEY", "pem-value")
-	t.Setenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
 }

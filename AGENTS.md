@@ -1,63 +1,54 @@
-# AI Coding Guidelines
+# Language Guidelines – Go
 
-This repository uses a modular instruction system to guide AI coding agents. It consists of several files, each focusing on specific aspects:
+This project is primarily written in **Go**. All code contributions should adhere to Go’s idioms and best practices, as well as project-specific conventions outlined here.
 
-- **LANGUAGE.md** – Language-specific style, libraries, and testing conventions (for Go).
-- **WORKFLOW.md** – Workflow and project management rules (how to plan, track tasks, commit, and test).
-- **PLANS.md** – ExecPlan specification (how to create and use execution plans for complex tasks).
-- **APP.md** – Application-specific architecture and design info for Colin.
+## Formatting and Style
 
-**Always follow all applicable instructions.** If guidelines appear to conflict, the order of precedence is defined under **Precedence Rules** below.
+- **gofmt and linting:** Always format code with `gofmt` (or `go fmt`) before committing. The CI will reject code not properly formatted. Also run `golint` or `golangci-lint` as configured.
+- **Idiomatic Go:** Follow guidance from *Effective Go* – e.g., use camelCase for variable and function names, CapitalizedNames for exported symbols, and avoid overly long or obscure names.
+- **Error handling:** Check and handle errors from every call that can fail. Use Go’s multi-value returns for errors. Do not swallow errors; if ignoring is absolutely necessary, add a comment explaining why.
+- **Logging:** Use the project’s logging library (if any) or the standard library `log` responsibly. No excessive logging in hot code paths. Remove or lower the level of debug logs before final commit unless they are permanent.
+- **Comments:** For any exported function or public package API, include a clear comment (will be used by GoDoc). Keep comments up-to-date if code changes. Internally, comment complex logic or non-obvious decisions.
 
-## Precedence Rules
+## Project Structure and Conventions
 
-When multiple instruction files apply, the more specific rules override more general ones:
+- **Modules and Packages:** Organize code into packages by functionality. Avoid circular dependencies. Place code in the appropriate folder as per the repository layout (see APP.md for architecture).
+- **Naming:** Package names should be short and lowercase (no underscores or caps). Use clear names for packages and files (e.g., `httphandler.go` for HTTP handlers).
+- **File structure:** One type per file if possible. Keep file lengths reasonable; if a file grows too large (> ~300–400 lines), consider refactoring.
+- **Third-party libraries:** Prefer standard library solutions when available (e.g., `net/http` for HTTP, `database/sql` for DB access). If a third-party package is needed, ensure it’s well-maintained. Stick to the libraries already in use in the project unless there’s a strong reason to introduce a new one (and discuss in an ExecPlan or issue).
 
-1. **Active ExecPlan:** If an ExecPlan is in progress for the current task/feature, follow the plan's steps and decisions first and foremost. (ExecPlans are detailed design docs for a specific epic/feature, see PLANS.md.)
-2. **Application-Specific (APP.md):** Project-specific architecture or conventions unique to this app take priority next.
-3. **Language-Specific (LANGUAGE.md):** General coding style and best practices for Go, unless overridden by app-specific needs above.
-4. **Workflow & Process (WORKFLOW.md):** Project workflow rules (e.g. issue tracking, commit process, testing workflow) are next – these typically don’t conflict with coding style but govern process.
-5. **Core Guidelines (AGENTS.md):** The base rules in this file and any global defaults apply where others do not specify.
+## Testing
 
-If any confusion arises, prefer the instruction source closest to the problem (for example, a rule in APP.md tailored to the module you are working on outweighs a generic language rule). When in doubt, err on the side of clarity: update the relevant instruction file or ask for guidance rather than guessing.
+- **Test framework:** Use Go’s built-in `testing` package for unit tests. Place test files alongside code (`foo_test.go` for `foo.go`).
+- **Test coverage:** Every new feature or bug fix should come with adequate tests. Aim to cover core logic and edge cases. We strive for high coverage, but more importantly, meaningful tests.
+- **Test style:** Follow table-driven test patterns for readability when testing multiple scenarios. Use descriptive test case names. Keep tests deterministic; avoid external network calls or time-dependent logic in tests (use mocking or interfaces for external interactions).
+- **Running tests:** Use `go test ./...` to run all tests. Ensure tests pass locally before committing. If adding a new package, add it to CI scripts if needed so it’s tested.
+- **Benchmarking (if applicable):** If performance is a concern in a piece of code, include benchmarks (in `_test.go` files) and note any performance expectations.
 
-## ExecPlans
+## Common Patterns and Anti-Patterns
 
-For **complex features or significant refactors**, you **must create and use an ExecPlan**. An ExecPlan is a detailed, step-by-step design and execution plan that guides work from design through implementation. Specifically:
+- **Concurrency:** Use goroutines and channels appropriately. Avoid data races – use mutexes or channel synchronization for shared data. If using concurrency, also provide tests that cover concurrent scenarios if possible (e.g. use `-race` detector).
+- **Resource management:** Use `context.Context` for cancellation/timeouts on IO or long-running operations. Respect context cancellation. Close any opened resources (files, DB connections) promptly, usually via `defer`.
+- **Error messages:** When returning errors, provide context. E.g., `fmt.Errorf("failed to load config: %w", err)`. This aids debugging while preserving original error via wrapping.
+- **Panics:** Do not use panics for normal error handling. Panics are only acceptable for truly unrecoverable situations (and even then, prefer returning errors). If a panic or runtime exception is encountered (like from a library), consider recovering at boundary of a goroutine to log and continue if it’s safe.
+- **Performance:** Write clear code first; optimize only if profiling shows a need. However, do consider the complexity of algorithms (don’t accidentally use O(n^2) where n could be large, etc.). Document any performance-related decisions in code comments or planning docs.
 
-- **When to use:** If the task corresponds to a Linear **epic** (or equivalent large user story) or if the problem is non-trivial (multiple steps, uncertainty, or cross-cutting concerns), start by writing an ExecPlan. (See WORKFLOW.md for criteria and Linear usage.)
-- **How to use:** Before coding, create a new Markdown file under `plans/` (e.g. `plans/COLIN-123.md`) and copy the ExecPlan skeleton from PLANS.md. Fill it out with research, decisions, and planned steps. Obtain confirmation (if required) on the plan, then implement according to the plan.
-- **During implementation:** Follow the ExecPlan “to the letter”. Update the plan as you make progress, discover surprises, or change approach. **Do not skip updating the plan.** The sections like Progress, Decision Log, etc., must remain current.
-- **After completion:** Ensure the ExecPlan’s outcomes section is filled and it stands as an accurate record of what was done and why. Future contributors should be able to read it and understand the feature.
+## Go Tools and Workflow
 
-By using ExecPlans, we ensure large tasks are well-scoped and tracked. *If an ExecPlan is required but not present, stop and create one before proceeding.* (This prevents tackling complex work in an ad-hoc way.)
+- **Building:** Use the provided Taskfile.yaml to build the project (`task build`). Ensure no build warnings.
+- **Dependency management:** We use Go modules. Import statements should be versioned via `go.mod`. Run `go mod tidy` after adding new imports to keep the module file tidy.
+- **Debugging:** It’s fine to use `println` or `log.Printf` for local debugging, but remove those before committing. Instead, write tests or use the debugger for ongoing verification.
+- **CLI and scripts:** Use the standard Go CLI flags and `cobra` (if this project uses Cobra/Viper for CLI) according to project norms. Document any new command-line flags you add in the README or help text.
 
-## AI Agent Conduct (Codex Contract)
+## Documentation
 
-These are explicit **Do’s and Don’ts** the AI agent must follow at all times:
+- **README maintenance:** Keep `README.md` up to date whenever Colin's behavior changes in a way a user or operator would care about.
+- **Linear workflow description:** `README.md` must include a high-level description of how Colin works and a clear description of how Colin handles Linear issue state transitions, including which states Colin actively works, which states are handoff states, and which states require human action.
+- **State transition changes:** If Colin starts acting on new Linear states, stops acting on existing states, or changes what happens in states such as `Todo`, `In Progress`, `Review`, `Merge`, or `Done`, update `README.md` in the same change.
 
-**DO:**
-- **Follow the Plan & Workflow:** Adhere strictly to the ExecPlan steps when one is in use. For smaller tasks without a plan, still break down the work logically and follow project workflow rules.
-- **Track all work in Linear:** Assume that every significant code change corresponds to a tracked issue or task. If you identify work that isn’t tracked, create a task. Untracked work is not allowed.
-- **Write Tests for New Code:** Whenever you implement new functionality or fix a bug, write or update unit tests and integration tests as applicable. Aim for test-driven development: e.g. write failing tests first for new features or bug fixes, then write code to make them pass (especially for complex logic).
-- **Run and Pass Tests:** Run the test suite locally (`go test ./...`) after changes. Ensure all tests pass (and new tests fail before the fix and pass after). Do not consider a task complete until tests are green.
-- **Commit Frequently with References:** Make small, logical commits. Each commit message should be in the imperative mood (for example, "Add X", "Fix Y bug") and, include the tracker ID (for example, "COLIN-234: Implement feature X") to tie commits to tasks. Commit only code that compiles and passes tests.
-- **Maintain Code Quality:** Follow the style and conventions in applicable files under `LANGUAGE.md` (naming, formatting, idioms). Ensure code is clean, with no leftover TODOs or debug logs before raising a PR.
-- **Document and Explain:** Update docs or comments as needed when you change behavior. Also, use the Decision Log in an ExecPlan to record rationale for significant decisions or changes in approach.
-- **Ask or Plan if Unsure:** If requirements are unclear or the next step is uncertain, prefer to ask a clarifying question or propose an updated plan rather than guessing and making a large mistake. It’s acceptable to create a short plan or checklist (even for smaller tasks) if it helps clarify the approach.
+## Example and References
 
-**DON’T:**
-- **Don’t Bypass the Plan:** Never ignore an ExecPlan or proceed with major changes that diverge from the approved plan without updating the ExecPlan (and related tasks). If a change of plan is necessary, document it in the ExecPlan’s Decision Log and adjust the plan.
-- **Don’t Do Untracked Work:** Avoid implementing features or fixes that aren’t captured in the tracker. Every commit should correspond to a planned task or bug. If something comes up (bug or scope change), create a tracker item for it and, if it’s substantial, consider an ExecPlan update.
-- **Don’t Commit Broken or Untested Code:** Do not commit code that doesn’t compile, or that fails tests/lint. Also, do not disable tests simply to get a green run – fix the underlying issue or seek guidance.
-- **Don’t Write Superfluous Code:** Implement what is needed to fulfill the requirements and plan, and no more. Avoid “gold-plating” or large refactoring beyond the scope of the current task unless the ExecPlan explicitly calls for it (and it’s tracked in tasks).
-- **Don’t Include Secrets or Credentials:** (General security reminder – e.g. if AI is generating config) Never hardcode sensitive information or commit credentials/API keys.
-- **Don’t Open PR without Checklist:** Before opening a Pull Request, ensure you have: updated relevant docs, ensured all steps in the plan are complete, written or updated tests, and verified all checks (CI) pass. The PR description should summarize the change, link to the epic (or include the epic ID), and mention that an ExecPlan was followed (if applicable).
+- **Examples in Repo:** Look at existing code for style guidance. E.g., follow patterns from `pkg/handlers/example.go` or similar modules to see how things are implemented in this project.
+- **Reference docs:** Refer to [Effective Go](https://go.dev/doc/effective_go) and the Go standard library documentation for best practices. Adhere to any additional style guidelines this team has communicated (if in doubt, ask or check prior PRs).
 
-## Additional Context
-
-- **Project Setup & Build:** See WORKFLOW.md for how to set up and run this project (e.g. dependency installation, build commands, CI checks).
-- **Architecture & Constraints:** See APP.md for an overview of the colin architecture, key components, and any design constraints or patterns unique to this application.
-- **Language and Libraries:** See LANGUAGE.md for coding style, common libraries, and patterns to use in Go in this repo.
-
-By following these instructions, the AI agent (Codex) will work consistently and transparently within our development workflow. This ensures reliability and alignment with team standards.
+By following these language-specific guidelines, we maintain a consistent and idiomatic codebase in Go. When the AI agent (or any contributor) writes code respecting these conventions, the result is more readable, maintainable, and blends seamlessly with the existing code.

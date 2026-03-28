@@ -1,106 +1,118 @@
 # Colin
 
-Colin is a Codex helper application that runs on your computer and works on Linear issues that you create.
+Colin is a Go service that watches a Linear project, prepares a per-issue workspace, runs Codex against issues in active states, and handles publish and merge automation when issues move into handoff states.
 
-![Colin architecture diagram](docs/colin.svg)
+## High-Level Flow
 
-It will use `codex` to work on any issue in the `Todo` state, and starts by determining if it is well enough defined to be worked on. If it isn't, the issue state is set to `Refine` and a comment is added on what needs to be refined.
+Colin runs as a long-lived process:
 
-If it is well-defined, it uses `codex` to implement it, and set the state to `Review`. It will add a comment on the Linear issue with a before and after view of the change, if possible, or else a description of what changed.
+1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
+2. It polls Linear for candidate issues in the configured project and tracked states.
+3. It creates or reuses a workspace for each issue under the configured workspace root.
+4. It runs Codex for issues in coding states.
+5. It performs git and GitHub automation for issues in publish or merge states.
+6. It logs progress locally and posts high-level progress updates back to Linear as a comment thread on the issue.
 
-This lets the user decide to either accept the change, and move it to the `Merge` status, or the user can add a comment on the Linear issue and move it back to the `Todo` and it will be sent back to `codex` for another turn.
-
-## Quick start
-
-### 1) Prerequisites
-
-- Go (latest stable)
-- A Linear API token and team ID (for the default HTTP backend)
-- GitHub App credentials (app ID, installation ID, private key) for authenticated push/PR operations
-
-### 2) Build the `colin` binary
-
-From the repository root:
+By default Colin is started with:
 
 ```bash
-go build -o ./bin/colin .
+go run .
 ```
 
-To run commands as `colin`, add the local `bin/` directory to your shell `PATH`:
+You can also point it at a specific workflow file:
 
 ```bash
-export PATH="$(pwd)/bin:$PATH"
+go run . /path/to/WORKFLOW.md
 ```
 
-### 3) Configure Colin
+## How Colin Works
 
-From the repository root:
+- Colin watches a single Linear project configured in `WORKFLOW.md`.
+- The runtime behavior is driven by workflow front matter, including polling cadence, workspace root, tracked states, Codex command, and repo automation settings.
+- Each issue gets its own workspace directory. Colin preserves that workspace across retries and continuation runs.
+- Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
+- During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
 
-```bash
-cp colin.toml.example colin.toml
-```
+## Linear State Handling
 
-Edit `colin.toml` and set:
+Colin does not currently move Linear issues between states itself. Instead, it reacts to the issue's current state and performs the matching automation.
 
-- `linear_api_token`
-- `linear_team_id`
-- `github_app_id`
-- `github_app_installation_id`
-- `github_app_private_key` or `github_app_private_key_path`
-- `worker_id` (recommended)
-- Optional: `base_branch` (defaults to `main`; set to `master` or another branch when needed)
-- Optional: `push_after_merge` (defaults to `true`; when `false`, Colin skips pushing the base branch after merge)
-- Optional: `project_filter` (comma-separated project IDs/names to scope candidate issues)
+### Active coding states
 
-### 4) Validate setup
+These are configured in `WORKFLOW.md` under `tracker.active_states` and currently are:
 
-```bash
-colin --config ./colin.toml setup
-```
+- `Todo`
+- `In Progress`
 
-This ensures required workflow states exist (or creates them) and prints the resolved runtime mapping.
+When an issue is in one of these states, Colin:
 
-### 5) Run one safe dry-run cycle
+- dispatches Codex work for the issue
+- keeps retrying or continuing while the issue remains active
+- stops the coding run when the issue leaves the active state set
 
-```bash
-colin --config ./colin.toml --once --dry-run
-```
+Additional `Todo` rule:
 
-This performs one reconciliation cycle without writing changes to Linear.
+- Colin will not dispatch a `Todo` issue if any blocker is not in a terminal state.
 
-### 6) Start continuous processing
+### Publish handoff state
 
-```bash
-colin --config ./colin.toml
-```
+This is configured in `WORKFLOW.md` under `repo.publish_states` and currently is:
 
-## How to use Colin
+- `Review`
 
-- `colin setup`: create/validate required Linear workflow states.
-- `colin metadata <ISSUE-ID>`: print Colin metadata currently stored for one issue.
-- `colin --once`: run a single reconciliation cycle and exit.
-- `colin --dry-run`: compute decisions without writing to Linear.
-- `colin`: run continuously on the configured poll interval.
+When an issue is moved to `Review`, Colin does not run another coding turn. Instead it:
 
-`project_filter` can also be set from `COLIN_PROJECT_FILTER` as a comma-separated list. Matching is exact (case-insensitive) against project ID or project name.
+- reuses the issue workspace
+- commits any local changes if the workspace is dirty
+- pushes the issue branch to the configured remote
+- creates or reuses a GitHub pull request targeting the configured base branch
 
-## Detailed documentation
+Human action is expected in `Review`:
 
-For specifics, use the docs index:
+- review the code and PR
+- either move the issue back to an active state for more work
+- or move the issue to `Merge` when it is ready to land
 
-- [`docs/README.md`](docs/README.md)
+### Merge handoff state
 
-Recommended reading order:
+This is configured in `WORKFLOW.md` under `repo.merge_states` and currently is:
 
-1. [`docs/getting-started.md`](docs/getting-started.md) – first-time setup and first successful run.
-2. [`docs/usage.md`](docs/usage.md) – day-to-day commands and operating patterns.
-3. [`docs/operator-runbook.md`](docs/operator-runbook.md) – production-like operation procedures.
-4. [`docs/troubleshooting.md`](docs/troubleshooting.md) – symptom-based recovery steps.
+- `Merge`
 
-## Release automation
+When an issue is moved to `Merge`, Colin:
 
-Git tags now trigger automated releases via GoReleaser in GitHub Actions.
+- ensures the branch and PR exist
+- merges the PR using the configured merge method
 
-- Push a tag (for example `v0.1.0`) to start a release run.
-- The workflow builds `colin` for macOS, Linux, and Windows on `amd64` and `arm64`.
-- Release archives and `checksums.txt` are published to the matching GitHub release.
+Human action is still required after merge:
+
+- move the Linear issue to its final terminal state
+
+### Terminal states
+
+These are configured in `WORKFLOW.md` under `tracker.terminal_states` and currently are:
+
+- `Done`
+- `Closed`
+- `Cancelled`
+- `Canceled`
+- `Duplicate`
+
+When an issue enters a terminal state, Colin stops working it. If the issue was actively running, Colin cancels the run and cleans up the workspace for terminal completion.
+
+## Current Workflow Defaults
+
+The checked-in `WORKFLOW.md` currently configures Colin to:
+
+- watch Linear project slug `0ece25450f8d`
+- poll every 30 seconds
+- use `./.colin/workspaces` as the workspace root
+- clone `git@github.com:pmenglund/colin.git`
+- base publish and merge automation on branch `symphony`
+- use `codex app-server` for coding runs
+
+## Operational Notes
+
+- Colin uses structured logging so `go run .` shows service activity, dispatches, retries, Codex session progress, and handoff automation.
+- Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
+- Colin currently automates repository actions, but it does not automatically change the Linear issue state after review or merge.

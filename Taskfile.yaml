@@ -1,20 +1,10 @@
-version: '3'
+version: "3"
 
 tasks:
   default:
     desc: List available tasks
     cmds:
       - task --list
-
-  deps:
-    desc: Download Go module dependencies
-    cmds:
-      - go mod download
-
-  tidy:
-    desc: Tidy Go module dependencies
-    cmds:
-      - go mod tidy
 
   fmt:
     desc: Format Go source files
@@ -31,64 +21,24 @@ tasks:
     cmds:
       - go test ./...
 
-  e2e:
-    desc: Run end-to-end tests
-    cmds:
-      - go test ./e2e
-
-  e2e-live:
-    desc: Run live external lifecycle e2e harness (requires live env vars)
-    cmds:
-      - go test -run TestLifecycleLiveExternalSystems -tags livee2e ./e2e
-
-  test-lifecycle:
-    desc: Run lifecycle-focused test suites
-    cmds:
-      - go test ./e2e ./internal/worker ./internal/linear
-
   build:
-    desc: Build all packages
+    desc: Build the service
     cmds:
       - go build ./...
 
-  generate:
-    desc: Run code generation directives
-    cmds:
-      - go generate ./...
-
   check:
-    desc: Run formatting, vet, and full test suite
+    desc: Run formatting, vet, and tests
     deps:
       - fmt
       - vet
       - test
 
-  help:
-    desc: Show CLI help
-    cmds:
-      - go run . --help
-
-  worker-help:
-    desc: Show worker command help
-    cmds:
-      - go run . worker run --help
-
-  run-once-dry:
-    desc: Run worker once in dry-run mode (uses CONFIG or ./colin.toml)
-    cmds:
-      - go run . --config "${CONFIG:-./colin.toml}" worker run --once --dry-run
-
-  run-once:
-    desc: Run worker once (uses CONFIG or ./colin.toml)
-    cmds:
-      - go run . --config "${CONFIG:-./colin.toml}" worker run --once
-
   run:
-    desc: Run worker continuously (uses CONFIG or ./colin.toml)
+    desc: Run Colin with the checked-in WORKFLOW.md
     cmds:
-      - go run . --config "${CONFIG:-./colin.toml}" worker run
+      - go run .
 
-  run-fake-once:
-    desc: Run worker once with fake Linear backend (uses CONFIG or ./colin.toml)
+  run-workflow:
+    desc: Run Colin with an explicit workflow path
     cmds:
-      - COLIN_LINEAR_BACKEND=fake go run . --config "${CONFIG:-./colin.toml}" worker run --once
+      - go run . {{.WORKFLOW}}
