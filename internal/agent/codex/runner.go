@@ -29,6 +29,7 @@ type Runner struct {
 const (
 	outcomeReadyForReview = "COLIN_OUTCOME: READY_FOR_REVIEW"
 	outcomeNeedsSpec      = "COLIN_OUTCOME: NEEDS_SPEC"
+	refineStateName       = "Refine"
 	metadataOutcomeReady  = "ready_for_review"
 	metadataOutcomeSpec   = "needs_spec"
 	metadataOutcomeMax    = "max_turns"
@@ -387,15 +388,15 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 	}
 
-	directive, summary := parseReviewDirectiveSummary(summary)
+	handoffOutcome, summary := parseCodingSummaryOutcome(summary)
 	if maxTurnsReached {
 		summary = appendMaxTurnsSummary(summary, current.State, r.cfg.Agent.MaxTurns)
 	}
-	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, codingOutcome(directive, maxTurnsReached), "", directive))
+	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, codingOutcome(handoffOutcome, maxTurnsReached), "", ""))
 	if err != nil {
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
-	current, err = r.moveSuccessfulCodingRunToPublishState(ctx, current, directive)
+	current, err = r.moveSuccessfulCodingRunToHandoffState(ctx, current, codingHandoffState(handoffOutcome, maxTurnsReached, r.cfg.Repo.PublishStates))
 	if err != nil {
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
@@ -444,34 +445,27 @@ func (r *Runner) moveActiveIssueToWorkingState(ctx context.Context, issue domain
 	return issue, nil
 }
 
-func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issue domain.Issue, directive string) (domain.Issue, error) {
+func (r *Runner) moveSuccessfulCodingRunToHandoffState(ctx context.Context, issue domain.Issue, targetState string) (domain.Issue, error) {
 	if !isActive(r.cfg, issue.State) {
 		return issue, nil
 	}
 
-	targetState, ok := firstConfiguredState(r.cfg.Repo.PublishStates)
-	if !ok || config.ContainsState([]string{issue.State}, targetState) {
+	targetState = strings.TrimSpace(targetState)
+	if targetState == "" || config.ContainsState([]string{issue.State}, targetState) {
 		return issue, nil
-	}
-	if directive == "" {
-		directive = domain.ReviewPublishDirectivePublish
 	}
 
 	if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
 		return issue, fmt.Errorf("update issue state to %s: %w", targetState, err)
 	}
 	r.logger.Info(
-		"issue moved to publish state after successful coding run",
+		"issue moved to handoff state after coding run",
 		"issue_id", issue.ID,
 		"issue_identifier", issue.Identifier,
 		"previous_state", issue.State,
 		"current_state", targetState,
 	)
 	issue.State = targetState
-	if issue.ColinMetadata == nil {
-		issue.ColinMetadata = &domain.ColinMetadata{}
-	}
-	issue.ColinMetadata.ReviewPublishDirective = directive
 	now := time.Now().UTC()
 	issue.UpdatedAt = &now
 	return issue, nil
@@ -709,36 +703,44 @@ func nextConfiguredState(states []string, current string) (string, bool) {
 	return "", false
 }
 
-func parseReviewDirectiveSummary(summary string) (string, string) {
+func parseCodingSummaryOutcome(summary string) (string, string) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		return domain.ReviewPublishDirectivePublish, ""
+		return outcomeReadyForReview, ""
 	}
 
 	lines := strings.Split(summary, "\n")
 	first := strings.TrimSpace(lines[0])
 	switch first {
 	case outcomeNeedsSpec:
-		return domain.ReviewPublishDirectiveSkip, strings.TrimSpace(strings.Join(lines[1:], "\n"))
+		return outcomeNeedsSpec, strings.TrimSpace(strings.Join(lines[1:], "\n"))
 	case outcomeReadyForReview:
-		return domain.ReviewPublishDirectivePublish, strings.TrimSpace(strings.Join(lines[1:], "\n"))
+		return outcomeReadyForReview, strings.TrimSpace(strings.Join(lines[1:], "\n"))
 	default:
-		return domain.ReviewPublishDirectivePublish, summary
+		return outcomeReadyForReview, summary
 	}
 }
 
-func codingOutcome(directive string, maxTurnsReached bool) string {
+func codingOutcome(handoffOutcome string, maxTurnsReached bool) string {
 	if maxTurnsReached {
 		return metadataOutcomeMax
 	}
-	if directive == domain.ReviewPublishDirectiveSkip {
+	if handoffOutcome == outcomeNeedsSpec {
 		return metadataOutcomeSpec
 	}
 	return metadataOutcomeReady
 }
 
+func codingHandoffState(handoffOutcome string, maxTurnsReached bool, publishStates []string) string {
+	if maxTurnsReached || handoffOutcome == outcomeNeedsSpec {
+		return refineStateName
+	}
+	targetState, _ := firstConfiguredState(publishStates)
+	return targetState
+}
+
 func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
-	note := fmt.Sprintf("Colin reached the maximum of `%d` turns while the issue remained in `%s`, so it is handing off for human review.", maxTurns, state)
+	note := fmt.Sprintf("Colin reached the maximum of `%d` turns while the issue remained in `%s`, so it is handing off for human refinement before more implementation work.", maxTurns, state)
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return note

@@ -262,12 +262,12 @@ func TestServiceRunsRealIssueWorkflowEndToEnd(t *testing.T) {
 		t.Logf("implementable issue %s remained in Merge after PR merge", task2.Identifier)
 	}
 
-	waitForRealCondition(t, "underspecified issue reaches Review without PR", 20*time.Minute, func() (bool, error) {
+	waitForRealCondition(t, "underspecified issue reaches Refine without PR", 20*time.Minute, func() (bool, error) {
 		issue, err := linearClient.fetchIssue(ctx, task1.ID)
 		if err != nil {
 			return false, err
 		}
-		if issue.State != "Review" {
+		if issue.State != "Refine" {
 			return false, nil
 		}
 		if !issueHasColinComment(issue, "The spec should be improved before implementation.") {
@@ -292,7 +292,7 @@ func TestServiceRunsRealIssueWorkflowEndToEnd(t *testing.T) {
 		}
 		return true, nil
 	})
-	t.Logf("underspecified issue %s reached Review with clarification comment and no PR", task1.Identifier)
+	t.Logf("underspecified issue %s reached Refine with clarification comment and no PR", task1.Identifier)
 
 	cancel()
 	select {

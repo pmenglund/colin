@@ -132,24 +132,24 @@ func TestApplyPostMergeStateSkipsWhenNoAutomationTargetExists(t *testing.T) {
 	}
 }
 
-func TestParseReviewDirectiveSummaryNeedsSpec(t *testing.T) {
+func TestParseCodingSummaryOutcomeNeedsSpec(t *testing.T) {
 	t.Parallel()
 
-	directive, summary := parseReviewDirectiveSummary(outcomeNeedsSpec + "\n\nThe spec should be improved before implementation.")
-	if directive != domain.ReviewPublishDirectiveSkip {
-		t.Fatalf("directive = %q, want %q", directive, domain.ReviewPublishDirectiveSkip)
+	outcome, summary := parseCodingSummaryOutcome(outcomeNeedsSpec + "\n\nThe spec should be improved before implementation.")
+	if outcome != outcomeNeedsSpec {
+		t.Fatalf("outcome = %q, want %q", outcome, outcomeNeedsSpec)
 	}
 	if summary != "The spec should be improved before implementation." {
 		t.Fatalf("summary = %q", summary)
 	}
 }
 
-func TestParseReviewDirectiveSummaryDefaultsToPublish(t *testing.T) {
+func TestParseCodingSummaryOutcomeDefaultsToReview(t *testing.T) {
 	t.Parallel()
 
-	directive, summary := parseReviewDirectiveSummary("Implemented the requested change.")
-	if directive != domain.ReviewPublishDirectivePublish {
-		t.Fatalf("directive = %q, want %q", directive, domain.ReviewPublishDirectivePublish)
+	outcome, summary := parseCodingSummaryOutcome("Implemented the requested change.")
+	if outcome != outcomeReadyForReview {
+		t.Fatalf("outcome = %q, want %q", outcome, outcomeReadyForReview)
 	}
 	if summary != "Implemented the requested change." {
 		t.Fatalf("summary = %q", summary)
@@ -159,12 +159,28 @@ func TestParseReviewDirectiveSummaryDefaultsToPublish(t *testing.T) {
 func TestCodingOutcomeUsesNeedsSpecDirective(t *testing.T) {
 	t.Parallel()
 
-	if got := codingOutcome(domain.ReviewPublishDirectiveSkip, false); got != metadataOutcomeSpec {
+	if got := codingOutcome(outcomeNeedsSpec, false); got != metadataOutcomeSpec {
 		t.Fatalf("codingOutcome() = %q, want %q", got, metadataOutcomeSpec)
 	}
 }
 
-func TestMoveSuccessfulActiveIssueToPublishStateUsesSkipDirective(t *testing.T) {
+func TestCodingHandoffStateUsesRefineForNeedsSpec(t *testing.T) {
+	t.Parallel()
+
+	if got := codingHandoffState(outcomeNeedsSpec, false, []string{"Review"}); got != refineStateName {
+		t.Fatalf("codingHandoffState() = %q, want %q", got, refineStateName)
+	}
+}
+
+func TestCodingHandoffStateUsesRefineForMaxTurns(t *testing.T) {
+	t.Parallel()
+
+	if got := codingHandoffState(outcomeReadyForReview, true, []string{"Review"}); got != refineStateName {
+		t.Fatalf("codingHandoffState() = %q, want %q", got, refineStateName)
+	}
+}
+
+func TestMoveSuccessfulActiveIssueToHandoffStateMovesToRefine(t *testing.T) {
 	t.Parallel()
 
 	tracker := &stubTracker{}
@@ -177,22 +193,19 @@ func TestMoveSuccessfulActiveIssueToPublishStateUsesSkipDirective(t *testing.T) 
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	issue, err := runner.moveSuccessfulCodingRunToPublishState(context.Background(), domain.Issue{
+	issue, err := runner.moveSuccessfulCodingRunToHandoffState(context.Background(), domain.Issue{
 		ID:         "issue-1",
 		Identifier: "COLIN-94",
 		State:      "Todo",
-	}, domain.ReviewPublishDirectiveSkip)
+	}, refineStateName)
 	if err != nil {
-		t.Fatalf("moveSuccessfulCodingRunToPublishState() error = %v", err)
+		t.Fatalf("moveSuccessfulCodingRunToHandoffState() error = %v", err)
 	}
-	if issue.State != "Review" {
-		t.Fatalf("issue.State = %q, want %q", issue.State, "Review")
+	if issue.State != refineStateName {
+		t.Fatalf("issue.State = %q, want %q", issue.State, refineStateName)
 	}
-	if issue.ColinMetadata == nil {
-		t.Fatal("issue.ColinMetadata = nil, want metadata")
-	}
-	if issue.ColinMetadata.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
-		t.Fatalf("issue.ColinMetadata.ReviewPublishDirective = %q, want %q", issue.ColinMetadata.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
+	if tracker.updatedState != refineStateName {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, refineStateName)
 	}
 }
 
@@ -231,7 +244,7 @@ func TestAppendMaxTurnsSummary(t *testing.T) {
 	t.Parallel()
 
 	got := appendMaxTurnsSummary("Implemented the change.", "In Progress", 6)
-	want := "Implemented the change.\n\nColin reached the maximum of `6` turns while the issue remained in `In Progress`, so it is handing off for human review."
+	want := "Implemented the change.\n\nColin reached the maximum of `6` turns while the issue remained in `In Progress`, so it is handing off for human refinement before more implementation work."
 	if got != want {
 		t.Fatalf("appendMaxTurnsSummary() = %q, want %q", got, want)
 	}

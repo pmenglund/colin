@@ -1,6 +1,6 @@
 # Colin
 
-Colin is a Go service that watches a Linear project, prepares a per-issue workspace, runs Codex against issues in active states, moves successful coding runs into the publish handoff state, and handles publish and merge automation from there.
+Colin is a Go service that watches a Linear project, prepares a per-issue workspace, runs Codex against issues in active states, hands successful runs to either `Review` or `Refine`, and handles publish and merge automation from there.
 
 ## Colin and Symphony
 
@@ -18,7 +18,7 @@ Colin runs as a long-lived process:
 2. It polls Linear for candidate issues in the configured project and tracked states.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
 4. It runs Codex for issues in coding states.
-5. It moves a successful coding run into the first configured publish state.
+5. It moves a successful coding run into `Review`, or into `Refine` when human clarification is still needed.
 6. It performs git and GitHub automation for issues in publish or merge states.
 7. It logs progress locally and posts high-level progress updates back to Linear as a comment thread on the issue.
 
@@ -53,12 +53,12 @@ go run . /path/to/WORKFLOW.md
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
-- Colin can also move an underspecified issue to `Review` without opening a branch or PR when the coding run concludes the request needs clarification; in that case it leaves a `[colin]` comment explaining what needs to be improved in the spec.
+- Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
 
 ## Linear State Handling
 
-Colin moves a successful coding run from an active state into the first configured publish state. After that, it reacts to the issue's current state and performs the matching automation.
+Colin moves a successful coding run from an active state into the appropriate handoff state. After that, it reacts to the issue's current state and performs the matching automation.
 
 ### Active coding states
 
@@ -83,6 +83,22 @@ Additional `Todo` rule:
 - If the issue is returning from `Review`, Colin first polls the linked GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
 - Once unresolved GitHub review threads are visible, Colin injects them into the next coding prompt alongside the human Linear review feedback from that same review cycle.
 
+### Refine handoff state
+
+`Refine` is a human-only clarification state. Colin does not dispatch coding, publish, or merge automation from it.
+
+Colin moves an issue to `Refine` when:
+
+- the coding run concludes the request is still too underspecified to implement safely
+- the coding run reaches its maximum turn count without producing reviewable code
+
+When Colin hands an issue to `Refine`, it posts a `[colin]` comment that explains what information is missing or why the run was capped.
+
+Human action is expected in `Refine`:
+
+- improve the issue description or requirements
+- then move the issue back to `Todo` for another coding pass
+
 ### Publish handoff state
 
 This is configured in `WORKFLOW.md` under `repo.publish_states` and currently is:
@@ -97,9 +113,7 @@ When an issue is moved to `Review`, Colin does not run another coding turn. Inst
 - usually creates or reuses a GitHub pull request targeting the configured base branch
 - renders the PR body from `repo.pr_template` when one is configured, otherwise uses the built-in default template
 
-If the coding run determines the issue is still too underspecified to implement safely, Colin can also move the issue to `Review` without publishing a branch or PR. In that case it leaves a `[colin]` comment asking for the spec to be improved before implementation and records the skip-publish directive in Linear metadata on the issue.
-
-If Colin reaches the configured maximum turn count before it can finish a coding run, it still moves the issue to `Review`, but it includes a `[colin]` comment explaining that the run hit the turn cap and is being handed off for human review.
+`Review` is PR-only. Colin should only leave an issue in `Review` when the branch and PR are the intended next artifact for human review.
 
 Human action is expected in `Review`:
 
@@ -162,6 +176,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
 - The dashboard shows current running issues, queued retries, token totals, and the latest rate-limit snapshot. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.
-- Colin automatically moves successful coding runs into the first configured publish state, which is currently `Review`.
+- Colin automatically moves successful, reviewable coding runs into the first configured publish state, which is currently `Review`.
+- Colin moves clarification-only or max-turn no-PR handoffs into `Refine` instead of `Review`.
 - Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.
 - Colin can automatically move an issue out of `Merge` when the Linear team has a git `merge` automation target configured, which this repository currently does (`Merged`).

@@ -147,11 +147,11 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 			commentID := o.postReply(ctx, entry, event.result.Summary)
 			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
 		}
-		if event.result.RunType == codex.RunTypeCoding && issueReviewPublishDirective(event.result.Issue) == domain.ReviewPublishDirectiveSkip && o.isPublishState(event.result.Issue.State) {
+		if event.result.RunType == codex.RunTypeCoding && !o.isActive(event.result.Issue.State) && !o.isPublishState(event.result.Issue.State) && !o.isMergeState(event.result.Issue.State) {
 			o.completed[event.issueID] = event.result.Issue.State
 			delete(o.claimed, event.issueID)
 			o.logger.Info(
-				"coding run completed with review handoff that skips publish automation",
+				"coding run completed with non-publish human handoff",
 				"issue_id", event.issueID,
 				"issue_identifier", entry.identifier,
 				"current_state", event.result.Issue.State,

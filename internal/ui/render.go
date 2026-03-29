@@ -118,7 +118,7 @@ func statsGrid(snapshot domain.Snapshot) g.Node {
 }
 
 func stateCountsPanel(snapshot domain.Snapshot) g.Node {
-	states := []string{"Backlog", "Todo", "In Progress", "Review", "Merge"}
+	states := []string{"Backlog", "Todo", "In Progress", "Refine", "Review", "Merge"}
 
 	return h.Section(
 		h.Class("table-card"),
@@ -142,8 +142,10 @@ func stateDescription(state string) string {
 		return "Issue is ready for Colin to pick up."
 	case "In Progress":
 		return "Issue is actively being worked."
+	case "Refine":
+		return "Issue needs human clarification before a PR can be reviewed."
 	case "Review":
-		return "Issue is awaiting human review."
+		return "Issue has a PR and is awaiting human review."
 	case "Merge":
 		return "Issue is approved and waiting to be merged."
 	default:

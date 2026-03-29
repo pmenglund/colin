@@ -104,4 +104,4 @@ Output contract:
 
 Definition of done:
 - For implementable work, leave the repo ready for `Review`.
-- For underspecified work, leave a precise clarification summary so Colin can move the issue to `Review` without publishing a PR.
+- For underspecified work, leave a precise clarification summary so Colin can move the issue to `Refine` without publishing a PR.

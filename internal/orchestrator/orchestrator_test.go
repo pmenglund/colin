@@ -81,7 +81,7 @@ func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
 	}
 }
 
-func TestShouldDispatchRejectsReviewThatSkipsPublish(t *testing.T) {
+func TestShouldDispatchRejectsRefine(t *testing.T) {
 	t.Parallel()
 
 	orch := &Orchestrator{
@@ -99,10 +99,7 @@ func TestShouldDispatchRejectsReviewThatSkipsPublish(t *testing.T) {
 		ID:         "1",
 		Identifier: "ABC-1",
 		Title:      "Needs more detail",
-		State:      "Review",
-		ColinMetadata: &domain.ColinMetadata{
-			ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
-		},
+		State:      "Refine",
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
 	}
@@ -114,7 +111,7 @@ func TestHandleWorkerExitSchedulesContinuationRetry(t *testing.T) {
 	issue := domain.Issue{ID: "1", Identifier: "ABC-1", State: "In Progress"}
 	orch := &Orchestrator{
 		logger:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		runtime:     Runtime{Config: domain.ServiceConfig{Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute}}},
+		runtime:     Runtime{Config: domain.ServiceConfig{Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress"}}, Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute}}},
 		running:     map[string]*runningEntry{"1": {issue: issue, identifier: issue.Identifier, startedAt: time.Now().Add(-2 * time.Second)}},
 		claimed:     map[string]struct{}{"1": {}},
 		retrying:    map[string]*retryState{},
@@ -210,16 +207,13 @@ func TestHandleWorkerExitCodingRunToReviewDoesNotMarkReviewCompleted(t *testing.
 	}
 }
 
-func TestHandleWorkerExitCodingRunToReviewSkipMarksCompletedWithoutRetry(t *testing.T) {
+func TestHandleWorkerExitCodingRunToRefineMarksCompletedWithoutRetry(t *testing.T) {
 	t.Parallel()
 
 	issue := domain.Issue{
 		ID:         "1",
 		Identifier: "ABC-1",
-		State:      "Review",
-		ColinMetadata: &domain.ColinMetadata{
-			ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
-		},
+		State:      "Refine",
 	}
 	orch := &Orchestrator{
 		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
@@ -240,13 +234,13 @@ func TestHandleWorkerExitCodingRunToReviewSkipMarksCompletedWithoutRetry(t *test
 	})
 
 	if _, ok := orch.retrying["1"]; ok {
-		t.Fatal("unexpected retry entry for review state that skips publish")
+		t.Fatal("unexpected retry entry for refine handoff state")
 	}
-	if got := orch.completed["1"]; got != "Review" {
-		t.Fatalf("completed state = %q, want %q", got, "Review")
+	if got := orch.completed["1"]; got != "Refine" {
+		t.Fatalf("completed state = %q, want %q", got, "Refine")
 	}
 	if _, ok := orch.claimed["1"]; ok {
-		t.Fatal("expected claim to be released after skip-publish review handoff")
+		t.Fatal("expected claim to be released after refine handoff")
 	}
 }
 

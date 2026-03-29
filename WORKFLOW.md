@@ -102,3 +102,9 @@ Definition of done:
 - Leave the repo in a clean, reviewable state ready for `Review`.
 - Do not merge changes yourself during coding turns; Colin will publish in `Review` and merge in `Merge`.
 - Summarize what changed, what was tested, and any remaining risk.
+
+Output contract:
+- If the issue is still too underspecified to implement safely, begin your final response with `COLIN_OUTCOME: NEEDS_SPEC`.
+- After `COLIN_OUTCOME: NEEDS_SPEC`, explain what information is missing and include the exact sentence `The spec should be improved before implementation.`
+- If the issue is implementable, begin your final response with `COLIN_OUTCOME: READY_FOR_REVIEW`.
+- `Review` is PR-only. Clarification-only handoffs go to `Refine`.

@@ -16,7 +16,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	snapshot := domain.Snapshot{
 		GeneratedAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
 		Counts:      map[string]int{"running": 1, "retrying": 1},
-		IssueStates: map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Review": 3, "Merge": 1, "Done": 2},
+		IssueStates: map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 3, "Merge": 1, "Done": 2},
 		RateLimits: map[string]any{
 			"primary": map[string]any{
 				"resetsAt":           time.Date(2026, 3, 28, 17, 32, 0, 0, time.UTC).Unix(),
@@ -82,8 +82,10 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Issue is ready for Colin to pick up.`,
 		`In Progress`,
 		`Issue is actively being worked.`,
+		`Refine`,
+		`Issue needs human clarification before a PR can be reviewed.`,
 		`Review`,
-		`Issue is awaiting human review.`,
+		`Issue has a PR and is awaiting human review.`,
 		`Merge`,
 		`Issue is approved and waiting to be merged.`,
 		`data-testid="rate-limits-codex"`,

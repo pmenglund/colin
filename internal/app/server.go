@@ -134,6 +134,7 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 		IssueStates: map[string]int{
 			"Todo":        8,
 			"In Progress": 3,
+			"Refine":      1,
 			"Review":      2,
 			"Merge":       1,
 			"Done":        14,
