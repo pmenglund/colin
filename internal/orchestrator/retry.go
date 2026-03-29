@@ -127,7 +127,8 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 
 	if event.result.Status == "blocked" {
 		if strings.TrimSpace(event.result.Summary) != "" {
-			o.postReply(ctx, entry, event.result.Summary)
+			commentID := o.postReply(ctx, entry, event.result.Summary)
+			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
 		}
 		o.logger.Info(
 			"worker completed but review follow-up is incomplete; keeping issue in todo",
@@ -143,9 +144,10 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 
 	if event.result.Status == "succeeded" {
 		if event.result.RunType == codex.RunTypeCoding && strings.TrimSpace(event.result.Summary) != "" && !o.isActive(event.result.Issue.State) {
-			o.postReply(ctx, entry, event.result.Summary)
+			commentID := o.postReply(ctx, entry, event.result.Summary)
+			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
 		}
-		if event.result.RunType == codex.RunTypeCoding && event.result.Issue.ReviewPublishDirective == domain.ReviewPublishDirectiveSkip && o.isPublishState(event.result.Issue.State) {
+		if event.result.RunType == codex.RunTypeCoding && issueReviewPublishDirective(event.result.Issue) == domain.ReviewPublishDirectiveSkip && o.isPublishState(event.result.Issue.State) {
 			o.completed[event.issueID] = event.result.Issue.State
 			delete(o.claimed, event.issueID)
 			o.logger.Info(

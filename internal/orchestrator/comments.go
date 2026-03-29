@@ -66,13 +66,13 @@ func (o *Orchestrator) createRootComment(ctx context.Context, entry *runningEntr
 	)
 }
 
-func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body string) {
+func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body string) string {
 	if o.runtime.Tracker == nil || entry == nil || entry.comment == nil || entry.comment.RootCommentID == "" || strings.TrimSpace(body) == "" {
-		return
+		return ""
 	}
 	body = colinCommentBody(body)
 
-	_, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
+	commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
 		return o.runtime.Tracker.CreateCommentReply(ctx, entry.issue.ID, entry.comment.RootCommentID, body)
 	})
 	if err != nil {
@@ -83,7 +83,9 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 			"comment_id", entry.comment.RootCommentID,
 			"error", err,
 		)
+		return ""
 	}
+	return commentID
 }
 
 func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) *commentThreadState {
@@ -131,6 +133,33 @@ func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.C
 	commentCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	return fn(commentCtx)
+}
+
+func (o *Orchestrator) persistSummaryCommentMetadata(ctx context.Context, issue domain.Issue, commentID string) domain.Issue {
+	if o.runtime.Tracker == nil || strings.TrimSpace(commentID) == "" {
+		return issue
+	}
+	metadata := domain.ColinMetadata{LastSummaryCommentID: strings.TrimSpace(commentID)}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+		metadata.LastSummaryCommentID = strings.TrimSpace(commentID)
+	}
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	persisted, err := o.runtime.Tracker.UpsertIssueMetadata(ctx, issue.ID, metadata)
+	if err != nil {
+		o.logger.Warn(
+			"failed to persist summary comment metadata",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"comment_id", commentID,
+			"error", err,
+		)
+		issue.ColinMetadata = &metadata
+		return issue
+	}
+	issue.ColinMetadata = &persisted
+	return issue
 }
 
 func shouldCreateRootComment(eventName string) bool {

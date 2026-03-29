@@ -61,3 +61,24 @@ func TestRenderPromptIncludesReviewFeedback(t *testing.T) {
 		t.Fatalf("prompt = %q, want %q", prompt, want)
 	}
 }
+
+func TestRenderTemplateIncludesArbitraryPayload(t *testing.T) {
+	t.Parallel()
+
+	rendered, err := RenderTemplate(
+		`Issue {{.issue.identifier}} on {{.base_ref}} via {{.branch}}`,
+		map[string]any{
+			"issue": map[string]any{
+				"identifier": "ABC-123",
+			},
+			"base_ref": "main",
+			"branch":   "feature/abc-123",
+		},
+	)
+	if err != nil {
+		t.Fatalf("RenderTemplate() error = %v", err)
+	}
+	if want := "Issue ABC-123 on main via feature/abc-123"; rendered != want {
+		t.Fatalf("rendered = %q, want %q", rendered, want)
+	}
+}

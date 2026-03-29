@@ -29,6 +29,10 @@ type Runner struct {
 const (
 	outcomeReadyForReview = "COLIN_OUTCOME: READY_FOR_REVIEW"
 	outcomeNeedsSpec      = "COLIN_OUTCOME: NEEDS_SPEC"
+	metadataOutcomeReady  = "ready_for_review"
+	metadataOutcomeSpec   = "needs_spec"
+	metadataOutcomeMax    = "max_turns"
+	metadataOutcomeMerged = "merged"
 )
 
 // NewRunner constructs a Runner bound to the current workflow, tracker, and workspace manager.
@@ -142,6 +146,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			PRState:   result.PRState,
 			Action:    result.Action,
 		})
+		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadata(issue, runType, metadataOutcomeReady, ""))
 		return Result{
 			Issue:         issue,
 			RunType:       runType,
@@ -192,6 +197,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			Action:    result.Action,
 		})
 		issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
+		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadata(issue, runType, metadataOutcomeMerged, ""))
 		return Result{
 			Issue:         issue,
 			RunType:       runType,
@@ -385,11 +391,14 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	if maxTurnsReached {
 		summary = appendMaxTurnsSummary(summary, current.State, r.cfg.Agent.MaxTurns)
 	}
+	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, codingOutcome(directive, maxTurnsReached), "", directive))
+	if err != nil {
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
+	}
 	current, err = r.moveSuccessfulCodingRunToPublishState(ctx, current, directive)
 	if err != nil {
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
-	summary = persistReviewDirectiveSummary(summary, current.ReviewPublishDirective)
 
 	emit(Event{
 		Event:     EventRunSucceeded,
@@ -459,7 +468,10 @@ func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issu
 		"current_state", targetState,
 	)
 	issue.State = targetState
-	issue.ReviewPublishDirective = directive
+	if issue.ColinMetadata == nil {
+		issue.ColinMetadata = &domain.ColinMetadata{}
+	}
+	issue.ColinMetadata.ReviewPublishDirective = directive
 	now := time.Now().UTC()
 	issue.UpdatedAt = &now
 	return issue, nil
@@ -530,8 +542,8 @@ func mergeIssueContext(previous, refreshed domain.Issue) domain.Issue {
 	if len(refreshed.ReviewThreads) == 0 {
 		refreshed.ReviewThreads = append([]domain.GitHubReviewThread(nil), previous.ReviewThreads...)
 	}
-	if strings.TrimSpace(refreshed.ReviewPublishDirective) == "" {
-		refreshed.ReviewPublishDirective = previous.ReviewPublishDirective
+	if refreshed.ColinMetadata == nil {
+		refreshed.ColinMetadata = previous.ColinMetadata
 	}
 	if refreshed.PullRequest == nil {
 		refreshed.PullRequest = previous.PullRequest
@@ -715,6 +727,16 @@ func parseReviewDirectiveSummary(summary string) (string, string) {
 	}
 }
 
+func codingOutcome(directive string, maxTurnsReached bool) string {
+	if maxTurnsReached {
+		return metadataOutcomeMax
+	}
+	if directive == domain.ReviewPublishDirectiveSkip {
+		return metadataOutcomeSpec
+	}
+	return metadataOutcomeReady
+}
+
 func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
 	note := fmt.Sprintf("Colin reached the maximum of `%d` turns while the issue remained in `%s`, so it is handing off for human review.", maxTurns, state)
 	summary = strings.TrimSpace(summary)
@@ -724,18 +746,57 @@ func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
 	return summary + "\n\n" + note
 }
 
-func persistReviewDirectiveSummary(summary string, directive string) string {
-	directive = strings.TrimSpace(directive)
-	if directive == "" {
-		return strings.TrimSpace(summary)
+func codexMetadata(issue domain.Issue, runType string, outcome string, summaryCommentID string) domain.ColinMetadata {
+	return codexMetadataWithDirective(issue, runType, outcome, summaryCommentID, reviewPublishDirective(issue))
+}
+
+func codexMetadataWithDirective(issue domain.Issue, runType string, outcome string, summaryCommentID string, directive string) domain.ColinMetadata {
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
 	}
-	marker := fmt.Sprintf("<!-- colin:review_publish=%s -->", directive)
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return marker
+	metadata.ReviewPublishDirective = strings.TrimSpace(directive)
+	metadata.LastRunType = strings.TrimSpace(runType)
+	metadata.LastOutcome = strings.TrimSpace(outcome)
+	metadata.LastSummaryCommentID = strings.TrimSpace(summaryCommentID)
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	return metadata
+}
+
+func reviewPublishDirective(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
 	}
-	if strings.Contains(summary, marker) {
-		return summary
+	return strings.TrimSpace(issue.ColinMetadata.ReviewPublishDirective)
+}
+
+func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, metadata domain.ColinMetadata) (domain.Issue, error) {
+	if r.tracker == nil {
+		issue.ColinMetadata = &metadata
+		return issue, nil
 	}
-	return summary + "\n\n" + marker
+	persisted, err := r.tracker.UpsertIssueMetadata(ctx, issue.ID, metadata)
+	if err != nil {
+		return issue, fmt.Errorf("upsert issue metadata: %w", err)
+	}
+	issue.ColinMetadata = &persisted
+	return issue, nil
+}
+
+func (r *Runner) persistIssueMetadataBestEffort(ctx context.Context, issue domain.Issue, metadata domain.ColinMetadata) domain.Issue {
+	updated, err := r.persistIssueMetadata(ctx, issue, metadata)
+	if err != nil {
+		r.logger.Warn(
+			"failed to persist issue metadata",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"run_type", metadata.LastRunType,
+			"outcome", metadata.LastOutcome,
+			"error", err,
+		)
+		issue.ColinMetadata = &metadata
+		return issue
+	}
+	return updated
 }

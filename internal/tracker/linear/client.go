@@ -29,7 +29,11 @@ var (
 	ErrUnknownState     = errors.New("linear_unknown_state")
 )
 
-var reviewPublishDirectivePattern = regexp.MustCompile(`<!--\s*colin:review_publish=(publish|skip)\s*-->`)
+const (
+	colinMetadataAttachmentTitle = "Colin metadata"
+	colinMetadataURLPrefix       = "https://colin.invalid/linear/issues/"
+	colinMetadataURLSuffix       = "/metadata"
+)
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
@@ -237,6 +241,43 @@ mutation CreateCommentReply($input: CommentCreateInput!) {
 	return parseCreatedCommentID(resp)
 }
 
+// UpsertIssueMetadata stores Colin-specific metadata on the Linear issue via a dedicated attachment.
+func (c *Client) UpsertIssueMetadata(ctx context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	const query = `
+mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) {
+    success
+    attachment {
+      id
+      title
+      url
+      metadata
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"input": map[string]any{
+			"issueId":  issueID,
+			"title":    colinMetadataAttachmentTitle,
+			"url":      colinMetadataAttachmentURL(issueID),
+			"metadata": colinMetadataValue(metadata),
+		},
+	})
+	if err != nil {
+		return domain.ColinMetadata{}, err
+	}
+	success, _ := nestedBool(resp, "data", "attachmentCreate", "success")
+	if !success {
+		return domain.ColinMetadata{}, ErrUnknownPayload
+	}
+	attachment, ok := nestedMap(resp, "data", "attachmentCreate", "attachment")
+	if !ok {
+		return domain.ColinMetadata{}, ErrUnknownPayload
+	}
+	return parseColinMetadataAttachment(attachment)
+}
+
 // CurrentRateLimits returns the latest Linear request budget observed from HTTP response headers.
 func (c *Client) CurrentRateLimits() map[string]any {
 	c.rateMu.RLock()
@@ -276,6 +317,14 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
             identifier
             state { name }
           }
+        }
+      }
+      attachments(first: 50) {
+        nodes {
+          id
+          title
+          url
+          metadata
         }
       }
       comments(first: 50) {
@@ -505,7 +554,7 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 			}
 		}
 	}
-	issue.ReviewPublishDirective = extractReviewPublishDirective(node)
+	issue.ColinMetadata = extractColinMetadata(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -712,25 +761,63 @@ func isColinComment(body string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(body)), "[colin]")
 }
 
-func extractReviewPublishDirective(node map[string]any) string {
-	comments := flattenComments(node)
-	for i := len(comments) - 1; i >= 0; i-- {
-		body := strings.TrimSpace(comments[i].Body)
-		if body == "" || !isColinComment(body) {
+func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
+	attachments, ok := nestedSlice(node, "attachments", "nodes")
+	if !ok {
+		return nil
+	}
+	for _, attachment := range attachments {
+		metadata, err := parseColinMetadataAttachment(attachment)
+		if err != nil {
 			continue
 		}
-		matches := reviewPublishDirectivePattern.FindStringSubmatch(body)
-		if len(matches) != 2 {
-			continue
-		}
-		switch strings.TrimSpace(matches[1]) {
-		case domain.ReviewPublishDirectivePublish:
-			return domain.ReviewPublishDirectivePublish
-		case domain.ReviewPublishDirectiveSkip:
-			return domain.ReviewPublishDirectiveSkip
+		return &metadata
+	}
+	return nil
+}
+
+func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, error) {
+	title, _ := stringValue(node["title"])
+	url, _ := stringValue(node["url"])
+	if strings.TrimSpace(title) != colinMetadataAttachmentTitle || !isColinMetadataURL(url) {
+		return domain.ColinMetadata{}, errors.New("not a Colin metadata attachment")
+	}
+
+	metadataMap, _ := node["metadata"].(map[string]any)
+	metadata := domain.ColinMetadata{}
+	metadata.AttachmentID, _ = stringValue(node["id"])
+	metadata.ReviewPublishDirective, _ = stringValue(metadataMap["review_publish_directive"])
+	metadata.LastRunType, _ = stringValue(metadataMap["last_run_type"])
+	metadata.LastOutcome, _ = stringValue(metadataMap["last_outcome"])
+	metadata.LastSummaryCommentID, _ = stringValue(metadataMap["last_summary_comment_id"])
+	if value, _ := stringValue(metadataMap["updated_at"]); strings.TrimSpace(value) != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			metadata.UpdatedAt = &parsed
 		}
 	}
-	return ""
+	return metadata, nil
+}
+
+func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
+	value := map[string]any{
+		"review_publish_directive": strings.TrimSpace(metadata.ReviewPublishDirective),
+		"last_run_type":            strings.TrimSpace(metadata.LastRunType),
+		"last_outcome":             strings.TrimSpace(metadata.LastOutcome),
+		"last_summary_comment_id":  strings.TrimSpace(metadata.LastSummaryCommentID),
+	}
+	if metadata.UpdatedAt != nil {
+		value["updated_at"] = metadata.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return value
+}
+
+func colinMetadataAttachmentURL(issueID string) string {
+	return colinMetadataURLPrefix + strings.TrimSpace(issueID) + colinMetadataURLSuffix
+}
+
+func isColinMetadataURL(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, colinMetadataURLPrefix) && strings.HasSuffix(value, colinMetadataURLSuffix)
 }
 
 func derefStringValue(value *string) string {
@@ -802,6 +889,15 @@ func nestedString(root map[string]any, keys ...string) (string, bool) {
 		return "", false
 	}
 	return stringValue(value)
+}
+
+func nestedMap(root map[string]any, keys ...string) (map[string]any, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok || value == nil {
+		return nil, false
+	}
+	asMap, ok := value.(map[string]any)
+	return asMap, ok
 }
 
 func nestedBool(root map[string]any, keys ...string) (bool, bool) {

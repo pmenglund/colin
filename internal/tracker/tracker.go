@@ -15,5 +15,6 @@ type Client interface {
 	ResolveGitAutomationState(ctx context.Context, issueID string, event string, targetBranch string) (string, bool, error)
 	CreateIssueComment(ctx context.Context, issueID string, body string) (string, error)
 	CreateCommentReply(ctx context.Context, issueID string, parentCommentID string, body string) (string, error)
+	UpsertIssueMetadata(ctx context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error)
 	CurrentRateLimits() map[string]any
 }

@@ -59,6 +59,14 @@ func RenderPrompt(def domain.WorkflowDefinition, issue domain.Issue, attempt *in
 	if text == "" {
 		text = "You are working on an issue from Linear."
 	}
+	return RenderTemplate(text, map[string]any{
+		"issue":   issueToMap(issue),
+		"attempt": attempt,
+	})
+}
+
+// RenderTemplate renders arbitrary workflow-configured text with strict missing-key behavior.
+func RenderTemplate(text string, payload map[string]any) (string, error) {
 	tpl, err := template.New("workflow").
 		Option("missingkey=error").
 		Parse(text)
@@ -66,10 +74,6 @@ func RenderPrompt(def domain.WorkflowDefinition, issue domain.Issue, attempt *in
 		return "", fmt.Errorf("%w: %v", ErrTemplateParseError, err)
 	}
 	var buffer bytes.Buffer
-	payload := map[string]any{
-		"issue":   issueToMap(issue),
-		"attempt": attempt,
-	}
 	if err := tpl.Execute(&buffer, payload); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrTemplateRenderError, err)
 	}
@@ -148,6 +152,7 @@ func issueToMap(issue domain.Issue) map[string]any {
 		"branch_name":     derefString(issue.BranchName),
 		"url":             derefString(issue.URL),
 		"labels":          cloneStrings(issue.Labels),
+		"colin_metadata":  colinMetadataToMap(issue.ColinMetadata),
 		"blocked_by":      blockersToMaps(issue.BlockedBy),
 		"review_cycle":    reviewCycleToMap(issue.ReviewCycle),
 		"review_feedback": reviewFeedbackToMaps(issue.ReviewFeedback),
@@ -222,6 +227,20 @@ func pullRequestToMap(value *domain.PullRequestRef) any {
 		"number": value.Number,
 		"url":    value.URL,
 		"state":  value.State,
+	}
+}
+
+func colinMetadataToMap(value *domain.ColinMetadata) any {
+	if value == nil {
+		return nil
+	}
+	return map[string]any{
+		"attachment_id":            value.AttachmentID,
+		"review_publish_directive": value.ReviewPublishDirective,
+		"last_run_type":            value.LastRunType,
+		"last_outcome":             value.LastOutcome,
+		"last_summary_comment_id":  value.LastSummaryCommentID,
+		"updated_at":               derefTime(value.UpdatedAt),
 	}
 }
 

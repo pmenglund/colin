@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 var (
@@ -304,7 +305,10 @@ func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch str
 
 func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, issue domain.Issue, branch string) (string, error) {
 	title := fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
-	body := prBody(issue)
+	body, err := m.prBody(issue, branch, title)
+	if err != nil {
+		return "", err
+	}
 	out, err := m.run(
 		ctx,
 		workspacePath,
@@ -598,14 +602,50 @@ func commitMessage(issue domain.Issue) string {
 	return fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
 }
 
-func prBody(issue domain.Issue) string {
-	lines := []string{
-		fmt.Sprintf("Automated changes for %s.", issue.Identifier),
+func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string) (string, error) {
+	templateText := strings.TrimSpace(m.cfg.Repo.PRTemplate)
+	if templateText == "" {
+		templateText = defaultPRTemplate()
 	}
-	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
-		lines = append(lines, "", fmt.Sprintf("Linear: %s", strings.TrimSpace(*issue.URL)))
+	return workflow.RenderTemplate(templateText, map[string]any{
+		"issue":    prIssueMap(issue),
+		"branch":   branch,
+		"base_ref": m.cfg.Workspace.BaseRef,
+		"pr_title": prTitle,
+	})
+}
+
+func defaultPRTemplate() string {
+	return `## Summary
+
+Automated changes for {{.issue.identifier}}.
+
+## Linear
+
+- Issue: {{.issue.identifier}}
+{{- if .issue.url }}
+- URL: {{ .issue.url }}
+{{- end }}`
+}
+
+func prIssueMap(issue domain.Issue) map[string]any {
+	return map[string]any{
+		"id":          issue.ID,
+		"identifier":  issue.Identifier,
+		"title":       issue.Title,
+		"description": derefString(issue.Description),
+		"state":       issue.State,
+		"branch_name": derefString(issue.BranchName),
+		"url":         derefString(issue.URL),
+		"labels":      append([]string(nil), issue.Labels...),
 	}
-	return strings.Join(lines, "\n")
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func commandString(name string, args []string) string {

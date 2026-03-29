@@ -4,30 +4,39 @@ import "time"
 
 // Issue is the normalized tracker record consumed by orchestration, prompting, and logging.
 type Issue struct {
-	ID          string
-	Identifier  string
-	Title       string
-	Description *string
-	Priority    *int
-	State       string
-	BranchName  *string
-	URL         *string
-	Labels      []string
-	BlockedBy   []BlockerRef
-	// ReviewPublishDirective controls whether a Review-state issue should trigger GitHub publish automation.
-	ReviewPublishDirective string
-	ReviewCycle            *ReviewCycle
-	ReviewFeedback         []ReviewFeedback
-	ReviewThreads          []GitHubReviewThread
-	PullRequest            *PullRequestRef
-	CreatedAt              *time.Time
-	UpdatedAt              *time.Time
+	ID             string
+	Identifier     string
+	Title          string
+	Description    *string
+	Priority       *int
+	State          string
+	BranchName     *string
+	URL            *string
+	Labels         []string
+	BlockedBy      []BlockerRef
+	ColinMetadata  *ColinMetadata
+	ReviewCycle    *ReviewCycle
+	ReviewFeedback []ReviewFeedback
+	ReviewThreads  []GitHubReviewThread
+	PullRequest    *PullRequestRef
+	CreatedAt      *time.Time
+	UpdatedAt      *time.Time
 }
 
 const (
 	ReviewPublishDirectivePublish = "publish"
 	ReviewPublishDirectiveSkip    = "skip"
 )
+
+// ColinMetadata is persisted on the Linear issue to track Colin-specific workflow state.
+type ColinMetadata struct {
+	AttachmentID           string
+	ReviewPublishDirective string
+	LastRunType            string
+	LastOutcome            string
+	LastSummaryCommentID   string
+	UpdatedAt              *time.Time
+}
 
 // BlockerRef captures the minimal blocker fields needed for eligibility checks and prompt context.
 type BlockerRef struct {
@@ -121,6 +130,7 @@ type RepoConfig struct {
 	MergeStates   []string
 	RemoteName    string
 	MergeMethod   string
+	PRTemplate    string
 }
 
 // HookConfig configures workspace lifecycle hooks.

@@ -21,6 +21,17 @@ var (
 	ErrInvalidRepoMergeMethod  = errors.New("invalid_repo_merge_method")
 )
 
+const defaultPRTemplate = `## Summary
+
+Automated changes for {{.issue.identifier}}.
+
+## Linear
+
+- Issue: {{.issue.identifier}}
+{{- if .issue.url }}
+- URL: {{ .issue.url }}
+{{- end }}`
+
 // Build converts a workflow definition into typed runtime configuration with defaults applied.
 func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceConfig, error) {
 	cfg := domain.ServiceConfig{
@@ -39,6 +50,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			MergeStates:   []string{"Merge"},
 			RemoteName:    "origin",
 			MergeMethod:   "merge",
+			PRTemplate:    defaultPRTemplate,
 		},
 		Hooks: domain.HookConfig{
 			Timeout: 60 * time.Second,
@@ -285,6 +297,9 @@ func applyRepoConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	}
 	if value, ok := readString(raw, "merge_method"); ok {
 		cfg.Repo.MergeMethod = strings.ToLower(value)
+	}
+	if value, ok := readString(raw, "pr_template"); ok {
+		cfg.Repo.PRTemplate = value
 	}
 	return nil
 }

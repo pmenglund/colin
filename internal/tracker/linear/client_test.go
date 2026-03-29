@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
 )
 
 func TestCreateIssueComment(t *testing.T) {
@@ -101,6 +103,79 @@ func TestCreateCommentReply(t *testing.T) {
 	}
 	if gotParentID != "comment-1" {
 		t.Fatalf("parentId = %q, want %q", gotParentID, "comment-1")
+	}
+}
+
+func TestUpsertIssueMetadata(t *testing.T) {
+	t.Parallel()
+
+	var (
+		gotIssueID  string
+		gotTitle    string
+		gotURL      string
+		gotMetadata map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		input, _ := request.Variables["input"].(map[string]any)
+		gotIssueID, _ = input["issueId"].(string)
+		gotTitle, _ = input["title"].(string)
+		gotURL, _ = input["url"].(string)
+		gotMetadata, _ = input["metadata"].(map[string]any)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"attachmentCreate": map[string]any{
+					"success": true,
+					"attachment": map[string]any{
+						"id":       "attachment-1",
+						"title":    gotTitle,
+						"url":      gotURL,
+						"metadata": gotMetadata,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
+	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
+		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+		LastRunType:            "coding",
+		LastOutcome:            "needs_spec",
+		LastSummaryCommentID:   "comment-1",
+		UpdatedAt:              &now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueMetadata() error = %v", err)
+	}
+	if gotIssueID != "issue-1" {
+		t.Fatalf("issueId = %q, want %q", gotIssueID, "issue-1")
+	}
+	if gotTitle != "Colin metadata" {
+		t.Fatalf("title = %q, want %q", gotTitle, "Colin metadata")
+	}
+	if gotURL != "https://colin.invalid/linear/issues/issue-1/metadata" {
+		t.Fatalf("url = %q, want %q", gotURL, "https://colin.invalid/linear/issues/issue-1/metadata")
+	}
+	if gotMetadata["review_publish_directive"] != "skip" {
+		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
+	}
+	if metadata.AttachmentID != "attachment-1" {
+		t.Fatalf("metadata.AttachmentID = %q, want %q", metadata.AttachmentID, "attachment-1")
 	}
 }
 
@@ -546,7 +621,7 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 	}
 }
 
-func TestFetchCandidateIssuesExtractsLatestReviewPublishDirective(t *testing.T) {
+func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2026, 3, 29, 18, 0, 0, 0, time.UTC)
@@ -566,17 +641,33 @@ func TestFetchCandidateIssuesExtractsLatestReviewPublishDirective(t *testing.T) 
 							"inverseRelations": map[string]any{
 								"nodes": []map[string]any{},
 							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":    "attachment-1",
+										"title": "Colin metadata",
+										"url":   "https://colin.invalid/linear/issues/issue-1/metadata",
+										"metadata": map[string]any{
+											"review_publish_directive": "skip",
+											"last_run_type":            "coding",
+											"last_outcome":             "needs_spec",
+											"last_summary_comment_id":  "comment-2",
+											"updated_at":               base.Add(2 * time.Minute).Format(time.RFC3339),
+										},
+									},
+								},
+							},
 							"comments": map[string]any{
 								"nodes": []map[string]any{
 									{
 										"id":        "comment-1",
-										"body":      "[colin] Ready for review.\n\n<!-- colin:review_publish=publish -->",
+										"body":      "[colin] Ready for review.",
 										"createdAt": base.Add(1 * time.Minute).Format(time.RFC3339),
 										"children":  map[string]any{"nodes": []map[string]any{}},
 									},
 									{
 										"id":        "comment-2",
-										"body":      "[colin] The spec should be improved before implementation.\n\n<!-- colin:review_publish=skip -->",
+										"body":      "[colin] The spec should be improved before implementation.",
 										"createdAt": base.Add(2 * time.Minute).Format(time.RFC3339),
 										"children":  map[string]any{"nodes": []map[string]any{}},
 									},
@@ -608,7 +699,10 @@ func TestFetchCandidateIssuesExtractsLatestReviewPublishDirective(t *testing.T) 
 	if len(issues) != 1 {
 		t.Fatalf("issues length = %d, want 1", len(issues))
 	}
-	if issues[0].ReviewPublishDirective != "skip" {
-		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ReviewPublishDirective, "skip")
+	if issues[0].ColinMetadata == nil {
+		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
+	}
+	if issues[0].ColinMetadata.ReviewPublishDirective != "skip" {
+		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ColinMetadata.ReviewPublishDirective, "skip")
 	}
 }

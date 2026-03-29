@@ -38,10 +38,12 @@ go run . /path/to/WORKFLOW.md
 
 - Colin watches a single Linear project configured in `WORKFLOW.md`.
 - The runtime behavior is driven by workflow front matter, including polling cadence, workspace root, tracked states, Codex command, and repo automation settings.
+- `WORKFLOW.md` also carries the Codex prompt template and can optionally define `repo.pr_template` for the PR body Colin opens in GitHub. If that field is omitted, Colin uses its built-in default PR template.
 - Each issue gets its own workspace directory. Colin preserves that workspace across retries and continuation runs.
 - Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
 - During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
+- Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
 - Colin can also move an underspecified issue to `Review` without opening a branch or PR when the coding run concludes the request needs clarification; in that case it leaves a `[colin]` comment explaining what needs to be improved in the spec.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
@@ -85,8 +87,9 @@ When an issue is moved to `Review`, Colin does not run another coding turn. Inst
 - usually commits any local changes if the workspace is dirty
 - usually pushes the issue branch to the configured remote
 - usually creates or reuses a GitHub pull request targeting the configured base branch
+- renders the PR body from `repo.pr_template` when one is configured, otherwise uses the built-in default template
 
-If the coding run determines the issue is still too underspecified to implement safely, Colin can also move the issue to `Review` without publishing a branch or PR. In that case it leaves a `[colin]` comment asking for the spec to be improved before implementation.
+If the coding run determines the issue is still too underspecified to implement safely, Colin can also move the issue to `Review` without publishing a branch or PR. In that case it leaves a `[colin]` comment asking for the spec to be improved before implementation and records the skip-publish directive in Linear metadata on the issue.
 
 If Colin reaches the configured maximum turn count before it can finish a coding run, it still moves the issue to `Review`, but it includes a `[colin]` comment explaining that the run hit the turn cap and is being handed off for human review.
 

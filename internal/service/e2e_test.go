@@ -487,6 +487,7 @@ type fakeLinearServer struct {
 	candidateFetches int
 	stateFetches     int
 	comments         []fakeLinearComment
+	metadata         map[string]any
 	nextCommentID    int
 }
 
@@ -519,6 +520,25 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"success": true,
 					"comment": map[string]any{
 						"id": commentID,
+					},
+				},
+			},
+		})
+	case strings.Contains(request.Query, "attachmentCreate"):
+		input, _ := request.Variables["input"].(map[string]any)
+		metadata, _ := input["metadata"].(map[string]any)
+		s.mu.Lock()
+		s.metadata = metadata
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"attachmentCreate": map[string]any{
+					"success": true,
+					"attachment": map[string]any{
+						"id":       "attachment-1",
+						"title":    "Colin metadata",
+						"url":      "https://colin.invalid/linear/issues/issue-1/metadata",
+						"metadata": metadata,
 					},
 				},
 			},
@@ -616,6 +636,18 @@ func (s *fakeLinearServer) setCurrentState(state string) {
 
 func (s *fakeLinearServer) issueNode(state string) map[string]any {
 	now := time.Now().UTC().Format(time.RFC3339)
+	s.mu.Lock()
+	metadata := s.metadata
+	s.mu.Unlock()
+	attachments := []map[string]any{}
+	if metadata != nil {
+		attachments = append(attachments, map[string]any{
+			"id":       "attachment-1",
+			"title":    "Colin metadata",
+			"url":      "https://colin.invalid/linear/issues/issue-1/metadata",
+			"metadata": metadata,
+		})
+	}
 	return map[string]any{
 		"id":          "issue-1",
 		"identifier":  "COLIN-93",
@@ -634,6 +666,9 @@ func (s *fakeLinearServer) issueNode(state string) map[string]any {
 		},
 		"inverseRelations": map[string]any{
 			"nodes": []map[string]any{},
+		},
+		"attachments": map[string]any{
+			"nodes": attachments,
 		},
 	}
 }

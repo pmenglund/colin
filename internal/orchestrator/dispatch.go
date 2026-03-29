@@ -33,7 +33,7 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	if !o.hasStateSlots(issue.State) {
 		return false
 	}
-	if o.isPublishState(issue.State) && issue.ReviewPublishDirective == domain.ReviewPublishDirectiveSkip {
+	if o.isPublishState(issue.State) && issueReviewPublishDirective(issue) == domain.ReviewPublishDirectiveSkip {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(issue.State), "todo") {
@@ -47,6 +47,13 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 		}
 	}
 	return true
+}
+
+func issueReviewPublishDirective(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(issue.ColinMetadata.ReviewPublishDirective)
 }
 
 func (o *Orchestrator) hasGlobalSlots() bool {

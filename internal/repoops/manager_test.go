@@ -46,6 +46,28 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	}
 }
 
+func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	cfg := testConfig()
+	cfg.Workspace.BaseRef = "symphony"
+	cfg.Repo.PRTemplate = "PRBODY issue={{.issue.identifier}} branch={{.branch}} base={{.base_ref}}"
+
+	manager := NewManager(cfg, testLogger())
+	if _, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Use template",
+	}, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	log := readFile(t, ghLogPath)
+	if !strings.Contains(log, "PRBODY issue=COLIN-93 branch=colin-93 base=symphony") {
+		t.Fatalf("gh log = %q, want rendered PR body", log)
+	}
+}
+
 func TestMergeMergesExistingPR(t *testing.T) {
 	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")

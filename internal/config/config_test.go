@@ -158,3 +158,28 @@ func TestCandidateStatesIncludesRepoAutomationStatesOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReadsPRTemplate(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"repo": map[string]any{
+				"pr_template": "Issue {{.issue.identifier}}",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Repo.PRTemplate; got != "Issue {{.issue.identifier}}" {
+		t.Fatalf("cfg.Repo.PRTemplate = %q, want %q", got, "Issue {{.issue.identifier}}")
+	}
+}

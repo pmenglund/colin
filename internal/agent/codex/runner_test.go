@@ -156,12 +156,11 @@ func TestParseReviewDirectiveSummaryDefaultsToPublish(t *testing.T) {
 	}
 }
 
-func TestPersistReviewDirectiveSummary(t *testing.T) {
+func TestCodingOutcomeUsesNeedsSpecDirective(t *testing.T) {
 	t.Parallel()
 
-	got := persistReviewDirectiveSummary("Ready for review.", domain.ReviewPublishDirectiveSkip)
-	if want := "Ready for review.\n\n<!-- colin:review_publish=skip -->"; got != want {
-		t.Fatalf("persistReviewDirectiveSummary() = %q, want %q", got, want)
+	if got := codingOutcome(domain.ReviewPublishDirectiveSkip, false); got != metadataOutcomeSpec {
+		t.Fatalf("codingOutcome() = %q, want %q", got, metadataOutcomeSpec)
 	}
 }
 
@@ -189,8 +188,11 @@ func TestMoveSuccessfulActiveIssueToPublishStateUsesSkipDirective(t *testing.T) 
 	if issue.State != "Review" {
 		t.Fatalf("issue.State = %q, want %q", issue.State, "Review")
 	}
-	if issue.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
-		t.Fatalf("issue.ReviewPublishDirective = %q, want %q", issue.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
+	if issue.ColinMetadata == nil {
+		t.Fatal("issue.ColinMetadata = nil, want metadata")
+	}
+	if issue.ColinMetadata.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
+		t.Fatalf("issue.ColinMetadata.ReviewPublishDirective = %q, want %q", issue.ColinMetadata.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
 	}
 }
 
@@ -251,6 +253,7 @@ type stubTracker struct {
 	updatedIssueID      string
 	updatedState        string
 	updatedStates       []string
+	metadata            domain.ColinMetadata
 	resolvedMergeState  string
 	resolveMergeStateOK bool
 }
@@ -287,6 +290,11 @@ func (s *stubTracker) CreateIssueComment(context.Context, string, string) (strin
 
 func (s *stubTracker) CreateCommentReply(context.Context, string, string, string) (string, error) {
 	return "", nil
+}
+
+func (s *stubTracker) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	s.metadata = metadata
+	return metadata, nil
 }
 
 func (s *stubTracker) CurrentRateLimits() map[string]any {

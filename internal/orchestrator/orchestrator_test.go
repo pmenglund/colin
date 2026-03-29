@@ -50,6 +50,10 @@ func (s *trackerStub) CreateCommentReply(context.Context, string, string, string
 	return "", nil
 }
 
+func (s *trackerStub) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	return metadata, nil
+}
+
 func (s *trackerStub) CurrentRateLimits() map[string]any {
 	return s.rateLimits
 }
@@ -92,11 +96,13 @@ func TestShouldDispatchRejectsReviewThatSkipsPublish(t *testing.T) {
 	}
 
 	if orch.shouldDispatch(domain.Issue{
-		ID:                     "1",
-		Identifier:             "ABC-1",
-		Title:                  "Needs more detail",
-		State:                  "Review",
-		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Needs more detail",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+		},
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
 	}
@@ -208,10 +214,12 @@ func TestHandleWorkerExitCodingRunToReviewSkipMarksCompletedWithoutRetry(t *test
 	t.Parallel()
 
 	issue := domain.Issue{
-		ID:                     "1",
-		Identifier:             "ABC-1",
-		State:                  "Review",
-		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+		ID:         "1",
+		Identifier: "ABC-1",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+		},
 	}
 	orch := &Orchestrator{
 		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
