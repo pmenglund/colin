@@ -28,7 +28,13 @@ By default Colin is started with:
 go run .
 ```
 
-That also starts the local dashboard on `http://127.0.0.1:8888`.
+By default Colin prints a single startup line with the local dashboard URL, for example `Colin is running. Web UI: http://127.0.0.1:8888`.
+
+To keep the previous structured log stream on the terminal, pass `--verbose`:
+
+```bash
+go run . --verbose
+```
 
 To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pass `--port`:
 
@@ -171,7 +177,8 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 
 ## Operational Notes
 
-- Colin uses structured logging so `go run .` shows service activity, dispatches, retries, Codex session progress, and handoff automation.
+- By default `go run .` stays quiet after startup and only prints the single `Colin is running. Web UI: ...` line.
+- Pass `--verbose` to restore the structured service log stream for startup, dispatches, retries, Codex session progress, and handoff automation.
 - Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
 - Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.

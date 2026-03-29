@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -75,6 +76,11 @@ func (s *Service) DashboardURL() string {
 	s.serverMu.RLock()
 	defer s.serverMu.RUnlock()
 	return s.serverURL
+}
+
+// DashboardEnabled reports whether the dashboard server is configured to start.
+func (s *Service) DashboardEnabled() bool {
+	return s.serverPort != nil
 }
 
 func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error) {
@@ -216,8 +222,16 @@ func intPtr(value int) *int {
 }
 
 // NewDefaultLogger returns the repo-default structured logger.
-func NewDefaultLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+func NewDefaultLogger(verbose bool) *slog.Logger {
+	return newLogger(os.Stderr, verbose)
+}
+
+func newLogger(w io.Writer, verbose bool) *slog.Logger {
+	level := slog.LevelError
+	if verbose {
+		level = slog.LevelInfo
+	}
+	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
 }
 
 // DescribeStartupError converts common startup failures into operator-facing text.
