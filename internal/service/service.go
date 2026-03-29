@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
@@ -22,6 +23,8 @@ type Service struct {
 	loader       workflow.Loader
 	workflowPath string
 	orch         *orchestrator.Orchestrator
+	runtimeMu    sync.RWMutex
+	runtime      orchestrator.Runtime
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
@@ -38,18 +41,34 @@ func New(logger *slog.Logger, workflowPath string) (*Service, error) {
 		loader:       loader,
 		workflowPath: path,
 		orch:         orch,
+		runtime:      runtime,
 	}, nil
 }
 
 // Run starts startup cleanup, workflow reload watching, and the orchestrator loop.
 func (s *Service) Run(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	s.logger.Info("service starting", "workflow_path", s.workflowPath)
-	if err := s.orch.StartupTerminalCleanup(ctx); err != nil {
+	if err := s.orch.StartupTerminalCleanup(runCtx); err != nil {
 		s.logger.Warn("startup cleanup skipped", "error", err)
 	}
 	s.logger.Info("workflow watch started", "path", s.workflowPath, "interval_seconds", 2)
-	go s.watchWorkflow(ctx)
-	return s.orch.Run(ctx)
+	go s.watchWorkflow(runCtx)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.orch.Run(runCtx)
+	}()
+
+	if err := s.startStatusServer(runCtx); err != nil {
+		cancel()
+		<-errCh
+		return err
+	}
+
+	return <-errCh
 }
 
 func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error) {
@@ -124,10 +143,19 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 				s.logger.Error("workflow reload failed; keeping last good config", "path", s.workflowPath, "error", err)
 				continue
 			}
+			s.runtimeMu.Lock()
+			s.runtime = runtime
+			s.runtimeMu.Unlock()
 			s.logger.Info("workflow reloaded", "path", s.workflowPath)
 			s.orch.UpdateRuntime(runtime)
 		}
 	}
+}
+
+func (s *Service) currentRuntime() orchestrator.Runtime {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.runtime
 }
 
 // NewDefaultLogger returns the repo-default structured logger.

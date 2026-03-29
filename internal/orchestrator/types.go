@@ -50,6 +50,9 @@ type retryState struct {
 }
 
 type configUpdatedEvent struct{ runtime Runtime }
+type snapshotRequestEvent struct {
+	response chan domain.Snapshot
+}
 type codexEvent struct{ event codex.Event }
 type workerExitedEvent struct {
 	issueID string

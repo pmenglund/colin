@@ -61,6 +61,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 					}
 				}
 				tick.Reset(o.runtime.Config.Polling.Interval)
+			case snapshotRequestEvent:
+				event.response <- o.snapshot()
 			case codexEvent:
 				o.handleCodexEvent(event.event)
 			case workerExitedEvent:

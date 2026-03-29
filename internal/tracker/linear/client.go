@@ -14,6 +14,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/githubutil"
 )
 
 var (
@@ -56,9 +57,6 @@ func (c *Client) FetchCandidateIssues(ctx context.Context) ([]domain.Issue, erro
 
 // FetchIssuesByStates returns issues whose current Linear state is in the provided list.
 func (c *Client) FetchIssuesByStates(ctx context.Context, stateNames []string) ([]domain.Issue, error) {
-	if len(stateNames) == 0 {
-		return nil, nil
-	}
 	return c.fetchIssues(ctx, stateNames)
 }
 
@@ -100,7 +98,7 @@ query IssueStates($ids: [ID!]!) {
 }
 
 func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
-	const query = `
+	query := `
 query CandidateIssues($projectSlug: String!, $states: [String!], $after: String) {
   issues(
     first: 50
@@ -123,6 +121,15 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
       updatedAt
       state { name }
       labels { nodes { name } }
+      attachments(first: 50) {
+        nodes {
+          title
+          subtitle
+          url
+          sourceType
+          metadata
+        }
+      }
       inverseRelations {
         nodes {
           type
@@ -137,13 +144,59 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
   }
 }
 `
+	if len(states) == 0 {
+		query = `
+query CandidateIssues($projectSlug: String!, $after: String) {
+  issues(
+    first: 50
+    after: $after
+    filter: {
+      project: { slugId: { eq: $projectSlug } }
+    }
+  ) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      identifier
+      title
+      description
+      priority
+      branchName
+      url
+      createdAt
+      updatedAt
+      state { name }
+      labels { nodes { name } }
+      attachments(first: 50) {
+        nodes {
+          title
+          subtitle
+          url
+          sourceType
+          metadata
+        }
+      }
+      inverseRelations {
+        nodes {
+          type
+          issue {
+            id
+            identifier
+            state { name }
+          }
+        }
+      }
+    }
+  }
+}
+`
+	}
 	var after *string
 	var out []domain.Issue
 	for {
-		variables := map[string]any{
-			"projectSlug": c.project,
-			"states":      states,
-			"after":       after,
+		variables := map[string]any{"projectSlug": c.project, "after": after}
+		if len(states) > 0 {
+			variables["states"] = states
 		}
 		resp, err := c.doQuery(ctx, query, variables)
 		if err != nil {
@@ -251,6 +304,9 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 			}
 		}
 	}
+	if attachmentNodes, ok := nestedSlice(node, "attachments", "nodes"); ok {
+		issue.PullRequests = normalizePullRequests(attachmentNodes)
+	}
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -275,6 +331,271 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 		}
 	}
 	return issue, nil
+}
+
+func normalizePullRequests(nodes []map[string]any) []domain.PullRequest {
+	out := make([]domain.PullRequest, 0, len(nodes))
+	indexByURL := map[string]int{}
+	for _, node := range nodes {
+		sourceType, _ := stringValue(node["sourceType"])
+		if strings.EqualFold(strings.TrimSpace(sourceType), "github") {
+			pr, ok := pullRequestFromGitHubAttachment(node)
+			if ok {
+				out = appendPullRequest(out, indexByURL, pr)
+			}
+			continue
+		}
+		pr, ok := pullRequestFromMetadataAttachment(node)
+		if ok {
+			out = appendPullRequest(out, indexByURL, pr)
+			continue
+		}
+		pr, ok = pullRequestFromURLAttachment(node)
+		if ok {
+			out = appendPullRequest(out, indexByURL, pr)
+		}
+	}
+	return out
+}
+
+func appendPullRequest(out []domain.PullRequest, indexByURL map[string]int, pr domain.PullRequest) []domain.PullRequest {
+	key := pullRequestIdentityKey(pr)
+	if key == "" {
+		return out
+	}
+	if index, ok := indexByURL[key]; ok {
+		out[index] = mergePullRequest(out[index], pr)
+		return out
+	}
+	indexByURL[key] = len(out)
+	return append(out, pr)
+}
+
+func mergePullRequest(existing, incoming domain.PullRequest) domain.PullRequest {
+	primary := existing
+	secondary := incoming
+	if pullRequestRichness(incoming) > pullRequestRichness(existing) {
+		primary = incoming
+		secondary = existing
+	}
+
+	merged := primary
+
+	if strings.TrimSpace(merged.Title) == "" {
+		merged.Title = secondary.Title
+	}
+	if merged.Number == nil && secondary.Number != nil {
+		merged.Number = secondary.Number
+	}
+	if strings.TrimSpace(merged.Status) == "" {
+		merged.Status = secondary.Status
+	}
+	if !merged.Draft {
+		merged.Draft = secondary.Draft
+	}
+	if strings.TrimSpace(merged.Branch) == "" {
+		merged.Branch = secondary.Branch
+	}
+	if strings.TrimSpace(merged.TargetBranch) == "" {
+		merged.TargetBranch = secondary.TargetBranch
+	}
+	if strings.TrimSpace(merged.RepoLogin) == "" {
+		merged.RepoLogin = secondary.RepoLogin
+	}
+	if strings.TrimSpace(merged.RepoName) == "" {
+		merged.RepoName = secondary.RepoName
+	}
+	if merged.CreatedAt == nil {
+		merged.CreatedAt = secondary.CreatedAt
+	}
+	if merged.UpdatedAt == nil {
+		merged.UpdatedAt = secondary.UpdatedAt
+	}
+	if merged.ClosedAt == nil {
+		merged.ClosedAt = secondary.ClosedAt
+	}
+	if merged.MergedAt == nil {
+		merged.MergedAt = secondary.MergedAt
+	}
+	if pullRequestStatePriority(secondary) > pullRequestStatePriority(merged) {
+		merged.Status = secondary.Status
+		merged.Draft = secondary.Draft
+		if secondary.ClosedAt != nil {
+			merged.ClosedAt = secondary.ClosedAt
+		}
+		if secondary.MergedAt != nil {
+			merged.MergedAt = secondary.MergedAt
+		}
+	}
+
+	return merged
+}
+
+func pullRequestStatePriority(pr domain.PullRequest) int {
+	status := strings.ToLower(strings.TrimSpace(pr.Status))
+	switch {
+	case pr.MergedAt != nil || status == "merged":
+		return 4
+	case pr.ClosedAt != nil || status == "closed":
+		return 3
+	case pr.Draft || status == "draft":
+		return 2
+	case status != "":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func pullRequestRichness(pr domain.PullRequest) int {
+	score := 0
+	if strings.TrimSpace(pr.Title) != "" {
+		score++
+	}
+	if pr.Number != nil {
+		score += 2
+	}
+	if strings.TrimSpace(pr.Status) != "" {
+		score += 2
+	}
+	if pr.Draft {
+		score++
+	}
+	if strings.TrimSpace(pr.Branch) != "" {
+		score++
+	}
+	if strings.TrimSpace(pr.TargetBranch) != "" {
+		score++
+	}
+	if strings.TrimSpace(pr.RepoLogin) != "" {
+		score++
+	}
+	if strings.TrimSpace(pr.RepoName) != "" {
+		score++
+	}
+	if pr.CreatedAt != nil {
+		score++
+	}
+	if pr.UpdatedAt != nil {
+		score++
+	}
+	if pr.ClosedAt != nil {
+		score++
+	}
+	if pr.MergedAt != nil {
+		score++
+	}
+	return score
+}
+
+func pullRequestIdentityKey(pr domain.PullRequest) string {
+	if pr.Number != nil {
+		repoLogin := strings.ToLower(strings.TrimSpace(pr.RepoLogin))
+		repoName := strings.ToLower(strings.TrimSpace(pr.RepoName))
+		if repoLogin != "" && repoName != "" {
+			return fmt.Sprintf("github:%s/%s#%d", repoLogin, repoName, *pr.Number)
+		}
+	}
+	if repoLogin, repoName, number, ok := githubutil.ParsePullRequestURL(pr.URL); ok {
+		return fmt.Sprintf(
+			"github:%s/%s#%d",
+			strings.ToLower(strings.TrimSpace(repoLogin)),
+			strings.ToLower(strings.TrimSpace(repoName)),
+			number,
+		)
+	}
+	return strings.TrimSpace(pr.URL)
+}
+
+func pullRequestFromGitHubAttachment(node map[string]any) (domain.PullRequest, bool) {
+	url, _ := stringValue(node["url"])
+	metadata, hasMetadata := mapValue(node["metadata"])
+	if hasMetadata {
+		if metadataURL, ok := metadataString(metadata, "url", "pullRequestUrl", "pull_request_url"); ok {
+			metadataURL = strings.TrimSpace(metadataURL)
+			if _, _, _, ok := githubutil.ParsePullRequestURL(metadataURL); ok {
+				url = metadataURL
+			}
+		}
+	}
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return domain.PullRequest{}, false
+	}
+	if _, _, _, ok := githubutil.ParsePullRequestURL(url); !ok {
+		return domain.PullRequest{}, false
+	}
+
+	title, _ := stringValue(node["title"])
+	if hasMetadata {
+		if value, ok := stringValue(metadata["title"]); ok && strings.TrimSpace(value) != "" {
+			title = value
+		}
+	}
+	pr := domain.PullRequest{
+		URL:   url,
+		Title: strings.TrimSpace(title),
+	}
+	applyGitHubURLFallback(&pr)
+	if !hasMetadata {
+		return pr, true
+	}
+
+	status, _ := metadataString(metadata, "status")
+	pr.Status = strings.ToLower(strings.TrimSpace(status))
+	pr.Draft = metadataBool(metadata, "draft")
+	pr.Branch = trimmedMetadataString(metadata, "branch", "source_branch")
+	pr.TargetBranch = trimmedMetadataString(metadata, "targetBranch", "target_branch")
+	pr.RepoLogin = trimmedMetadataString(metadata, "repoLogin", "repo_login")
+	pr.RepoName = trimmedMetadataString(metadata, "repoName", "repo_name")
+	pr.CreatedAt = metadataTime(metadata, "createdAt", "created_at")
+	pr.UpdatedAt = metadataTime(metadata, "updatedAt", "updated_at")
+	pr.ClosedAt = metadataTime(metadata, "closedAt", "closed_at")
+	pr.MergedAt = metadataTime(metadata, "mergedAt", "merged_at")
+	if value, ok := metadataInt(metadata, "number"); ok {
+		pr.Number = &value
+	}
+	applyGitHubURLFallback(&pr)
+	return pr, true
+}
+
+func pullRequestFromMetadataAttachment(node map[string]any) (domain.PullRequest, bool) {
+	metadata, ok := mapValue(node["metadata"])
+	if !ok {
+		return domain.PullRequest{}, false
+	}
+	url, ok := stringValue(metadata["colin.pr_url"])
+	if !ok || strings.TrimSpace(url) == "" {
+		return domain.PullRequest{}, false
+	}
+	url = strings.TrimSpace(url)
+	if _, _, _, ok := githubutil.ParsePullRequestURL(url); !ok {
+		return domain.PullRequest{}, false
+	}
+	title, _ := stringValue(node["title"])
+	pr := domain.PullRequest{
+		URL:   url,
+		Title: strings.TrimSpace(title),
+	}
+	applyGitHubURLFallback(&pr)
+	return pr, true
+}
+
+func pullRequestFromURLAttachment(node map[string]any) (domain.PullRequest, bool) {
+	url, ok := stringValue(node["url"])
+	if !ok || strings.TrimSpace(url) == "" {
+		return domain.PullRequest{}, false
+	}
+	if _, _, _, ok := githubutil.ParsePullRequestURL(url); !ok {
+		return domain.PullRequest{}, false
+	}
+	title, _ := stringValue(node["title"])
+	pr := domain.PullRequest{
+		URL:   strings.TrimSpace(url),
+		Title: strings.TrimSpace(title),
+	}
+	applyGitHubURLFallback(&pr)
+	return pr, true
 }
 
 func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {
@@ -347,5 +668,85 @@ func intValue(value any) (int, bool) {
 		return int(v), true
 	default:
 		return 0, false
+	}
+}
+
+func mapValue(value any) (map[string]any, bool) {
+	v, ok := value.(map[string]any)
+	return v, ok
+}
+
+func trimmedMetadataString(metadata map[string]any, keys ...string) string {
+	value, _ := metadataString(metadata, keys...)
+	return strings.TrimSpace(value)
+}
+
+func timeValue(value any) *time.Time {
+	raw, ok := stringValue(value)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func metadataString(metadata map[string]any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if value, ok := stringValue(metadata[key]); ok && strings.TrimSpace(value) != "" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func metadataBool(metadata map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := metadata[key].(bool); ok {
+			return value
+		}
+	}
+	return false
+}
+
+func metadataInt(metadata map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		if value, ok := intValue(metadata[key]); ok {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
+func metadataTime(metadata map[string]any, keys ...string) *time.Time {
+	for _, key := range keys {
+		if value := timeValue(metadata[key]); value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func applyGitHubURLFallback(pr *domain.PullRequest) {
+	if pr == nil {
+		return
+	}
+	repoLogin, repoName, number, ok := githubutil.ParsePullRequestURL(pr.URL)
+	if !ok {
+		return
+	}
+	if canonicalURL, ok := githubutil.CanonicalPullRequestURL(pr.URL); ok {
+		pr.URL = canonicalURL
+	}
+	if strings.TrimSpace(pr.RepoLogin) == "" {
+		pr.RepoLogin = repoLogin
+	}
+	if strings.TrimSpace(pr.RepoName) == "" {
+		pr.RepoName = repoName
+	}
+	if pr.Number == nil {
+		pr.Number = &number
 	}
 }

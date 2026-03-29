@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -63,6 +64,25 @@ func toInt(value any) (int, bool) {
 	case int64:
 		return int(v), true
 	case float64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func toExactInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		if math.Trunc(v) != v {
+			return 0, false
+		}
 		return int(v), true
 	case string:
 		n, err := strconv.Atoi(strings.TrimSpace(v))
