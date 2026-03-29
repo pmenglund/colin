@@ -126,11 +126,12 @@ type WorkspaceConfig struct {
 
 // RepoConfig configures GitHub publish and merge automation tied to tracker states.
 type RepoConfig struct {
-	PublishStates []string
-	MergeStates   []string
-	RemoteName    string
-	MergeMethod   string
-	PRTemplate    string
+	PublishStates  []string
+	MergeStates    []string
+	RemoteName     string
+	MergeMethod    string
+	BranchTemplate string
+	PRTemplate     string
 }
 
 // HookConfig configures workspace lifecycle hooks.

@@ -29,6 +29,7 @@ repo:
     - Merge
   remote_name: origin
   merge_method: squash
+  branch_template: colin/{{.issue.title}}
 
 hooks:
   timeout_ms: 60000

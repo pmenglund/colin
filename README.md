@@ -117,6 +117,7 @@ When an issue is moved to `Review`, Colin does not run another coding turn. Inst
 - usually commits any local changes if the workspace is dirty
 - usually pushes the issue branch to the configured remote
 - usually creates or reuses a GitHub pull request targeting the configured base branch
+- uses `repo.branch_template` to choose a default branch name when the tracker does not provide one
 - renders the PR body from `repo.pr_template` when one is configured, otherwise uses the built-in default template
 
 `Review` is PR-only. Colin should only leave an issue in `Review` when the branch and PR are the intended next artifact for human review.
@@ -172,6 +173,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - poll every 30 seconds
 - use `./.colin/workspaces` as the workspace root
 - clone `git@github.com:pmenglund/colin.git`
+- default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
 - use `codex app-server` for coding runs
 
