@@ -145,6 +145,8 @@ This is configured in `WORKFLOW.md` under `repo.merge_states` and currently is:
 When an issue is moved to `Merge`, Colin:
 
 - ensures the branch and PR exist
+- checks the PR for Codex web review status before merging
+- moves the issue back to `Review` with a Linear comment instead of merging when `chatgpt-codex-connector[bot]` has left a newer `eyes` reaction than `thumbs up`, or when unresolved review threads from that bot remain
 - merges the PR using the configured merge method
 - checks the team's configured Linear git `merge` automation target and, when one is configured, updates the issue to that state as part of merge completion
 

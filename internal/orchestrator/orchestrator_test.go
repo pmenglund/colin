@@ -181,6 +181,51 @@ func TestHandleWorkerExitMarksReviewStateCompletedWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerExitMergeBlockedBackToReviewPostsSummary(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", State: "Review"}
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo: domain.RepoConfig{PublishStates: []string{"Review"}, MergeStates: []string{"Merge"}},
+			},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      domain.Issue{ID: "1", Identifier: "ABC-1", State: "Merge"},
+				identifier: issue.Identifier,
+				startedAt:  time.Now().Add(-2 * time.Second),
+				comment:    &commentThreadState{RunType: codex.RunTypeMerge, RootCommentID: "root"},
+			},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   issue,
+			RunType: codex.RunTypeMerge,
+			Status:  "succeeded",
+			Summary: "Returning issue to `Review` because Codex PR feedback still needs to be resolved.",
+		},
+	})
+
+	if len(tracker.commentReplies) != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", len(tracker.commentReplies))
+	}
+	if got := orch.completed["1"]; got != "Review" {
+		t.Fatalf("completed state = %q, want %q", got, "Review")
+	}
+}
+
 func TestHandleWorkerExitCodingRunToReviewDoesNotMarkReviewCompleted(t *testing.T) {
 	t.Parallel()
 

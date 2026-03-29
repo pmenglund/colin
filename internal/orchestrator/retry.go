@@ -143,7 +143,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	}
 
 	if event.result.Status == "succeeded" {
-		if event.result.RunType == codex.RunTypeCoding && strings.TrimSpace(event.result.Summary) != "" && !o.isActive(event.result.Issue.State) {
+		if shouldPostSummaryForSucceededRun(o, event.result) {
 			commentID := o.postReply(ctx, entry, event.result.Summary)
 			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
 		}
@@ -219,6 +219,20 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		entry.comment,
 		true,
 	)
+}
+
+func shouldPostSummaryForSucceededRun(o *Orchestrator, result codex.Result) bool {
+	if strings.TrimSpace(result.Summary) == "" {
+		return false
+	}
+	switch result.RunType {
+	case codex.RunTypeCoding:
+		return !o.isActive(result.Issue.State)
+	case codex.RunTypeMerge:
+		return true
+	default:
+		return false
+	}
 }
 
 func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration, comment *commentThreadState, notifyLinear bool) {

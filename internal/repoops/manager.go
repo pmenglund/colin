@@ -21,6 +21,8 @@ var (
 	ErrNoPullRequest    = errors.New("no_pull_request")
 )
 
+const codexReviewBotLogin = "chatgpt-codex-connector[bot]"
+
 // Result captures the outcome of a publish or merge operation.
 type Result struct {
 	Branch   string
@@ -32,10 +34,13 @@ type Result struct {
 	Action   string
 }
 
-// ReviewContext captures the PR and its unresolved review threads for an issue branch.
+// ReviewContext captures the PR, unresolved review threads, and Codex review signals for an issue branch.
 type ReviewContext struct {
-	PullRequest domain.PullRequestRef
-	Threads     []domain.GitHubReviewThread
+	PullRequest            domain.PullRequestRef
+	Threads                []domain.GitHubReviewThread
+	CodexReviewThreads     []domain.GitHubReviewThread
+	CodexReviewRequestedAt *time.Time
+	CodexReviewApprovedAt  *time.Time
 }
 
 // Manager performs git and GitHub operations for a workspace.
@@ -175,7 +180,11 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 		return ReviewContext{}, err
 	}
 
-	threads, err := m.fetchReviewThreads(ctx, workspacePath, owner, name, pr.Number)
+	threads, codexThreads, err := m.fetchReviewThreads(ctx, workspacePath, owner, name, pr.Number)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+	requestedAt, approvedAt, err := m.fetchCodexReviewReactions(ctx, workspacePath, owner, name, pr.Number)
 	if err != nil {
 		return ReviewContext{}, err
 	}
@@ -185,7 +194,10 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 			URL:    pr.URL,
 			State:  pr.State,
 		},
-		Threads: threads,
+		Threads:                threads,
+		CodexReviewThreads:     codexThreads,
+		CodexReviewRequestedAt: requestedAt,
+		CodexReviewApprovedAt:  approvedAt,
 	}, nil
 }
 
@@ -364,7 +376,7 @@ func parseRemoteRepository(remoteURL string) (string, string, error) {
 	return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
 }
 
-func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.GitHubReviewThread, error) {
+func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.GitHubReviewThread, []domain.GitHubReviewThread, error) {
 	const query = `query ReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -386,6 +398,10 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
               createdAt
               author { login }
             }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
           }
         }
         pageInfo {
@@ -398,8 +414,9 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 }`
 
 	var (
-		cursor  string
-		threads []domain.GitHubReviewThread
+		cursor       string
+		threads      []domain.GitHubReviewThread
+		codexThreads []domain.GitHubReviewThread
 	)
 	for {
 		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
@@ -409,12 +426,12 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 			"cursor": cursor,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		nodes, ok := nestedSlice(resp, "data", "repository", "pullRequest", "reviewThreads", "nodes")
 		if !ok {
-			return nil, nil
+			return nil, nil, nil
 		}
 		for _, node := range nodes {
 			thread, ok := parseReviewThread(node)
@@ -422,6 +439,13 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 				continue
 			}
 			threads = append(threads, thread)
+			containsAuthor, err := m.reviewThreadContainsAuthor(ctx, workspacePath, node, codexReviewBotLogin)
+			if err != nil {
+				return nil, nil, err
+			}
+			if containsAuthor {
+				codexThreads = append(codexThreads, thread)
+			}
 		}
 		hasNextPage, _ := nestedBool(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "hasNextPage")
 		if !hasNextPage {
@@ -433,7 +457,137 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 		}
 		cursor = nextCursor
 	}
-	return threads, nil
+	return threads, codexThreads, nil
+}
+
+func (m *Manager) reviewThreadContainsAuthor(ctx context.Context, workspacePath string, node map[string]any, login string) (bool, error) {
+	if reviewThreadPageContainsAuthor(node, login) {
+		return true, nil
+	}
+	if !reviewThreadCommentsHasNextPage(node) {
+		return false, nil
+	}
+	threadID, _ := stringValue(node["id"])
+	if strings.TrimSpace(threadID) == "" {
+		return false, nil
+	}
+	return m.fetchReviewThreadCommentAuthor(ctx, workspacePath, threadID, login)
+}
+
+func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID, login string) (bool, error) {
+	const query = `query ReviewThreadComments($threadId: ID!, $cursor: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        nodes {
+          author { login }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`
+
+	cursor := ""
+	for {
+		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
+			"threadId": threadID,
+			"cursor":   cursor,
+		})
+		if err != nil {
+			return false, err
+		}
+		nodes, ok := nestedSlice(resp, "data", "node", "comments", "nodes")
+		if ok {
+			for _, node := range nodes {
+				author, _ := nestedString(node, "author", "login")
+				if strings.EqualFold(strings.TrimSpace(author), login) {
+					return true, nil
+				}
+			}
+		}
+		hasNextPage, _ := nestedBool(resp, "data", "node", "comments", "pageInfo", "hasNextPage")
+		if !hasNextPage {
+			return false, nil
+		}
+		nextCursor, ok := nestedString(resp, "data", "node", "comments", "pageInfo", "endCursor")
+		if !ok || strings.TrimSpace(nextCursor) == "" {
+			return false, nil
+		}
+		cursor = nextCursor
+	}
+}
+
+func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, owner, name string, prNumber int) (*time.Time, *time.Time, error) {
+	const query = `query PullRequestReactions($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reactions(first: 100, after: $cursor) {
+        nodes {
+          content
+          createdAt
+          user { login }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`
+
+	var (
+		cursor    string
+		requested *time.Time
+		approved  *time.Time
+	)
+	for {
+		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
+			"owner":  owner,
+			"name":   name,
+			"number": fmt.Sprintf("%d", prNumber),
+			"cursor": cursor,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		nodes, ok := nestedSlice(resp, "data", "repository", "pullRequest", "reactions", "nodes")
+		if !ok {
+			return requested, approved, nil
+		}
+		for _, node := range nodes {
+			login, _ := nestedString(node, "user", "login")
+			if !strings.EqualFold(strings.TrimSpace(login), codexReviewBotLogin) {
+				continue
+			}
+			content, _ := stringValue(node["content"])
+			createdAt, ok := parseTimestamp(node["createdAt"])
+			if !ok {
+				continue
+			}
+			switch strings.TrimSpace(content) {
+			case "EYES":
+				requested = latestTimePtr(requested, createdAt)
+			case "THUMBS_UP":
+				approved = latestTimePtr(approved, createdAt)
+			}
+		}
+		hasNextPage, _ := nestedBool(resp, "data", "repository", "pullRequest", "reactions", "pageInfo", "hasNextPage")
+		if !hasNextPage {
+			break
+		}
+		nextCursor, ok := nestedString(resp, "data", "repository", "pullRequest", "reactions", "pageInfo", "endCursor")
+		if !ok || strings.TrimSpace(nextCursor) == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+	return requested, approved, nil
 }
 
 func (m *Manager) runGraphQL(ctx context.Context, cwd string, timeout time.Duration, query string, vars map[string]string) (map[string]any, error) {
@@ -496,12 +650,29 @@ func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
 	if value, ok := intValue(node["startLine"]); ok {
 		thread.StartLine = &value
 	}
-	if rawCreated, ok := stringValue(comment["createdAt"]); ok {
-		if createdAt, err := time.Parse(time.RFC3339, rawCreated); err == nil {
-			thread.CreatedAt = &createdAt
-		}
+	if createdAt, ok := parseTimestamp(comment["createdAt"]); ok {
+		thread.CreatedAt = &createdAt
 	}
 	return thread, true
+}
+
+func reviewThreadPageContainsAuthor(node map[string]any, login string) bool {
+	comments, ok := nestedSlice(node, "comments", "nodes")
+	if !ok {
+		return false
+	}
+	for _, comment := range comments {
+		author, _ := nestedString(comment, "author", "login")
+		if strings.EqualFold(strings.TrimSpace(author), login) {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewThreadCommentsHasNextPage(node map[string]any) bool {
+	hasNextPage, _ := nestedBool(node, "comments", "pageInfo", "hasNextPage")
+	return hasNextPage
 }
 
 func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {
@@ -573,6 +744,26 @@ func intValue(value any) (int, bool) {
 func boolValue(value any) bool {
 	v, _ := value.(bool)
 	return v
+}
+
+func parseTimestamp(value any) (time.Time, bool) {
+	raw, ok := stringValue(value)
+	if !ok {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func latestTimePtr(current *time.Time, candidate time.Time) *time.Time {
+	if current == nil || candidate.After(*current) {
+		value := candidate
+		return &value
+	}
+	return current
 }
 
 func (m *Manager) run(ctx context.Context, cwd string, timeout time.Duration, name string, args ...string) (string, error) {

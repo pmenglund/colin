@@ -168,6 +168,24 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			State:     issue.State,
 			Message:   "Starting merge automation",
 		})
+		reviewContext, err := r.repo.ReviewContext(ctx, issue, ws.Path)
+		if err != nil {
+			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+		}
+		current, summary, blocked, err := r.blockMergeForCodexReview(ctx, issue, reviewContext)
+		if err != nil {
+			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+		}
+		if blocked {
+			return Result{
+				Issue:         current,
+				RunType:       runType,
+				WorkspacePath: ws.Path,
+				Status:        "succeeded",
+				Summary:       summary,
+				PR:            pullRequestRef(reviewContext.PullRequest),
+			}
+		}
 		result, err := r.repo.Merge(ctx, issue, ws.Path)
 		if err != nil {
 			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
@@ -420,6 +438,34 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	}
 }
 
+func (r *Runner) blockMergeForCodexReview(ctx context.Context, issue domain.Issue, reviewContext repoops.ReviewContext) (domain.Issue, string, bool, error) {
+	summary, blocked := buildMergeBlockedSummary(reviewContext)
+	if !blocked {
+		return issue, "", false, nil
+	}
+	if r.tracker == nil {
+		return issue, "", false, errors.New("missing tracker client")
+	}
+
+	targetState, ok := firstConfiguredState(r.cfg.Repo.PublishStates)
+	if !ok {
+		targetState = "Review"
+	}
+	if !strings.EqualFold(issue.State, targetState) {
+		if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
+			return issue, "", false, fmt.Errorf("update issue state to %s: %w", targetState, err)
+		}
+		issue.State = targetState
+		now := time.Now().UTC()
+		issue.UpdatedAt = &now
+	}
+	if pr := pullRequestRef(reviewContext.PullRequest); pr != nil {
+		issue.PullRequest = pr
+	}
+	issue.ReviewThreads = append([]domain.GitHubReviewThread(nil), reviewContext.CodexReviewThreads...)
+	return issue, summary, true, nil
+}
+
 func (r *Runner) moveActiveIssueToWorkingState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
 	if !isActive(r.cfg, issue.State) {
 		return issue, nil
@@ -635,6 +681,52 @@ func buildReviewBlockedSummary(summary string, pr *domain.PullRequestRef, handle
 		lines = append(lines, "", "Codex summary:", "", summary)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func buildMergeBlockedSummary(reviewContext repoops.ReviewContext) (string, bool) {
+	if strings.EqualFold(strings.TrimSpace(reviewContext.PullRequest.State), "MERGED") {
+		return "", false
+	}
+
+	pendingApproval := codexReviewApprovalPending(reviewContext)
+	threadCount := len(reviewContext.CodexReviewThreads)
+	if !pendingApproval && threadCount == 0 {
+		return "", false
+	}
+
+	lines := []string{"Returning issue to `Review` because Codex PR feedback still needs to be resolved."}
+	if reviewContext.PullRequest.Number > 0 {
+		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
+	}
+	if strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
+		lines = append(lines, fmt.Sprintf("- PR URL: %s", reviewContext.PullRequest.URL))
+	}
+	if pendingApproval {
+		lines = append(lines, "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
+	}
+	if threadCount > 0 {
+		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", threadCount))
+	}
+	lines = append(lines, "- Resolve the remaining Codex PR feedback, then move the issue back to `Merge`.")
+	return strings.Join(lines, "\n"), true
+}
+
+func codexReviewApprovalPending(reviewContext repoops.ReviewContext) bool {
+	if reviewContext.CodexReviewRequestedAt == nil {
+		return false
+	}
+	if reviewContext.CodexReviewApprovedAt == nil {
+		return true
+	}
+	return !reviewContext.CodexReviewApprovedAt.After(*reviewContext.CodexReviewRequestedAt)
+}
+
+func pullRequestRef(pr domain.PullRequestRef) *domain.PullRequestRef {
+	if pr.Number == 0 && strings.TrimSpace(pr.URL) == "" && strings.TrimSpace(pr.State) == "" {
+		return nil
+	}
+	value := pr
+	return &value
 }
 
 func firstStringPtr(value, fallback *string) *string {
