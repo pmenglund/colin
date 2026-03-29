@@ -43,6 +43,7 @@ go run . /path/to/WORKFLOW.md
 - During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
+- Colin can also move an underspecified issue to `Review` without opening a branch or PR when the coding run concludes the request needs clarification; in that case it leaves a `[colin]` comment explaining what needs to be improved in the spec.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
 
 ## Linear State Handling
@@ -59,6 +60,7 @@ These are configured in `WORKFLOW.md` under `tracker.active_states` and currentl
 When an issue is in one of these states, Colin:
 
 - dispatches Codex work for the issue
+- moves `Todo` issues into `In Progress` when Colin actually starts working them
 - keeps retrying or continuing while the issue remains active
 - moves the issue to the first configured publish state when a coding run succeeds and the issue is still active
 - stops the coding run when the issue leaves the active state set
@@ -80,9 +82,13 @@ This is configured in `WORKFLOW.md` under `repo.publish_states` and currently is
 When an issue is moved to `Review`, Colin does not run another coding turn. Instead it:
 
 - reuses the issue workspace
-- commits any local changes if the workspace is dirty
-- pushes the issue branch to the configured remote
-- creates or reuses a GitHub pull request targeting the configured base branch
+- usually commits any local changes if the workspace is dirty
+- usually pushes the issue branch to the configured remote
+- usually creates or reuses a GitHub pull request targeting the configured base branch
+
+If the coding run determines the issue is still too underspecified to implement safely, Colin can also move the issue to `Review` without publishing a branch or PR. In that case it leaves a `[colin]` comment asking for the spec to be improved before implementation.
+
+If Colin reaches the configured maximum turn count before it can finish a coding run, it still moves the issue to `Review`, but it includes a `[colin]` comment explaining that the run hit the turn cap and is being handed off for human review.
 
 Human action is expected in `Review`:
 

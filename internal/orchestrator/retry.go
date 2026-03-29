@@ -43,9 +43,20 @@ func (o *Orchestrator) reconcileRunning(ctx context.Context) {
 			o.requestStop(issueID, "terminal", true)
 			continue
 		}
-		if !o.isActive(issue.State) {
-			o.logger.Info("stopping non-active issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", issue.State)
-			o.requestStop(issueID, "non_active", false)
+		if !o.isDispatchable(issue.State) {
+			o.logger.Info("stopping non-dispatchable issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", issue.State)
+			o.requestStop(issueID, "non_dispatchable", false)
+			continue
+		}
+		if entry.runType != "" && entry.runType != runTypeForState(o, issue.State) {
+			o.logger.Info(
+				"stopping issue because its state no longer matches the running automation",
+				"issue_id", issue.ID,
+				"issue_identifier", issue.Identifier,
+				"state", issue.State,
+				"run_type", entry.runType,
+			)
+			o.requestStop(issueID, "state_mismatch", false)
 		}
 	}
 }
@@ -105,7 +116,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		delete(o.claimed, event.issueID)
 		o.logger.Info("worker stopped for terminal issue", "issue_id", event.issueID, "issue_identifier", entry.identifier)
 		return
-	case "non_active", "shutdown":
+	case "non_dispatchable", "state_mismatch", "shutdown":
 		delete(o.claimed, event.issueID)
 		o.logger.Info("worker stopped", "issue_id", event.issueID, "issue_identifier", entry.identifier, "reason", entry.stopReason)
 		return
@@ -133,6 +144,17 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	if event.result.Status == "succeeded" {
 		if event.result.RunType == codex.RunTypeCoding && strings.TrimSpace(event.result.Summary) != "" && !o.isActive(event.result.Issue.State) {
 			o.postReply(ctx, entry, event.result.Summary)
+		}
+		if event.result.RunType == codex.RunTypeCoding && event.result.Issue.ReviewPublishDirective == domain.ReviewPublishDirectiveSkip && o.isPublishState(event.result.Issue.State) {
+			o.completed[event.issueID] = event.result.Issue.State
+			delete(o.claimed, event.issueID)
+			o.logger.Info(
+				"coding run completed with review handoff that skips publish automation",
+				"issue_id", event.issueID,
+				"issue_identifier", entry.identifier,
+				"current_state", event.result.Issue.State,
+			)
+			return
 		}
 		if event.result.RunType == codex.RunTypeReviewPublish || event.result.RunType == codex.RunTypeMerge {
 			o.completed[event.issueID] = event.result.Issue.State
@@ -274,6 +296,10 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 	}
 	prepared, ready := o.prepareReviewIssue(ctx, *issue, time.Now().UTC())
 	if !ready {
+		delete(o.claimed, issueID)
+		return
+	}
+	if !o.shouldDispatch(prepared) {
 		delete(o.claimed, issueID)
 		return
 	}

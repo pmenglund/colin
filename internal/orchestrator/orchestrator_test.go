@@ -16,6 +16,7 @@ type trackerStub struct {
 	candidateCalls     int
 	issuesByState      []domain.Issue
 	issuesByStateCalls int
+	issuesByID         []domain.Issue
 	rateLimits         map[string]any
 }
 
@@ -30,7 +31,7 @@ func (s *trackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.I
 }
 
 func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
-	return nil, nil
+	return s.issuesByID, nil
 }
 
 func (s *trackerStub) UpdateIssueState(context.Context, string, string) error {
@@ -71,6 +72,31 @@ func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
 		Title:      "Test",
 		State:      "Todo",
 		BlockedBy:  []domain.BlockerRef{{State: &state}},
+	}) {
+		t.Fatal("shouldDispatch() = true, want false")
+	}
+}
+
+func TestShouldDispatchRejectsReviewThatSkipsPublish(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+		}},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if orch.shouldDispatch(domain.Issue{
+		ID:                     "1",
+		Identifier:             "ABC-1",
+		Title:                  "Needs more detail",
+		State:                  "Review",
+		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
 	}
@@ -178,6 +204,44 @@ func TestHandleWorkerExitCodingRunToReviewDoesNotMarkReviewCompleted(t *testing.
 	}
 }
 
+func TestHandleWorkerExitCodingRunToReviewSkipMarksCompletedWithoutRetry(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{
+		ID:                     "1",
+		Identifier:             "ABC-1",
+		State:                  "Review",
+		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Repo:  domain.RepoConfig{PublishStates: []string{"Review"}},
+			Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute},
+		}},
+		running:   map[string]*runningEntry{"1": {issue: issue, identifier: issue.Identifier, startedAt: time.Now().Add(-2 * time.Second), comment: &commentThreadState{RunType: codex.RunTypeCoding}}},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result:  codex.Result{Issue: issue, RunType: codex.RunTypeCoding, Status: "succeeded"},
+	})
+
+	if _, ok := orch.retrying["1"]; ok {
+		t.Fatal("unexpected retry entry for review state that skips publish")
+	}
+	if got := orch.completed["1"]; got != "Review" {
+		t.Fatalf("completed state = %q, want %q", got, "Review")
+	}
+	if _, ok := orch.claimed["1"]; ok {
+		t.Fatal("expected claim to be released after skip-publish review handoff")
+	}
+}
+
 func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -210,6 +274,45 @@ func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T)
 	}
 	if tracker.candidateCalls != 0 {
 		t.Fatalf("FetchCandidateIssues() calls = %d, want 0", tracker.candidateCalls)
+	}
+}
+
+func TestReconcileRunningKeepsPublishAutomationRunningInReview(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Review", State: "Review"}
+	tracker := &trackerStub{
+		issuesByID: []domain.Issue{issue},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{TerminalStates: []string{"Done"}},
+				Repo:    domain.RepoConfig{PublishStates: []string{"Review"}},
+			},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      issue,
+				identifier: issue.Identifier,
+				runType:    codex.RunTypeReviewPublish,
+				startedAt:  time.Now().Add(-time.Second),
+				cancel:     func() {},
+			},
+		},
+		claimed: map[string]struct{}{"1": {}},
+	}
+
+	orch.reconcileRunning(context.Background())
+
+	entry := orch.running["1"]
+	if entry == nil {
+		t.Fatal("running entry removed unexpectedly")
+	}
+	if entry.stopReason != "" {
+		t.Fatalf("stopReason = %q, want empty", entry.stopReason)
 	}
 }
 

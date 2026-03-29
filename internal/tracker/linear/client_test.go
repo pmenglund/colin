@@ -545,3 +545,70 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 		t.Fatalf("second review feedback = %q, want %q", got[1].Body, "Mark the PR thread resolved.")
 	}
 }
+
+func TestFetchCandidateIssuesExtractsLatestReviewPublishDirective(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 29, 18, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-94",
+							"title":      "Needs more detail",
+							"state":      map[string]any{"name": "Review"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":        "comment-1",
+										"body":      "[colin] Ready for review.\n\n<!-- colin:review_publish=publish -->",
+										"createdAt": base.Add(1 * time.Minute).Format(time.RFC3339),
+										"children":  map[string]any{"nodes": []map[string]any{}},
+									},
+									{
+										"id":        "comment-2",
+										"body":      "[colin] The spec should be improved before implementation.\n\n<!-- colin:review_publish=skip -->",
+										"createdAt": base.Add(2 * time.Minute).Format(time.RFC3339),
+										"children":  map[string]any{"nodes": []map[string]any{}},
+									},
+								},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"Review"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if issues[0].ReviewPublishDirective != "skip" {
+		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ReviewPublishDirective, "skip")
+	}
+}

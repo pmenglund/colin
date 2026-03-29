@@ -132,6 +132,109 @@ func TestApplyPostMergeStateSkipsWhenNoAutomationTargetExists(t *testing.T) {
 	}
 }
 
+func TestParseReviewDirectiveSummaryNeedsSpec(t *testing.T) {
+	t.Parallel()
+
+	directive, summary := parseReviewDirectiveSummary(outcomeNeedsSpec + "\n\nThe spec should be improved before implementation.")
+	if directive != domain.ReviewPublishDirectiveSkip {
+		t.Fatalf("directive = %q, want %q", directive, domain.ReviewPublishDirectiveSkip)
+	}
+	if summary != "The spec should be improved before implementation." {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
+func TestParseReviewDirectiveSummaryDefaultsToPublish(t *testing.T) {
+	t.Parallel()
+
+	directive, summary := parseReviewDirectiveSummary("Implemented the requested change.")
+	if directive != domain.ReviewPublishDirectivePublish {
+		t.Fatalf("directive = %q, want %q", directive, domain.ReviewPublishDirectivePublish)
+	}
+	if summary != "Implemented the requested change." {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
+func TestPersistReviewDirectiveSummary(t *testing.T) {
+	t.Parallel()
+
+	got := persistReviewDirectiveSummary("Ready for review.", domain.ReviewPublishDirectiveSkip)
+	if want := "Ready for review.\n\n<!-- colin:review_publish=skip -->"; got != want {
+		t.Fatalf("persistReviewDirectiveSummary() = %q, want %q", got, want)
+	}
+}
+
+func TestMoveSuccessfulActiveIssueToPublishStateUsesSkipDirective(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo"}},
+			Repo:    domain.RepoConfig{PublishStates: []string{"Review"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, err := runner.moveSuccessfulCodingRunToPublishState(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-94",
+		State:      "Todo",
+	}, domain.ReviewPublishDirectiveSkip)
+	if err != nil {
+		t.Fatalf("moveSuccessfulCodingRunToPublishState() error = %v", err)
+	}
+	if issue.State != "Review" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Review")
+	}
+	if issue.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
+		t.Fatalf("issue.ReviewPublishDirective = %q, want %q", issue.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
+	}
+}
+
+func TestRunnerMovesTodoIssueIntoInProgressBeforeCoding(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, err := runner.moveActiveIssueToWorkingState(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-94",
+		State:      "Todo",
+	})
+	if err != nil {
+		t.Fatalf("moveActiveIssueToWorkingState() error = %v", err)
+	}
+	if issue.State != "In Progress" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "In Progress")
+	}
+	if len(tracker.updatedStates) != 1 {
+		t.Fatalf("updatedStates length = %d, want 1", len(tracker.updatedStates))
+	}
+	if tracker.updatedStates[0] != "In Progress" {
+		t.Fatalf("updatedStates[0] = %q, want %q", tracker.updatedStates[0], "In Progress")
+	}
+}
+
+func TestAppendMaxTurnsSummary(t *testing.T) {
+	t.Parallel()
+
+	got := appendMaxTurnsSummary("Implemented the change.", "In Progress", 6)
+	want := "Implemented the change.\n\nColin reached the maximum of `6` turns while the issue remained in `In Progress`, so it is handing off for human review."
+	if got != want {
+		t.Fatalf("appendMaxTurnsSummary() = %q, want %q", got, want)
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return
@@ -147,6 +250,7 @@ type stubTracker struct {
 	refreshedIssue      domain.Issue
 	updatedIssueID      string
 	updatedState        string
+	updatedStates       []string
 	resolvedMergeState  string
 	resolveMergeStateOK bool
 }
@@ -166,6 +270,7 @@ func (s *stubTracker) FetchIssueStatesByIDs(context.Context, []string) ([]domain
 func (s *stubTracker) UpdateIssueState(_ context.Context, issueID string, stateName string) error {
 	s.updatedIssueID = issueID
 	s.updatedState = stateName
+	s.updatedStates = append(s.updatedStates, stateName)
 	return nil
 }
 

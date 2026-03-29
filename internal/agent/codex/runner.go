@@ -26,6 +26,11 @@ type Runner struct {
 	logger     *slog.Logger
 }
 
+const (
+	outcomeReadyForReview = "COLIN_OUTCOME: READY_FOR_REVIEW"
+	outcomeNeedsSpec      = "COLIN_OUTCOME: NEEDS_SPEC"
+)
+
 // NewRunner constructs a Runner bound to the current workflow, tracker, and workspace manager.
 func NewRunner(cfg domain.ServiceConfig, def domain.WorkflowDefinition, trackerClient tracker.Client, manager *workspace.Manager, logger *slog.Logger) *Runner {
 	return &Runner{
@@ -88,11 +93,16 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 	}()
 
+	current, err := r.moveActiveIssueToWorkingState(ctx, issue)
+	if err != nil {
+		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+	}
+
 	client := &appServerClient{
 		cfg:       r.cfg,
 		logger:    r.logger,
 		onEvent:   emit,
-		issue:     issue,
+		issue:     current,
 		workspace: ws.Path,
 		runType:   runType,
 	}
@@ -207,7 +217,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	)
 	defer client.stop()
 
-	current := issue
+	maxTurnsReached := false
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
 		if err != nil {
@@ -312,9 +322,19 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			)
 			break
 		}
+		if strings.TrimSpace(client.finalSummary()) != "" {
+			r.logger.Info(
+				"runner turn produced a final summary; finishing coding run",
+				"issue_id", current.ID,
+				"issue_identifier", current.Identifier,
+				"current_state", current.State,
+				"turn", turn,
+			)
+			break
+		}
 		if turn < r.cfg.Agent.MaxTurns {
 			r.logger.Info(
-				"issue still active after turn; continuing",
+				"issue still active after turn and no final summary was captured; continuing",
 				"issue_id", current.ID,
 				"issue_identifier", current.Identifier,
 				"current_state", current.State,
@@ -337,6 +357,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			"current_state", current.State,
 			"max_turns", r.cfg.Agent.MaxTurns,
 		)
+		maxTurnsReached = true
 	}
 
 	summary := client.finalSummary()
@@ -360,10 +381,15 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 	}
 
-	current, err = r.moveSuccessfulCodingRunToPublishState(ctx, current)
+	directive, summary := parseReviewDirectiveSummary(summary)
+	if maxTurnsReached {
+		summary = appendMaxTurnsSummary(summary, current.State, r.cfg.Agent.MaxTurns)
+	}
+	current, err = r.moveSuccessfulCodingRunToPublishState(ctx, current, directive)
 	if err != nil {
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
+	summary = persistReviewDirectiveSummary(summary, current.ReviewPublishDirective)
 
 	emit(Event{
 		Event:     EventRunSucceeded,
@@ -384,7 +410,32 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	}
 }
 
-func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
+func (r *Runner) moveActiveIssueToWorkingState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
+	if !isActive(r.cfg, issue.State) {
+		return issue, nil
+	}
+
+	targetState, ok := nextConfiguredState(r.cfg.Tracker.ActiveStates, issue.State)
+	if !ok {
+		return issue, nil
+	}
+	if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
+		return issue, fmt.Errorf("update issue state to %s: %w", targetState, err)
+	}
+	r.logger.Info(
+		"issue moved to working state before coding run",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"previous_state", issue.State,
+		"current_state", targetState,
+	)
+	issue.State = targetState
+	now := time.Now().UTC()
+	issue.UpdatedAt = &now
+	return issue, nil
+}
+
+func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issue domain.Issue, directive string) (domain.Issue, error) {
 	if !isActive(r.cfg, issue.State) {
 		return issue, nil
 	}
@@ -392,6 +443,9 @@ func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issu
 	targetState, ok := firstConfiguredState(r.cfg.Repo.PublishStates)
 	if !ok || config.ContainsState([]string{issue.State}, targetState) {
 		return issue, nil
+	}
+	if directive == "" {
+		directive = domain.ReviewPublishDirectivePublish
 	}
 
 	if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
@@ -405,6 +459,7 @@ func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issu
 		"current_state", targetState,
 	)
 	issue.State = targetState
+	issue.ReviewPublishDirective = directive
 	now := time.Now().UTC()
 	issue.UpdatedAt = &now
 	return issue, nil
@@ -474,6 +529,9 @@ func mergeIssueContext(previous, refreshed domain.Issue) domain.Issue {
 	}
 	if len(refreshed.ReviewThreads) == 0 {
 		refreshed.ReviewThreads = append([]domain.GitHubReviewThread(nil), previous.ReviewThreads...)
+	}
+	if strings.TrimSpace(refreshed.ReviewPublishDirective) == "" {
+		refreshed.ReviewPublishDirective = previous.ReviewPublishDirective
 	}
 	if refreshed.PullRequest == nil {
 		refreshed.PullRequest = previous.PullRequest
@@ -620,4 +678,64 @@ func firstConfiguredState(states []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func nextConfiguredState(states []string, current string) (string, bool) {
+	currentKey := config.StateKey(current)
+	for i, state := range states {
+		if config.StateKey(state) != currentKey {
+			continue
+		}
+		for _, candidate := range states[i+1:] {
+			candidate = strings.TrimSpace(candidate)
+			if candidate != "" {
+				return candidate, true
+			}
+		}
+		return "", false
+	}
+	return "", false
+}
+
+func parseReviewDirectiveSummary(summary string) (string, string) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return domain.ReviewPublishDirectivePublish, ""
+	}
+
+	lines := strings.Split(summary, "\n")
+	first := strings.TrimSpace(lines[0])
+	switch first {
+	case outcomeNeedsSpec:
+		return domain.ReviewPublishDirectiveSkip, strings.TrimSpace(strings.Join(lines[1:], "\n"))
+	case outcomeReadyForReview:
+		return domain.ReviewPublishDirectivePublish, strings.TrimSpace(strings.Join(lines[1:], "\n"))
+	default:
+		return domain.ReviewPublishDirectivePublish, summary
+	}
+}
+
+func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
+	note := fmt.Sprintf("Colin reached the maximum of `%d` turns while the issue remained in `%s`, so it is handing off for human review.", maxTurns, state)
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return note
+	}
+	return summary + "\n\n" + note
+}
+
+func persistReviewDirectiveSummary(summary string, directive string) string {
+	directive = strings.TrimSpace(directive)
+	if directive == "" {
+		return strings.TrimSpace(summary)
+	}
+	marker := fmt.Sprintf("<!-- colin:review_publish=%s -->", directive)
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return marker
+	}
+	if strings.Contains(summary, marker) {
+		return summary
+	}
+	return summary + "\n\n" + marker
 }

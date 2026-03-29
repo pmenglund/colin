@@ -21,6 +21,23 @@ tasks:
     cmds:
       - go test ./...
 
+  test-e2e-real:
+    desc: Run the real Linear and GitHub end-to-end Go test
+    cmds:
+      - go test -v -tags real_e2e ./internal/service
+
+  test-e2e-ui:
+    desc: Run the Playwright end-to-end tests
+    dir: e2e/playwright
+    cmds:
+      - npm test
+
+  test-e2e:
+    desc: Run the full end-to-end test suite
+    deps:
+      - test-e2e-real
+      - test-e2e-ui
+
   build:
     desc: Build the service
     cmds:

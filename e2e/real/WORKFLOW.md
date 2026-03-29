@@ -1,0 +1,92 @@
+---
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: 1dc7fb4f7e89
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Merged
+    - Canceled
+    - Duplicate
+
+polling:
+  interval_ms: 1000
+
+workspace:
+  root: $COLIN_REAL_E2E_WORKSPACE_ROOT
+  repo_url: git@github.com:pmenglund/colin-test.git
+  base_ref: main
+
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+  remote_name: origin
+  merge_method: squash
+
+agent:
+  max_concurrent_agents: 1
+  max_turns: 6
+  max_retry_backoff_ms: 30000
+
+codex:
+  command: codex app-server
+  approval_policy: never
+  thread_sandbox: danger-full-access
+  turn_sandbox_policy:
+    type: dangerFullAccess
+  turn_timeout_ms: 1800000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
+server:
+  port: 0
+---
+
+You are working on Linear issue {{.issue.identifier}}: {{.issue.title}}.
+
+Repository rules:
+- Follow `AGENTS.md`.
+- Work only inside this repository workspace.
+- Prefer the smallest correct change that satisfies this specific run.
+- Run relevant tests before you finish when you make code changes.
+
+Issue context:
+- State: {{.issue.state}}
+{{- if .issue.url }}
+- URL: {{.issue.url}}
+{{- end }}
+{{- if .issue.labels }}
+- Labels:
+{{- range .issue.labels }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+
+{{- if .issue.description }}
+Issue description:
+
+{{.issue.description}}
+{{- end }}
+
+Output contract:
+- Your final response must begin with exactly one of these lines:
+  - `COLIN_OUTCOME: READY_FOR_REVIEW`
+  - `COLIN_OUTCOME: NEEDS_SPEC`
+- If the issue is underspecified or unsafe to implement, use `COLIN_OUTCOME: NEEDS_SPEC`.
+- If you use `COLIN_OUTCOME: NEEDS_SPEC`:
+  - do not change repository files
+  - do not rely on "this already exists" as the main reason to stop
+  - explain what information is missing
+  - include the exact sentence `The spec should be improved before implementation.`
+- If you use `COLIN_OUTCOME: READY_FOR_REVIEW`:
+  - implement the requested change for this run
+  - summarize what changed, what you tested, and any remaining risk
+
+Definition of done:
+- For implementable work, leave the repo ready for `Review`.
+- For underspecified work, leave a precise clarification summary so Colin can move the issue to `Review` without publishing a PR.

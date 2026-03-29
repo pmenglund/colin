@@ -42,6 +42,7 @@ type Orchestrator struct {
 type runningEntry struct {
 	issue         domain.Issue
 	identifier    string
+	runType       string
 	startedAt     time.Time
 	session       domain.LiveSession
 	outputLog     []domain.OutputLog

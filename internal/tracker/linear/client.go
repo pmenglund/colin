@@ -29,6 +29,8 @@ var (
 	ErrUnknownState     = errors.New("linear_unknown_state")
 )
 
+var reviewPublishDirectivePattern = regexp.MustCompile(`<!--\s*colin:review_publish=(publish|skip)\s*-->`)
+
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
 	endpoint string
@@ -503,6 +505,7 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 			}
 		}
 	}
+	issue.ReviewPublishDirective = extractReviewPublishDirective(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -707,6 +710,27 @@ func parseLinearComment(node map[string]any) (linearComment, bool) {
 
 func isColinComment(body string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(body)), "[colin]")
+}
+
+func extractReviewPublishDirective(node map[string]any) string {
+	comments := flattenComments(node)
+	for i := len(comments) - 1; i >= 0; i-- {
+		body := strings.TrimSpace(comments[i].Body)
+		if body == "" || !isColinComment(body) {
+			continue
+		}
+		matches := reviewPublishDirectivePattern.FindStringSubmatch(body)
+		if len(matches) != 2 {
+			continue
+		}
+		switch strings.TrimSpace(matches[1]) {
+		case domain.ReviewPublishDirectivePublish:
+			return domain.ReviewPublishDirectivePublish
+		case domain.ReviewPublishDirectiveSkip:
+			return domain.ReviewPublishDirectiveSkip
+		}
+	}
+	return ""
 }
 
 func derefStringValue(value *string) string {

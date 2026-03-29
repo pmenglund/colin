@@ -483,6 +483,7 @@ type fakeLinearServer struct {
 	mu               sync.Mutex
 	markerPath       string
 	authHeader       string
+	current          string
 	candidateFetches int
 	stateFetches     int
 	comments         []fakeLinearComment
@@ -490,7 +491,7 @@ type fakeLinearServer struct {
 }
 
 func newFakeLinearServer(markerPath string) *fakeLinearServer {
-	return &fakeLinearServer{markerPath: markerPath, nextCommentID: 1}
+	return &fakeLinearServer{markerPath: markerPath, current: "Todo", nextCommentID: 1}
 }
 
 func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +519,44 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"success": true,
 					"comment": map[string]any{
 						"id": commentID,
+					},
+				},
+			},
+		})
+	case strings.Contains(request.Query, "IssueTeamStates"):
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issue": map[string]any{
+					"team": map[string]any{
+						"states": map[string]any{
+							"nodes": []map[string]any{
+								{"id": "state-todo", "name": "Todo"},
+								{"id": "state-in-progress", "name": "In Progress"},
+								{"id": "state-review", "name": "Review"},
+								{"id": "state-done", "name": "Done"},
+							},
+						},
+					},
+				},
+			},
+		})
+	case strings.Contains(request.Query, "issueUpdate"):
+		inputStateID, _ := request.Variables["stateId"].(string)
+		nextState := fakeLinearStateName(inputStateID)
+		if nextState == "" {
+			http.Error(w, "unknown state id", http.StatusBadRequest)
+			return
+		}
+		s.setCurrentState(nextState)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issueUpdate": map[string]any{
+					"success": true,
+					"issue": map[string]any{
+						"id": "issue-1",
+						"state": map[string]any{
+							"name": nextState,
+						},
 					},
 				},
 			},
@@ -560,10 +599,19 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *fakeLinearServer) currentState() string {
+	s.mu.Lock()
+	current := s.current
+	s.mu.Unlock()
 	if _, err := os.Stat(s.markerPath); err == nil {
 		return "Done"
 	}
-	return "Todo"
+	return current
+}
+
+func (s *fakeLinearServer) setCurrentState(state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.current = state
 }
 
 func (s *fakeLinearServer) issueNode(state string) map[string]any {
@@ -681,4 +729,19 @@ func stateAllowed(requested []any, want string) bool {
 		}
 	}
 	return false
+}
+
+func fakeLinearStateName(stateID string) string {
+	switch stateID {
+	case "state-todo":
+		return "Todo"
+	case "state-in-progress":
+		return "In Progress"
+	case "state-review":
+		return "Review"
+	case "state-done":
+		return "Done"
+	default:
+		return ""
+	}
 }

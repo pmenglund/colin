@@ -33,6 +33,9 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	if !o.hasStateSlots(issue.State) {
 		return false
 	}
+	if o.isPublishState(issue.State) && issue.ReviewPublishDirective == domain.ReviewPublishDirectiveSkip {
+		return false
+	}
 	if strings.EqualFold(strings.TrimSpace(issue.State), "todo") {
 		for _, blocker := range issue.BlockedBy {
 			if blocker.State == nil {
@@ -67,15 +70,17 @@ func (o *Orchestrator) hasStateSlots(state string) bool {
 
 func (o *Orchestrator) dispatch(parent context.Context, issue domain.Issue, attempt *int, comment *commentThreadState) {
 	ctx, cancel := context.WithCancel(parent)
+	runType := runTypeForState(o, issue.State)
 	if comment != nil && comment.RunType != runTypeForState(o, issue.State) {
 		comment = nil
 	}
 	if comment == nil {
-		comment = &commentThreadState{RunType: runTypeForState(o, issue.State)}
+		comment = &commentThreadState{RunType: runType}
 	}
 	entry := &runningEntry{
 		issue:        issue,
 		identifier:   issue.Identifier,
+		runType:      runType,
 		startedAt:    time.Now().UTC(),
 		comment:      comment,
 		retryAttempt: attemptValue(attempt),
