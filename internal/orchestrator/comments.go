@@ -272,8 +272,8 @@ func (o *Orchestrator) replyBodyForEvent(entry *runningEntry, event codex.Event)
 	}
 }
 
-func (o *Orchestrator) postRetryScheduledReply(ctx context.Context, comment *commentThreadState, issueID string, identifier string, attempt int, delay time.Duration, errText string) {
-	if comment == nil || comment.RootCommentID == "" {
+func (o *Orchestrator) postRetryScheduledReply(ctx context.Context, comment *commentThreadState, issueID string, identifier string, attempt int, delay time.Duration, errText string, notifyLinear bool) {
+	if !notifyLinear || comment == nil || comment.RootCommentID == "" {
 		return
 	}
 	entry := &runningEntry{
@@ -289,7 +289,7 @@ func (o *Orchestrator) postRetryScheduledReply(ctx context.Context, comment *com
 }
 
 func (o *Orchestrator) postRetryFiredReply(ctx context.Context, issueID string, state *retryState) {
-	if state == nil || state.comment == nil || state.comment.RootCommentID == "" {
+	if state == nil || !state.notifyLinear || state.comment == nil || state.comment.RootCommentID == "" {
 		return
 	}
 	entry := &runningEntry{

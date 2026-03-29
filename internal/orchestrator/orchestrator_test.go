@@ -18,6 +18,8 @@ type trackerStub struct {
 	issuesByStateCalls int
 	issuesByID         []domain.Issue
 	rateLimits         map[string]any
+	issueComments      []string
+	commentReplies     []string
 }
 
 func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
@@ -42,12 +44,14 @@ func (s *trackerStub) ResolveGitAutomationState(context.Context, string, string,
 	return "", false, nil
 }
 
-func (s *trackerStub) CreateIssueComment(context.Context, string, string) (string, error) {
-	return "", nil
+func (s *trackerStub) CreateIssueComment(_ context.Context, _ string, body string) (string, error) {
+	s.issueComments = append(s.issueComments, body)
+	return "root", nil
 }
 
-func (s *trackerStub) CreateCommentReply(context.Context, string, string, string) (string, error) {
-	return "", nil
+func (s *trackerStub) CreateCommentReply(_ context.Context, _ string, _ string, body string) (string, error) {
+	s.commentReplies = append(s.commentReplies, body)
+	return "reply", nil
 }
 
 func (s *trackerStub) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
@@ -207,6 +211,49 @@ func TestHandleWorkerExitCodingRunToReviewDoesNotMarkReviewCompleted(t *testing.
 	}
 }
 
+func TestHandleWorkerExitCodingRunToReviewHidesVerificationRetryComments(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", State: "Review"}
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}},
+				Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute},
+			},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{"1": {
+			issue:      issue,
+			identifier: issue.Identifier,
+			startedAt:  time.Now().Add(-2 * time.Second),
+			comment:    &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"},
+		}},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result:  codex.Result{Issue: issue, RunType: codex.RunTypeCoding, Status: "succeeded"},
+	})
+
+	retry := orch.retrying["1"]
+	if retry == nil {
+		t.Fatal("expected retry entry so review automation can dispatch next")
+	}
+	if retry.notifyLinear {
+		t.Fatal("verification retry should be hidden from Linear comments")
+	}
+	if got := len(tracker.commentReplies); got != 0 {
+		t.Fatalf("commentReplies length = %d, want 0", got)
+	}
+}
+
 func TestHandleWorkerExitCodingRunToRefineMarksCompletedWithoutRetry(t *testing.T) {
 	t.Parallel()
 
@@ -241,6 +288,107 @@ func TestHandleWorkerExitCodingRunToRefineMarksCompletedWithoutRetry(t *testing.
 	}
 	if _, ok := orch.claimed["1"]; ok {
 		t.Fatal("expected claim to be released after refine handoff")
+	}
+}
+
+func TestVisibleRetryPostsScheduledAndFiredComments(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Review", State: "Review"}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}},
+				Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute, MaxConcurrentAgents: 1},
+			},
+			Tracker: tracker,
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	orch.scheduleRetry("1", issue.Identifier, 1, "worker stalled", time.Second, &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"}, true)
+
+	retry := orch.retrying["1"]
+	if retry == nil {
+		t.Fatal("expected retry entry")
+	}
+	retry.timer.Stop()
+	if !retry.notifyLinear {
+		t.Fatal("visible retry should notify Linear")
+	}
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length after schedule = %d, want 1", got)
+	}
+
+	orch.handleRetry(context.Background(), "1")
+
+	if got := len(tracker.commentReplies); got != 2 {
+		t.Fatalf("commentReplies length after fire = %d, want 2", got)
+	}
+	if tracker.commentReplies[0] != "[colin] Colin scheduled retry attempt `1` in `1s`.\n\n- Reason: worker stalled" {
+		t.Fatalf("scheduled retry comment = %q", tracker.commentReplies[0])
+	}
+	if tracker.commentReplies[1] != "[colin] Colin is starting retry attempt `1`." {
+		t.Fatalf("fired retry comment = %q", tracker.commentReplies[1])
+	}
+}
+
+func TestHiddenRetryRemainsHiddenWhenDeferredByLinearBudget(t *testing.T) {
+	t.Parallel()
+
+	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
+	tracker := &trackerStub{
+		rateLimits: map[string]any{
+			"linear_requests": map[string]any{
+				"nextAllowedAt": nextAllowedAt,
+			},
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute},
+			},
+			Tracker: tracker,
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	orch.retrying["1"] = &retryState{
+		entry: domain.RetryEntry{
+			IssueID:    "1",
+			Identifier: "ABC-1",
+			Attempt:    1,
+			DueAt:      time.Now().UTC(),
+		},
+		timer:        time.NewTimer(time.Hour),
+		comment:      &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"},
+		notifyLinear: false,
+	}
+	defer orch.retrying["1"].timer.Stop()
+
+	orch.handleRetry(context.Background(), "1")
+
+	retry := orch.retrying["1"]
+	if retry == nil {
+		t.Fatal("expected retry entry to be rescheduled")
+	}
+	retry.timer.Stop()
+	if retry.notifyLinear {
+		t.Fatal("hidden retry should remain hidden after Linear budget deferral")
+	}
+	if got := len(tracker.commentReplies); got != 0 {
+		t.Fatalf("commentReplies length = %d, want 0", got)
 	}
 }
 

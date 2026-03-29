@@ -121,7 +121,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		o.logger.Info("worker stopped", "issue_id", event.issueID, "issue_identifier", entry.identifier, "reason", entry.stopReason)
 		return
 	case "stalled":
-		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "worker stalled", 10*time.Second, entry.comment)
+		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "worker stalled", 10*time.Second, entry.comment, true)
 		return
 	}
 
@@ -138,7 +138,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 			"threads_handled", event.result.ThreadsHandled,
 			"threads_remaining", event.result.ThreadsRemaining,
 		)
-		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "waiting for GitHub review follow-up to complete", reviewSyncSlowPollInterval, entry.comment)
+		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "waiting for GitHub review follow-up to complete", reviewSyncSlowPollInterval, entry.comment, true)
 		return
 	}
 
@@ -190,7 +190,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 				"current_state", event.result.Issue.State,
 			)
 		}
-		o.scheduleRetry(event.issueID, entry.identifier, 1, "", time.Second, entry.comment)
+		o.scheduleRetry(event.issueID, entry.identifier, 1, "", time.Second, entry.comment, false)
 		return
 	}
 	o.logger.Warn(
@@ -217,10 +217,11 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		errorString(event.result.Err),
 		backoff(o.runtime.Config.Agent.MaxRetryBackoff, nextAttempt(entry.retryAttempt)),
 		entry.comment,
+		true,
 	)
 }
 
-func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration, comment *commentThreadState) {
+func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration, comment *commentThreadState, notifyLinear bool) {
 	if current, ok := o.retrying[issueID]; ok {
 		current.timer.Stop()
 	}
@@ -233,7 +234,8 @@ func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, er
 			DueAt:      dueAt,
 			Error:      errText,
 		},
-		comment: comment,
+		comment:      comment,
+		notifyLinear: notifyLinear,
 	}
 	state.timer = time.AfterFunc(delay, func() {
 		o.eventCh <- retryFiredEvent{issueID: issueID}
@@ -248,7 +250,7 @@ func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, er
 		"delay", delay.String(),
 		"error", errText,
 	)
-	o.postRetryScheduledReply(context.Background(), comment, issueID, identifier, attempt, delay, errText)
+	o.postRetryScheduledReply(context.Background(), comment, issueID, identifier, attempt, delay, errText, notifyLinear)
 }
 
 func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
@@ -265,7 +267,7 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		}
 		args = append(args, o.linearRateLimitLogArgs()...)
 		o.logger.Info("retry deferred by Linear request budget", args...)
-		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt, "tracker request throttled by Linear budget", delay, state.comment)
+		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt, "tracker request throttled by Linear budget", delay, state.comment, state.notifyLinear)
 		return
 	}
 	o.logger.Info(
@@ -277,7 +279,7 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 	o.postRetryFiredReply(ctx, issueID, state)
 	issues, err := o.runtime.Tracker.FetchCandidateIssues(ctx)
 	if err != nil {
-		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt+1, "retry poll failed", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment)
+		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt+1, "retry poll failed", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment, state.notifyLinear)
 		return
 	}
 	var issue *domain.Issue
@@ -293,7 +295,7 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		return
 	}
 	if !o.hasGlobalSlots() || !o.hasStateSlots(issue.State) {
-		o.scheduleRetry(issueID, issue.Identifier, state.entry.Attempt+1, "no available orchestrator slots", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment)
+		o.scheduleRetry(issueID, issue.Identifier, state.entry.Attempt+1, "no available orchestrator slots", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment, state.notifyLinear)
 		return
 	}
 	prepared, ready := o.prepareReviewIssue(ctx, *issue, time.Now().UTC())

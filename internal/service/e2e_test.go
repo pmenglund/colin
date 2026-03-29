@@ -155,6 +155,12 @@ Work on {{ .issue.identifier }}.
 		if !strings.HasPrefix(comment.Body, "[colin] ") {
 			t.Fatalf("comment body = %q, want [colin] prefix", comment.Body)
 		}
+		if strings.Contains(comment.Body, "Colin scheduled retry attempt") {
+			t.Fatalf("comment body = %q, want hidden internal verification retries", comment.Body)
+		}
+		if strings.Contains(comment.Body, "Colin is starting retry attempt") {
+			t.Fatalf("comment body = %q, want hidden internal verification retries", comment.Body)
+		}
 	}
 }
 

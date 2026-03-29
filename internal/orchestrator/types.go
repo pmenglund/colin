@@ -54,9 +54,10 @@ type runningEntry struct {
 }
 
 type retryState struct {
-	entry   domain.RetryEntry
-	timer   *time.Timer
-	comment *commentThreadState
+	entry        domain.RetryEntry
+	timer        *time.Timer
+	comment      *commentThreadState
+	notifyLinear bool
 }
 
 type reviewSyncState struct {
