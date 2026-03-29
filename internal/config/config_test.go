@@ -37,6 +37,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Agent.MaxTurns != 20 {
 		t.Fatalf("cfg.Agent.MaxTurns = %d", cfg.Agent.MaxTurns)
 	}
+	if cfg.Repo.BranchTemplate != "colin/{{.issue.identifier}}-{{.issue.title}}" {
+		t.Fatalf("cfg.Repo.BranchTemplate = %q", cfg.Repo.BranchTemplate)
+	}
 	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
 		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
 	}
@@ -181,5 +184,30 @@ func TestBuildReadsPRTemplate(t *testing.T) {
 	}
 	if got := cfg.Repo.PRTemplate; got != "Issue {{.issue.identifier}}" {
 		t.Fatalf("cfg.Repo.PRTemplate = %q, want %q", got, "Issue {{.issue.identifier}}")
+	}
+}
+
+func TestBuildReadsBranchTemplate(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"repo": map[string]any{
+				"branch_template": "feature/{{.issue.identifier}}",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Repo.BranchTemplate; got != "feature/{{.issue.identifier}}" {
+		t.Fatalf("cfg.Repo.BranchTemplate = %q, want %q", got, "feature/{{.issue.identifier}}")
 	}
 }

@@ -817,9 +817,9 @@ func issueHasLabel(issue realE2EIssue, label string) bool {
 func expectedBranchName(issue realE2EIssue) string {
 	branch := strings.TrimSpace(issue.BranchName)
 	if branch == "" {
-		branch = issue.Identifier
+		branch = "colin/" + issue.Title
 	}
-	return workspace.SanitizeWorkspaceKey(branch)
+	return workspace.SanitizeBranchName(branch)
 }
 
 func isPublishOrPostPublishState(state string) bool {

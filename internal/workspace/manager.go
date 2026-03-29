@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 var (
@@ -21,6 +22,7 @@ var (
 )
 
 var invalidWorkspaceChar = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+var invalidBranchChar = regexp.MustCompile(`[^A-Za-z0-9._/-]`)
 
 // Manager owns per-issue workspace lifecycle operations.
 type Manager struct {
@@ -41,6 +43,37 @@ func NewManager(cfg domain.ServiceConfig, logger *slog.Logger) *Manager {
 // SanitizeWorkspaceKey converts an issue identifier into a safe directory name.
 func SanitizeWorkspaceKey(identifier string) string {
 	return invalidWorkspaceChar.ReplaceAllString(identifier, "_")
+}
+
+// SanitizeBranchName converts a rendered branch name into a git-safe ref name.
+func SanitizeBranchName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.ReplaceAll(value, "@{", "_")
+	value = invalidBranchChar.ReplaceAllString(value, "_")
+	for strings.Contains(value, "..") {
+		value = strings.ReplaceAll(value, "..", "_")
+	}
+	parts := strings.Split(value, "/")
+	sanitized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.Trim(part, ".")
+		if part == "" {
+			continue
+		}
+		if strings.HasSuffix(part, ".lock") {
+			part = strings.TrimSuffix(part, ".lock") + "_lock"
+		}
+		sanitized = append(sanitized, part)
+	}
+	value = strings.Join(sanitized, "/")
+	value = strings.Trim(value, "/.")
+	if strings.HasPrefix(value, "-") {
+		value = "_" + strings.TrimLeft(value, "-")
+	}
+	return value
 }
 
 // Ensure creates or reuses the workspace for an issue and runs first-creation setup.
@@ -145,14 +178,46 @@ func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Wor
 	if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "fetch", "origin", "--prune"); err != nil {
 		return fmt.Errorf("git fetch: %w", err)
 	}
-	branch := workspace.WorkspaceKey
-	if issue.BranchName != nil && strings.TrimSpace(*issue.BranchName) != "" {
-		branch = SanitizeWorkspaceKey(*issue.BranchName)
+	branch, err := branchName(issue, m.cfg.Repo.BranchTemplate)
+	if err != nil {
+		return err
 	}
 	if err := prepareBranch(ctx, workspace.Path, m.cfg.Workspace.BaseRef, branch, clonedNow); err != nil {
 		return err
 	}
 	return nil
+}
+
+func branchName(issue domain.Issue, templateText string) (string, error) {
+	if issue.BranchName != nil && strings.TrimSpace(*issue.BranchName) != "" {
+		return SanitizeBranchName(*issue.BranchName), nil
+	}
+	if rendered, err := workflow.RenderTemplate(strings.TrimSpace(templateText), map[string]any{
+		"issue": map[string]any{
+			"id":          issue.ID,
+			"identifier":  issue.Identifier,
+			"title":       issue.Title,
+			"description": derefString(issue.Description),
+			"state":       issue.State,
+			"branch_name": derefString(issue.BranchName),
+			"url":         derefString(issue.URL),
+			"labels":      append([]string(nil), issue.Labels...),
+		},
+	}); err == nil {
+		if branch := SanitizeBranchName(rendered); branch != "" {
+			return branch, nil
+		}
+	} else {
+		return "", fmt.Errorf("render branch template: %w", err)
+	}
+	return SanitizeBranchName(issue.Identifier), nil
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func prepareBranch(ctx context.Context, cwd, baseRef, branch string, clonedNow bool) error {
