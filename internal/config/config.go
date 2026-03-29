@@ -32,7 +32,7 @@ Automated changes for {{.issue.identifier}}.
 - URL: {{ .issue.url }}
 {{- end }}`
 
-const defaultBranchTemplate = `colin/{{.issue.title}}`
+const defaultBranchTemplate = `colin/{{.issue.identifier}}-{{.issue.title}}`
 
 // Build converts a workflow definition into typed runtime configuration with defaults applied.
 func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceConfig, error) {

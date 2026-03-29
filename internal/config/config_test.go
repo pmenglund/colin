@@ -37,7 +37,7 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Agent.MaxTurns != 20 {
 		t.Fatalf("cfg.Agent.MaxTurns = %d", cfg.Agent.MaxTurns)
 	}
-	if cfg.Repo.BranchTemplate != "colin/{{.issue.title}}" {
+	if cfg.Repo.BranchTemplate != "colin/{{.issue.identifier}}-{{.issue.title}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q", cfg.Repo.BranchTemplate)
 	}
 	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
