@@ -13,6 +13,10 @@ func (o *Orchestrator) reconcileRunning(ctx context.Context) {
 		return
 	}
 	o.reconcileStalled()
+	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
+		o.logger.Info("running-state refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+		return
+	}
 
 	ids := make([]string, 0, len(o.running))
 	for issueID := range o.running {
@@ -209,6 +213,17 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		return
 	}
 	delete(o.retrying, issueID)
+	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
+		args := []any{
+			"issue_id", issueID,
+			"issue_identifier", state.entry.Identifier,
+			"delay", delay.String(),
+		}
+		args = append(args, o.linearRateLimitLogArgs()...)
+		o.logger.Info("retry deferred by Linear request budget", args...)
+		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt, "tracker request throttled by Linear budget", delay, state.comment)
+		return
+	}
 	o.logger.Info(
 		"retry fired",
 		"issue_id", issueID,

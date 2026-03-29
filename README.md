@@ -1,6 +1,6 @@
 # Colin
 
-Colin is a Go service that watches a Linear project, prepares a per-issue workspace, runs Codex against issues in active states, and handles publish and merge automation when issues move into handoff states.
+Colin is a Go service that watches a Linear project, prepares a per-issue workspace, runs Codex against issues in active states, moves successful coding runs into the publish handoff state, and handles publish and merge automation from there.
 
 ## High-Level Flow
 
@@ -10,8 +10,9 @@ Colin runs as a long-lived process:
 2. It polls Linear for candidate issues in the configured project and tracked states.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
 4. It runs Codex for issues in coding states.
-5. It performs git and GitHub automation for issues in publish or merge states.
-6. It logs progress locally and posts high-level progress updates back to Linear as a comment thread on the issue.
+5. It moves a successful coding run into the first configured publish state.
+6. It performs git and GitHub automation for issues in publish or merge states.
+7. It logs progress locally and posts high-level progress updates back to Linear as a comment thread on the issue.
 
 By default Colin is started with:
 
@@ -44,7 +45,7 @@ go run . /path/to/WORKFLOW.md
 
 ## Linear State Handling
 
-Colin does not currently move Linear issues between states itself. Instead, it reacts to the issue's current state and performs the matching automation.
+Colin moves a successful coding run from an active state into the first configured publish state. After that, it reacts to the issue's current state and performs the matching automation.
 
 ### Active coding states
 
@@ -57,6 +58,7 @@ When an issue is in one of these states, Colin:
 
 - dispatches Codex work for the issue
 - keeps retrying or continuing while the issue remains active
+- moves the issue to the first configured publish state when a coding run succeeds and the issue is still active
 - stops the coding run when the issue leaves the active state set
 
 Additional `Todo` rule:
@@ -126,4 +128,5 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
 - The dashboard shows current running issues, queued retries, token totals, and the latest rate-limit snapshot. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.
-- Colin currently automates repository actions, but it does not automatically change the Linear issue state after review or merge.
+- Colin automatically moves successful coding runs into the first configured publish state, which is currently `Review`.
+- Colin does not automatically move issues out of `Review` or `Merge`; those handoffs still require a human.

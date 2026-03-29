@@ -17,12 +17,46 @@ test("worker card expands and refresh updates the fragment without reloading the
 
   const shellInstance = await page.getByTestId("shell-instance").textContent();
   const before = await page.getByTestId("turn-count-COLIN-7").textContent();
+  const details = page.locator("#worker-output-details-COLIN-7");
+  const outputPre = page.getByTestId("worker-output-COLIN-7").locator("pre").first();
+  const outputTime = page.getByTestId("worker-output-COLIN-7").locator("[data-local-time]").first();
 
   await page.getByText("Codex output").click();
+  await expect(details).toHaveJSProperty("open", true);
   await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Refreshed the task view fragment.");
+  await expect(outputPre).toHaveCSS("white-space", "pre-wrap");
+  const timestamp = await outputTime.getAttribute("data-timestamp");
+  if (!timestamp) {
+    throw new Error("missing output timestamp");
+  }
+  const expectedLocalTime = await page.evaluate((value) => {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }).format(new Date(value));
+  }, timestamp);
+  await expect(outputTime).toHaveText(expectedLocalTime);
 
   await page.getByTestId("refresh-button").click();
+  await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
+  await page.getByTestId("refresh-button").click();
   await expect(page.getByTestId("turn-count-COLIN-7")).not.toHaveText(before ?? "");
+  await expect(details).toHaveJSProperty("open", true);
+  const refreshedTimestamp = await outputTime.getAttribute("data-timestamp");
+  if (!refreshedTimestamp) {
+    throw new Error("missing refreshed output timestamp");
+  }
+  const expectedRefreshedLocalTime = await page.evaluate((value) => {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }).format(new Date(value));
+  }, refreshedTimestamp);
+  await expect(outputTime).toHaveText(expectedRefreshedLocalTime);
 
   const afterShellInstance = await page.getByTestId("shell-instance").textContent();
   expect(afterShellInstance).toBe(shellInstance);

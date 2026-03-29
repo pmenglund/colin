@@ -177,8 +177,22 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 			SecondsRunning: 420,
 		},
 		RateLimits: map[string]any{
-			"requests_remaining": 17,
-			"reset_at":           now.Add(3 * time.Minute).Format(time.RFC3339),
+			"primary": map[string]any{
+				"resetsAt":           now.Add(5*time.Hour + 32*time.Minute).Unix(),
+				"usedPercent":        5,
+				"windowDurationMins": 300,
+			},
+			"secondary": map[string]any{
+				"resetsAt":           now.Add(7 * 24 * time.Hour).Unix(),
+				"usedPercent":        9,
+				"windowDurationMins": 10080,
+			},
+			"linear_requests": map[string]any{
+				"limit":         int64(100),
+				"remaining":     int64(25),
+				"resetsAt":      now.Add(5 * time.Minute).Unix(),
+				"nextAllowedAt": now.Add(3 * time.Second).Unix(),
+			},
 		},
 	}, nil
 }

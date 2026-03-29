@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -73,18 +72,12 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 		toolbar(snapshot),
 		statsGrid(snapshot),
 		h.Div(
-			h.Class("content-grid"),
-			h.Div(
-				h.Class("stack"),
-				stateCountsPanel(snapshot),
-				runningPanel(snapshot),
-				retryingPanel(snapshot),
-			),
-			h.Div(
-				h.Class("stack"),
-				rateLimitsPanel(snapshot),
-				apiPanel(snapshot),
-			),
+			h.Class("stack"),
+			stateCountsPanel(snapshot),
+			runningPanel(snapshot),
+			retryingPanel(snapshot),
+			rateLimitsPanel(snapshot),
+			apiPanel(snapshot),
 		),
 	)
 }
@@ -103,11 +96,12 @@ func toolbar(snapshot domain.Snapshot) g.Node {
 			h.Button(
 				h.Type("button"),
 				h.Class("btn"),
+				h.Class("refresh-toggle"),
 				h.Data("testid", "refresh-button"),
-				g.Attr("hx-get", "/"),
-				g.Attr("hx-target", "#dashboard-root"),
-				g.Attr("hx-swap", "outerHTML"),
-				g.Text("Refresh now"),
+				g.Attr("data-refresh-toggle", "true"),
+				g.Attr("aria-label", "Pause automatic refresh"),
+				g.Attr("title", "Pause automatic refresh"),
+				g.Text("❚❚"),
 			),
 		),
 	)
@@ -124,40 +118,37 @@ func statsGrid(snapshot domain.Snapshot) g.Node {
 }
 
 func stateCountsPanel(snapshot domain.Snapshot) g.Node {
-	if len(snapshot.IssueStates) == 0 {
-		return emptyPanel("Linear issue counts", "No tracked issue counts are available yet.")
-	}
-
-	type stateCount struct {
-		State string
-		Count int
-	}
-	rows := make([]stateCount, 0, len(snapshot.IssueStates))
-	total := 0
-	for state, count := range snapshot.IssueStates {
-		rows = append(rows, stateCount{State: state, Count: count})
-		total += count
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Count != rows[j].Count {
-			return rows[i].Count > rows[j].Count
-		}
-		return rows[i].State < rows[j].State
-	})
+	states := []string{"Backlog", "Todo", "In Progress", "Review", "Merge"}
 
 	return h.Section(
 		h.Class("table-card"),
 		h.Data("testid", "linear-state-counts"),
-		h.H3(g.Text("Linear issue counts")),
-		h.P(g.Text("Tracked Linear issues grouped by current state.")),
+		h.H3(g.Text("Linear issues")),
+		h.P(g.Text("Tracked Linear issues in the active handoff pipeline.")),
 		h.Div(
 			h.Class("state-count-grid"),
-			statCard("Tracked Issues", strconv.Itoa(total), "issues in the configured Linear state set"),
-			g.Map(rows, func(row stateCount) g.Node {
-				return statCard(row.State, strconv.Itoa(row.Count), "issues currently in this state")
+			g.Map(states, func(state string) g.Node {
+				return statCard(state, strconv.Itoa(snapshot.IssueStates[state]), stateDescription(state))
 			}),
 		),
 	)
+}
+
+func stateDescription(state string) string {
+	switch state {
+	case "Backlog":
+		return "Issue is parked outside the active handoff states."
+	case "Todo":
+		return "Issue is ready for Colin to pick up."
+	case "In Progress":
+		return "Issue is actively being worked."
+	case "Review":
+		return "Issue is awaiting human review."
+	case "Merge":
+		return "Issue is approved and waiting to be merged."
+	default:
+		return "Issue is currently in this state."
+	}
 }
 
 func statCard(title, value, desc string) g.Node {
@@ -226,19 +217,17 @@ func retryingPanel(snapshot domain.Snapshot) g.Node {
 }
 
 func rateLimitsPanel(snapshot domain.Snapshot) g.Node {
-	body := "none reported"
-	if len(snapshot.RateLimits) > 0 {
-		pretty, err := json.MarshalIndent(snapshot.RateLimits, "", "  ")
-		if err == nil {
-			body = string(pretty)
-		}
-	}
+	codexLines, linearLines := rateLimitRows(snapshot.GeneratedAt, snapshot.RateLimits)
 
 	return h.Section(
 		h.Class("table-card"),
 		h.H3(g.Text("Rate limits")),
-		h.P(g.Text("Latest limits reported by the Codex runner.")),
-		h.Pre(h.Class("mockup-code"), h.Data("testid", "rate-limits"), g.Text(body)),
+		h.P(g.Text("Latest limits reported by Codex and Linear.")),
+		h.Div(
+			h.Class("rate-limit-grid"),
+			rateLimitBox("Codex", "rate-limits-codex", codexLines),
+			rateLimitBox("Linear", "rate-limits-linear", linearLines),
+		),
 	)
 }
 
@@ -251,6 +240,100 @@ func apiPanel(snapshot domain.Snapshot) g.Node {
 	)
 }
 
+func rateLimitBox(title, testID string, lines []string) g.Node {
+	return h.Div(
+		h.Class("rate-limit-box"),
+		h.H4(g.Text(title)),
+		h.Pre(
+			h.Class("mockup-code"),
+			h.Data("testid", testID),
+			g.Text(strings.Join(fallbackLines(lines), "\n")),
+		),
+	)
+}
+
+func rateLimitRows(now time.Time, rateLimits map[string]any) ([]string, []string) {
+	if len(rateLimits) == 0 {
+		return nil, nil
+	}
+
+	codexRows := make([]string, 0, 2)
+	for _, name := range []string{"primary", "secondary"} {
+		limit, ok := nestedMap(rateLimits, name)
+		if !ok {
+			continue
+		}
+		codexRows = append(codexRows, fmt.Sprintf(
+			"%s of %s window which resets in %s",
+			rateLimitUsed(limit["usedPercent"]),
+			rateLimitWindow(limit["windowDurationMins"]),
+			rateLimitResetDuration(now, limit["resetsAt"]),
+		))
+	}
+	var linearRows []string
+	for name, raw := range rateLimits {
+		if name == "primary" || name == "secondary" {
+			continue
+		}
+		limit, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		remaining, limitValue, ok := rateLimitRemaining(limit)
+		if !ok {
+			continue
+		}
+		line := fmt.Sprintf(
+			"resets in %s, %d of %d remaining",
+			rateLimitResetDuration(now, limit["resetsAt"]),
+			remaining,
+			limitValue,
+		)
+		if nextAllowedAt, ok := rateLimitNextAllowed(limit); ok && nextAllowedAt.After(now) {
+			line = fmt.Sprintf("%s next request in %s", line, formatDuration(nextAllowedAt.Sub(now)))
+		}
+		linearRows = append(linearRows, line)
+	}
+	sort.Strings(linearRows)
+	return codexRows, linearRows
+}
+
+func fallbackLines(lines []string) []string {
+	if len(lines) == 0 {
+		return []string{"none reported"}
+	}
+	return lines
+}
+
+func nestedMap(root map[string]any, key string) (map[string]any, bool) {
+	value, ok := root[key]
+	if !ok {
+		return nil, false
+	}
+	out, ok := value.(map[string]any)
+	return out, ok
+}
+
+func rateLimitRemaining(limit map[string]any) (int64, int64, bool) {
+	remaining, ok := int64Any(limit["remaining"])
+	if !ok {
+		return 0, 0, false
+	}
+	limitValue, ok := int64Any(limit["limit"])
+	if !ok {
+		return 0, 0, false
+	}
+	return remaining, limitValue, true
+}
+
+func rateLimitNextAllowed(limit map[string]any) (time.Time, bool) {
+	unix, ok := int64Any(limit["nextAllowedAt"])
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Unix(unix, 0).UTC(), true
+}
+
 func emptyPanel(title, body string) g.Node {
 	return h.Section(
 		h.Class("alert empty-state"),
@@ -260,19 +343,15 @@ func emptyPanel(title, body string) g.Node {
 }
 
 func runningCard(entry domain.SnapshotRunning) g.Node {
-	issueNode := g.Group{
-		h.Span(h.Class("badge badge-info"), g.Text(entry.Identifier)),
-		h.Div(h.Class("issue-title"), g.Text(entry.Title)),
-		h.Div(
-			h.Class("issue-meta"),
-			h.Span(h.Class(stateBadgeClass(entry.State)), g.Text(entry.State)),
-		),
-	}
+	titleNode := g.Node(h.Span(h.Class("worker-issue-title"), g.Text(entry.Title)))
 	if entry.URL != nil && strings.TrimSpace(*entry.URL) != "" {
-		issueNode = g.Group{
-			h.A(h.Href(*entry.URL), issueNode),
-		}
+		titleNode = h.A(h.Class("worker-issue-link"), h.Href(*entry.URL), g.Text(entry.Title))
 	}
+	issueNode := h.Div(
+		h.Class("worker-issue"),
+		h.Span(h.Class("badge badge-info"), g.Text(entry.Identifier)),
+		titleNode,
+	)
 
 	lastEventAt := "waiting for first event"
 	if entry.LastEventAt != nil {
@@ -285,30 +364,30 @@ func runningCard(entry domain.SnapshotRunning) g.Node {
 		h.Div(
 			h.Class("worker-header"),
 			issueNode,
-			h.Span(h.Class("badge badge-success"), g.Text(fallback(entry.LastEvent, "none"))),
+			h.Span(h.Class(stateBadgeClass(entry.State)), g.Text(entry.State)),
 		),
 		h.Div(
 			h.Class("worker-metrics"),
 			h.Div(
 				h.Class("card"),
 				h.H3(g.Text("Session")),
-				h.Span(g.Text("Session: "+fallback(entry.SessionID, "not assigned"))),
-				h.Span(g.Text("Turns: "+strconv.Itoa(entry.TurnCount))),
-				h.Span(g.Text("Started: "+entry.StartedAt.Format(time.RFC3339))),
+				h.Div(h.Class("metric-line"), g.Text("Session: "+fallback(entry.SessionID, "not assigned"))),
+				h.Div(h.Class("metric-line"), g.Text("Turns: "+strconv.Itoa(entry.TurnCount))),
+				h.Div(h.Class("metric-line"), g.Text("Started: "+entry.StartedAt.Format(time.RFC3339))),
 			),
 			h.Div(
 				h.Class("card"),
 				h.H3(g.Text("Activity")),
-				h.Span(g.Text(fallback(entry.LastMessage, "no message"))),
-				h.Span(g.Text("Last event at: "+lastEventAt)),
+				h.Div(h.Class("metric-line"), g.Text(fallback(entry.LastMessage, "no message"))),
+				h.Div(h.Class("metric-line"), g.Text("Last event at: "+lastEventAt)),
 			),
 			h.Div(
 				h.Class("card"),
 				h.H3(g.Text("Usage")),
-				h.Span(h.Data("testid", "turn-count-"+entry.Identifier), g.Text("Turns: "+strconv.Itoa(entry.TurnCount))),
-				h.Span(g.Text("Input: "+formatInt(entry.InputTokens))),
-				h.Span(g.Text("Output: "+formatInt(entry.OutputTokens))),
-				h.Span(g.Text("Total: "+formatInt(entry.TotalTokens))),
+				h.Div(h.Class("metric-line"), h.Data("testid", "turn-count-"+entry.Identifier), g.Text("Turns: "+strconv.Itoa(entry.TurnCount))),
+				h.Div(h.Class("metric-line"), g.Text("Input: "+formatInt(entry.InputTokens))),
+				h.Div(h.Class("metric-line"), g.Text("Output: "+formatInt(entry.OutputTokens))),
+				h.Div(h.Class("metric-line"), g.Text("Total: "+formatInt(entry.TotalTokens))),
 			),
 		),
 		workerOutput(entry),
@@ -316,23 +395,82 @@ func runningCard(entry domain.SnapshotRunning) g.Node {
 }
 
 func workerOutput(entry domain.SnapshotRunning) g.Node {
-	lines := make([]string, 0, len(entry.OutputLog))
-	for _, item := range entry.OutputLog {
-		lines = append(lines, fmt.Sprintf("[%s] %s %s", item.Timestamp.Format("15:04:05"), item.Event, item.Message))
-	}
-	if len(lines) == 0 {
-		lines = append(lines, "No Codex output captured yet.")
-	}
-
 	return h.Details(
+		h.ID("worker-output-details-"+entry.Identifier),
 		h.Class("worker-output"),
+		g.Attr("data-preserve-open", "true"),
 		h.Summary(g.Text("Codex output")),
-		h.Pre(
-			h.Class("mockup-code"),
+		h.Div(
+			h.Class("worker-output-list"),
 			h.Data("testid", "worker-output-"+entry.Identifier),
-			g.Text(strings.Join(lines, "\n")),
+			renderOutputEntries(entry.OutputLog),
 		),
 	)
+}
+
+func renderOutputEntries(log []domain.OutputLog) g.Node {
+	if len(log) == 0 {
+		return h.Pre(
+			h.Class("mockup-code"),
+			g.Text("No Codex output captured yet."),
+		)
+	}
+
+	entries := make(g.Group, 0, len(log))
+	for i := len(log) - 1; i >= 0; i-- {
+		item := log[i]
+		message := strings.TrimSpace(item.Message)
+		if message == "" {
+			message = item.Event
+		}
+		timestamp := item.Timestamp.UTC().Format(time.RFC3339)
+		entryChildren := g.Group{
+			h.Div(
+				h.Class("worker-output-meta"),
+				h.Span(
+					h.Class("worker-output-time"),
+					g.Attr("data-local-time", "true"),
+					g.Attr("data-timestamp", timestamp),
+					g.Text(item.Timestamp.UTC().Format("15:04:05 MST")),
+				),
+				h.Span(h.Class(outputEventBadgeClass(item.Event)), g.Text(item.Event)),
+			),
+		}
+		if outputMessageAddsDetail(item.Event, message) {
+			entryChildren = append(entryChildren, h.Pre(
+				h.Class("mockup-code"),
+				g.Text(message),
+			))
+		}
+		entries = append(entries, h.Div(
+			h.Class("worker-output-entry"),
+			entryChildren,
+		))
+	}
+
+	return entries
+}
+
+func outputEventBadgeClass(eventName string) string {
+	switch strings.ToLower(strings.TrimSpace(eventName)) {
+	case "session_started":
+		return "badge badge-session"
+	case "turn_completed":
+		return "badge badge-turn-completed"
+	default:
+		return "badge badge-info"
+	}
+}
+
+func outputMessageAddsDetail(eventName, message string) bool {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return false
+	}
+	normalize := func(value string) string {
+		return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "_", " ")))
+	}
+	return normalize(message) != normalize(eventName)
 }
 
 func stateBadgeClass(state string) string {
@@ -355,6 +493,138 @@ func formatDuration(value time.Duration) string {
 		value = 0
 	}
 	return value.Round(time.Second).String()
+}
+
+func rateLimitResetDuration(now time.Time, value any) string {
+	resetAt, ok := parseRateLimitTime(value)
+	if !ok {
+		return "unknown"
+	}
+	return formatCompactDuration(resetAt.Sub(now))
+}
+
+func rateLimitUsed(value any) string {
+	number, ok := numericValue(value)
+	if !ok {
+		return "unknown used"
+	}
+	if number == float64(int64(number)) {
+		return fmt.Sprintf("%d%% used", int64(number))
+	}
+	return fmt.Sprintf("%s%% used", strconv.FormatFloat(number, 'f', -1, 64))
+}
+
+func rateLimitWindow(value any) string {
+	number, ok := numericValue(value)
+	if !ok {
+		return "unknown"
+	}
+	minutes := time.Duration(number * float64(time.Minute))
+	return formatCompactDuration(minutes)
+}
+
+func int64Any(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func parseRateLimitTime(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return time.Time{}, false
+		}
+		if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+			return parsed, true
+		}
+		if number, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+			return unixRateLimitTime(number), true
+		}
+		return time.Time{}, false
+	case int:
+		return unixRateLimitTime(int64(typed)), true
+	case int64:
+		return unixRateLimitTime(typed), true
+	case int32:
+		return unixRateLimitTime(int64(typed)), true
+	case float64:
+		return unixRateLimitTime(int64(typed)), true
+	case float32:
+		return unixRateLimitTime(int64(typed)), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func unixRateLimitTime(value int64) time.Time {
+	if value >= 1_000_000_000_000 {
+		return time.UnixMilli(value).UTC()
+	}
+	return time.Unix(value, 0).UTC()
+}
+
+func numericValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0, false
+		}
+		number, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil {
+			return 0, false
+		}
+		return number, true
+	default:
+		return 0, false
+	}
+}
+
+func formatCompactDuration(value time.Duration) string {
+	if value < 0 {
+		value = 0
+	}
+	value = value.Round(time.Minute)
+	if value < time.Minute {
+		return "0m"
+	}
+
+	const week = 7 * 24 * time.Hour
+	var parts []string
+	if weeks := value / week; weeks > 0 {
+		parts = append(parts, fmt.Sprintf("%dw", weeks))
+		value -= weeks * week
+	}
+	if hours := value / time.Hour; hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+		value -= hours * time.Hour
+	}
+	if minutes := value / time.Minute; minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
+	}
+	if len(parts) == 0 {
+		return "0m"
+	}
+	return strings.Join(parts, "")
 }
 
 func fallback(value, otherwise string) string {

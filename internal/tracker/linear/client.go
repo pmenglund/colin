@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pmenglund/colin/internal/config"
@@ -22,6 +24,7 @@ var (
 	ErrGraphQLErrors    = errors.New("linear_graphql_errors")
 	ErrUnknownPayload   = errors.New("linear_unknown_payload")
 	ErrMissingEndCursor = errors.New("linear_missing_end_cursor")
+	ErrUnknownState     = errors.New("linear_unknown_state")
 )
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
@@ -31,6 +34,8 @@ type Client struct {
 	project  string
 	active   []string
 	client   *http.Client
+	rateMu   sync.RWMutex
+	rateInfo map[string]any
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -99,6 +104,38 @@ query IssueStates($ids: [ID!]!) {
 	return issues, nil
 }
 
+// UpdateIssueState moves an issue to the named workflow state within the issue's team.
+func (c *Client) UpdateIssueState(ctx context.Context, issueID string, stateName string) error {
+	stateID, err := c.lookupStateID(ctx, issueID, stateName)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+mutation UpdateIssueState($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) {
+    success
+    issue {
+      id
+      state { name }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"id":      issueID,
+		"stateId": stateID,
+	})
+	if err != nil {
+		return err
+	}
+	success, _ := nestedBool(resp, "data", "issueUpdate", "success")
+	if !success {
+		return ErrUnknownPayload
+	}
+	return nil
+}
+
 // CreateIssueComment creates a top-level comment on a Linear issue.
 func (c *Client) CreateIssueComment(ctx context.Context, issueID string, body string) (string, error) {
 	const query = `
@@ -142,6 +179,13 @@ mutation CreateCommentReply($input: CommentCreateInput!) {
 		return "", err
 	}
 	return parseCreatedCommentID(resp)
+}
+
+// CurrentRateLimits returns the latest Linear request budget observed from HTTP response headers.
+func (c *Client) CurrentRateLimits() map[string]any {
+	c.rateMu.RLock()
+	defer c.rateMu.RUnlock()
+	return cloneMap(c.rateInfo)
 }
 
 func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
@@ -218,6 +262,44 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
 	return out, nil
 }
 
+func (c *Client) lookupStateID(ctx context.Context, issueID string, stateName string) (string, error) {
+	const query = `
+query IssueTeamStates($id: String!) {
+  issue(id: $id) {
+    team {
+      states {
+        nodes {
+          id
+          name
+        }
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"id": issueID})
+	if err != nil {
+		return "", err
+	}
+	nodes, ok := nestedSlice(resp, "data", "issue", "team", "states", "nodes")
+	if !ok {
+		return "", ErrUnknownPayload
+	}
+	target := strings.TrimSpace(stateName)
+	for _, node := range nodes {
+		name, _ := stringValue(node["name"])
+		if !strings.EqualFold(strings.TrimSpace(name), target) {
+			continue
+		}
+		stateID, _ := stringValue(node["id"])
+		if strings.TrimSpace(stateID) == "" {
+			return "", ErrUnknownPayload
+		}
+		return stateID, nil
+	}
+	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
+}
+
 func (c *Client) doQuery(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {
 	body := map[string]any{
 		"query":     query,
@@ -238,6 +320,7 @@ func (c *Client) doQuery(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
 	}
 	defer resp.Body.Close()
+	c.captureRateLimitHeaders(resp.Header, time.Now().UTC())
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
@@ -253,6 +336,53 @@ func (c *Client) doQuery(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("%w: %v", ErrGraphQLErrors, errorsField)
 	}
 	return decoded, nil
+}
+
+func (c *Client) captureRateLimitHeaders(header http.Header, observedAt time.Time) {
+	limit, ok := parseHeaderInt(header.Get("X-RateLimit-Requests-Limit"))
+	if !ok {
+		return
+	}
+	remaining, ok := parseHeaderInt(header.Get("X-RateLimit-Requests-Remaining"))
+	if !ok {
+		return
+	}
+	resetAt, ok := parseHeaderTime(header.Get("X-RateLimit-Requests-Reset"))
+	if !ok {
+		return
+	}
+
+	info := map[string]any{
+		"linear_requests": map[string]any{
+			"limit":         limit,
+			"remaining":     remaining,
+			"resetsAt":      resetAt.Unix(),
+			"observedAt":    observedAt.Unix(),
+			"nextAllowedAt": nextAllowedAt(observedAt, resetAt, remaining).Unix(),
+		},
+	}
+	if limit > 0 {
+		info["linear_requests"].(map[string]any)["usedPercent"] = int(((limit - remaining) * 100) / limit)
+	}
+
+	c.rateMu.Lock()
+	c.rateInfo = info
+	c.rateMu.Unlock()
+}
+
+func nextAllowedAt(observedAt, resetAt time.Time, remaining int64) time.Time {
+	if !resetAt.After(observedAt) {
+		return observedAt
+	}
+	if remaining <= 0 {
+		return resetAt
+	}
+	window := resetAt.Sub(observedAt)
+	step := window / time.Duration(remaining+1)
+	if step <= 0 {
+		return observedAt
+	}
+	return observedAt.Add(step)
 }
 
 func normalizeIssue(node map[string]any) (domain.Issue, error) {
@@ -405,4 +535,54 @@ func intValue(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func parseHeaderInt(value string) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func parseHeaderTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if unix, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if unix > 1_000_000_000_000 {
+			return time.UnixMilli(unix).UTC(), true
+		}
+		return time.Unix(unix, 0).UTC(), true
+	}
+	for _, layout := range []string{time.RFC3339, time.RFC1123, http.TimeFormat} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		if nested, ok := value.(map[string]any); ok {
+			clone := make(map[string]any, len(nested))
+			for nestedKey, nestedValue := range nested {
+				clone[nestedKey] = nestedValue
+			}
+			out[key] = clone
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }

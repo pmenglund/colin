@@ -99,6 +99,10 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
 	}
+	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
+		o.logger.Info("candidate fetch deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+		return
+	}
 	issues, err := o.runtime.Tracker.FetchCandidateIssues(ctx)
 	if err != nil {
 		o.logger.Error("candidate fetch failed", "error", err)
@@ -140,6 +144,10 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
 		o.issueStates = map[string]int{}
 		return
 	}
+	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
+		o.logger.Info("issue state count refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+		return
+	}
 
 	issues, err := o.runtime.Tracker.FetchIssuesByStates(ctx, stateNames)
 	if err != nil {
@@ -152,6 +160,77 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
 		counts[issue.State]++
 	}
 	o.issueStates = counts
+}
+
+func (o *Orchestrator) trackerThrottleDelay(now time.Time) time.Duration {
+	linearRequests, ok := o.currentLinearRequests()
+	if !ok {
+		return 0
+	}
+	nextAllowedAt, ok := unixTimeValue(linearRequests["nextAllowedAt"])
+	if !ok || !nextAllowedAt.After(now) {
+		return 0
+	}
+	return nextAllowedAt.Sub(now)
+}
+
+func (o *Orchestrator) linearRateLimitLogArgs() []any {
+	linearRequests, ok := o.currentLinearRequests()
+	if !ok {
+		return nil
+	}
+	args := make([]any, 0, 8)
+	if remaining, ok := int64Value(linearRequests["remaining"]); ok {
+		args = append(args, "linear_requests_remaining", remaining)
+	}
+	if limit, ok := int64Value(linearRequests["limit"]); ok {
+		args = append(args, "linear_requests_limit", limit)
+	}
+	if resetsAt, ok := unixTimeValue(linearRequests["resetsAt"]); ok {
+		args = append(args, "linear_requests_reset_at", resetsAt.Format(time.RFC3339))
+	}
+	if nextAllowedAt, ok := unixTimeValue(linearRequests["nextAllowedAt"]); ok {
+		args = append(args, "linear_requests_next_allowed_at", nextAllowedAt.Format(time.RFC3339))
+	}
+	return args
+}
+
+func (o *Orchestrator) currentLinearRequests() (map[string]any, bool) {
+	limits := o.runtime.Tracker.CurrentRateLimits()
+	if len(limits) == 0 {
+		return nil, false
+	}
+	linearRequests, ok := limits["linear_requests"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return linearRequests, true
+}
+
+func unixTimeValue(value any) (time.Time, bool) {
+	switch v := value.(type) {
+	case int64:
+		return time.Unix(v, 0).UTC(), true
+	case int:
+		return time.Unix(int64(v), 0).UTC(), true
+	case float64:
+		return time.Unix(int64(v), 0).UTC(), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func int64Value(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
 }
 
 func trackedStateNames(cfg domain.ServiceConfig) []string {
@@ -239,6 +318,9 @@ func (o *Orchestrator) appendOutput(entry *runningEntry, event codex.Event) {
 	}
 
 	message := strings.TrimSpace(event.Message)
+	if skipOutputEvent(event.Event, message) {
+		return
+	}
 	if message == "" {
 		switch event.Event {
 		case codex.EventSessionStarted:
@@ -249,6 +331,9 @@ func (o *Orchestrator) appendOutput(entry *runningEntry, event codex.Event) {
 			message = event.Event
 		}
 	}
+	if isDuplicateOutput(entry.outputLog, event.Event, message) {
+		return
+	}
 
 	entry.outputLog = append(entry.outputLog, domain.OutputLog{
 		Timestamp: event.Timestamp,
@@ -257,6 +342,53 @@ func (o *Orchestrator) appendOutput(entry *runningEntry, event codex.Event) {
 	})
 	if len(entry.outputLog) > 200 {
 		entry.outputLog = append([]domain.OutputLog(nil), entry.outputLog[len(entry.outputLog)-200:]...)
+	}
+}
+
+func skipOutputEvent(eventName, message string) bool {
+	switch eventName {
+	case codex.EventOtherMessage, codex.EventNotification:
+		if message == "" || message == eventName {
+			return true
+		}
+	}
+	return false
+}
+
+func isDuplicateOutput(log []domain.OutputLog, eventName, message string) bool {
+	if len(log) == 0 {
+		return false
+	}
+	last := log[len(log)-1]
+	lastMessage := strings.TrimSpace(last.Message)
+	currentMessage := strings.TrimSpace(message)
+	if lastMessage == "" || currentMessage == "" || lastMessage != currentMessage {
+		return false
+	}
+	if last.Event == eventName {
+		return true
+	}
+	if isTurnTerminalEvent(eventName) && isContentEvent(last.Event) {
+		return true
+	}
+	return false
+}
+
+func isTurnTerminalEvent(eventName string) bool {
+	switch eventName {
+	case codex.EventTurnCompleted, codex.EventTurnFailed, codex.EventTurnCancelled, codex.EventTurnInputRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func isContentEvent(eventName string) bool {
+	switch eventName {
+	case codex.EventOtherMessage, codex.EventNotification:
+		return true
+	default:
+		return false
 	}
 }
 

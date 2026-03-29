@@ -135,32 +135,97 @@ func (m *Manager) Remove(ctx context.Context, workspacePath string) error {
 
 func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Workspace, issue domain.Issue) error {
 	gitDir := filepath.Join(workspace.Path, ".git")
+	clonedNow := false
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
 		if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "clone", m.cfg.Workspace.RepoURL, "."); err != nil {
 			return fmt.Errorf("git clone: %w", err)
 		}
+		clonedNow = true
 	}
 	if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "fetch", "origin", "--prune"); err != nil {
 		return fmt.Errorf("git fetch: %w", err)
-	}
-	if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "checkout", m.cfg.Workspace.BaseRef); err != nil {
-		return fmt.Errorf("git checkout base ref: %w", err)
 	}
 	branch := workspace.WorkspaceKey
 	if issue.BranchName != nil && strings.TrimSpace(*issue.BranchName) != "" {
 		branch = SanitizeWorkspaceKey(*issue.BranchName)
 	}
-	if err := ensureBranch(ctx, workspace.Path, branch); err != nil {
+	if err := prepareBranch(ctx, workspace.Path, m.cfg.Workspace.BaseRef, branch, clonedNow); err != nil {
 		return err
 	}
 	return nil
 }
 
-func ensureBranch(ctx context.Context, cwd, branch string) error {
+func prepareBranch(ctx context.Context, cwd, baseRef, branch string, clonedNow bool) error {
+	if clonedNow {
+		if err := runCommand(ctx, cwd, 2*time.Minute, "git", "checkout", baseRef); err != nil {
+			return fmt.Errorf("git checkout base ref: %w", err)
+		}
+		return ensureBranch(ctx, cwd, baseRef, branch)
+	}
+
+	dirty, err := isDirty(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	current, err := currentBranch(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		if current == branch {
+			return nil
+		}
+		return fmt.Errorf("git workspace has uncommitted changes on branch %q; expected %q", current, branch)
+	}
+	if current == branch {
+		return nil
+	}
+	return ensureBranch(ctx, cwd, baseRef, branch)
+}
+
+func ensureBranch(ctx context.Context, cwd, baseRef, branch string) error {
 	if err := runCommand(ctx, cwd, 30*time.Second, "git", "rev-parse", "--verify", branch); err == nil {
 		return runCommand(ctx, cwd, 30*time.Second, "git", "checkout", branch)
 	}
+	if err := runCommand(ctx, cwd, 30*time.Second, "git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
+		return runCommand(ctx, cwd, 30*time.Second, "git", "checkout", "-b", branch, "--track", "origin/"+branch)
+	}
+	if err := runCommand(ctx, cwd, 30*time.Second, "git", "checkout", baseRef); err != nil {
+		return fmt.Errorf("git checkout base ref: %w", err)
+	}
 	return runCommand(ctx, cwd, 30*time.Second, "git", "checkout", "-b", branch)
+}
+
+func currentBranch(ctx context.Context, cwd string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = cwd
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", ctx.Err()
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, truncateOutput(output))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func isDirty(ctx context.Context, cwd string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd.Dir = cwd
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return false, ctx.Err()
+	}
+	if err != nil {
+		return false, fmt.Errorf("%w: %s", err, truncateOutput(output))
+	}
+	return strings.TrimSpace(string(output)) != "", nil
 }
 
 func (m *Manager) runHook(parent context.Context, name, script, cwd string) error {

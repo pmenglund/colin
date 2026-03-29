@@ -11,6 +11,8 @@ type Client interface {
 	FetchCandidateIssues(ctx context.Context) ([]domain.Issue, error)
 	FetchIssuesByStates(ctx context.Context, stateNames []string) ([]domain.Issue, error)
 	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) ([]domain.Issue, error)
+	UpdateIssueState(ctx context.Context, issueID string, stateName string) error
 	CreateIssueComment(ctx context.Context, issueID string, body string) (string, error)
 	CreateCommentReply(ctx context.Context, issueID string, parentCommentID string, body string) (string, error)
+	CurrentRateLimits() map[string]any
 }

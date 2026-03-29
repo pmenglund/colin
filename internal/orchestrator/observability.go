@@ -69,7 +69,7 @@ func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 		Running:     running,
 		Retrying:    retrying,
 		CodexTotals: totals,
-		RateLimits:  o.rateLimits,
+		RateLimits:  mergeRateLimits(o.rateLimits, o.runtime.Tracker.CurrentRateLimits()),
 		Counts: map[string]int{
 			"running":  len(running),
 			"retrying": len(retrying),
@@ -84,6 +84,42 @@ func cloneCounts(input map[string]int) map[string]int {
 	}
 	out := make(map[string]int, len(input))
 	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeRateLimits(base map[string]any, overlay map[string]any) map[string]any {
+	switch {
+	case len(base) == 0 && len(overlay) == 0:
+		return nil
+	case len(base) == 0:
+		return cloneAnyMap(overlay)
+	case len(overlay) == 0:
+		return cloneAnyMap(base)
+	}
+
+	out := cloneAnyMap(base)
+	for key, value := range overlay {
+		if nested, ok := value.(map[string]any); ok {
+			out[key] = cloneAnyMap(nested)
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		if nested, ok := value.(map[string]any); ok {
+			out[key] = cloneAnyMap(nested)
+			continue
+		}
 		out[key] = value
 	}
 	return out

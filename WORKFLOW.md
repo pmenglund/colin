@@ -27,7 +27,7 @@ repo:
   merge_states:
     - Merge
   remote_name: origin
-  merge_method: merge
+  merge_method: squash
 
 hooks:
   timeout_ms: 60000

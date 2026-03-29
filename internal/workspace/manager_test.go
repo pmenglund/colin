@@ -91,6 +91,65 @@ func TestEnsurePopulatesGitWorkspace(t *testing.T) {
 	}
 }
 
+func TestEnsureReusesDirtyGitWorkspaceWithoutResettingToBase(t *testing.T) {
+	t.Parallel()
+
+	origin := filepath.Join(t.TempDir(), "origin")
+	mustRun(t, "", "git", "init", "-b", "main", origin)
+	mustRun(t, origin, "git", "config", "user.email", "test@example.com")
+	mustRun(t, origin, "git", "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, origin, "git", "add", "README.md")
+	mustRun(t, origin, "git", "commit", "-m", "init")
+
+	root := filepath.Join(t.TempDir(), "workspaces")
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			Root:    root,
+			RepoURL: origin,
+			BaseRef: "main",
+		},
+	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	branch := "feature/ABC-123"
+	issue := domain.Issue{
+		Identifier: "ABC-123",
+		BranchName: &branch,
+	}
+	ws, err := manager.Ensure(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("Ensure() initial error = %v", err)
+	}
+
+	modified := "hello from dirty workspace\n"
+	if err := os.WriteFile(filepath.Join(ws.Path, "README.md"), []byte(modified), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := manager.Ensure(context.Background(), issue); err != nil {
+		t.Fatalf("Ensure() with dirty workspace error = %v", err)
+	}
+
+	output, err := exec.Command("git", "-C", ws.Path, "branch", "--show-current").CombinedOutput()
+	if err != nil {
+		t.Fatalf("branch --show-current: %v (%s)", err, string(output))
+	}
+	if got := strings.TrimSpace(string(output)); got != "feature_ABC-123" {
+		t.Fatalf("current branch = %q", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ws.Path, "README.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := string(data); got != modified {
+		t.Fatalf("README.md = %q, want %q", got, modified)
+	}
+}
+
 func mustRun(t *testing.T, cwd string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)

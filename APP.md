@@ -4,7 +4,7 @@ This file captures the stable, repo-specific architecture context for Colin.
 
 ## Purpose
 
-Colin is a long-running Go service that watches a Linear project, prepares a per-issue workspace, runs Codex for active issues, and performs publish and merge automation for handoff states.
+Colin is a long-running Go service that watches a Linear project, prepares a per-issue workspace, runs Codex for active issues, moves successful coding runs into the publish handoff state, and performs publish and merge automation from there.
 
 An embedded loopback HTTP dashboard exposes the orchestrator snapshot for live operator inspection, but it does not participate in orchestration correctness.
 
@@ -15,9 +15,9 @@ The runtime contract lives in `WORKFLOW.md`:
 
 ## State Model
 
-Colin does not currently move Linear issues between states itself. It reacts to the current state and performs the corresponding work.
+Colin moves a successful coding run from an active state into the first configured publish state, then reacts to the current state and performs the corresponding work.
 
-- Active states: Colin runs Codex work for issues in `tracker.active_states`.
+- Active states: Colin runs Codex work for issues in `tracker.active_states` and moves successful runs into the first state in `repo.publish_states`.
 - Publish states: Colin performs git push and PR creation for issues in `repo.publish_states`.
 - Merge states: Colin merges the PR for issues in `repo.merge_states`.
 - Terminal states: Colin stops work for issues in `tracker.terminal_states`.
@@ -47,7 +47,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/workflow/` - `WORKFLOW.md` loader and prompt rendering
 - `internal/config/` - typed runtime config and validation
 - `internal/tracker/` - tracker interface
-- `internal/tracker/linear/` - Linear GraphQL adapter for issue reads and comment writes
+- `internal/tracker/linear/` - Linear GraphQL adapter for issue reads, state writes, and comment writes
 - `internal/workspace/` - per-issue workspace lifecycle and hooks
 - `internal/agent/codex/` - Codex app-server integration and event normalization
 - `internal/orchestrator/` - dispatch, reconciliation, retries, and observability state

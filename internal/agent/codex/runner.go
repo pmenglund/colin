@@ -318,6 +318,11 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		)
 	}
 
+	current, err = r.moveSuccessfulCodingRunToPublishState(ctx, current)
+	if err != nil {
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+	}
+
 	emit(Event{
 		Event:     EventRunSucceeded,
 		Timestamp: time.Now().UTC(),
@@ -326,6 +331,32 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		Message:   "Run completed successfully",
 	})
 	return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "succeeded"}
+}
+
+func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
+	if !isActive(r.cfg, issue.State) {
+		return issue, nil
+	}
+
+	targetState, ok := firstConfiguredState(r.cfg.Repo.PublishStates)
+	if !ok || config.ContainsState([]string{issue.State}, targetState) {
+		return issue, nil
+	}
+
+	if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
+		return issue, fmt.Errorf("update issue state to %s: %w", targetState, err)
+	}
+	r.logger.Info(
+		"issue moved to publish state after successful coding run",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"previous_state", issue.State,
+		"current_state", targetState,
+	)
+	issue.State = targetState
+	now := time.Now().UTC()
+	issue.UpdatedAt = &now
+	return issue, nil
 }
 
 func attemptNumber(value *int) int {
@@ -351,4 +382,14 @@ func isPublishState(cfg domain.ServiceConfig, state string) bool {
 
 func isMergeState(cfg domain.ServiceConfig, state string) bool {
 	return config.ContainsState(cfg.Repo.MergeStates, state)
+}
+
+func firstConfiguredState(states []string) (string, bool) {
+	for _, state := range states {
+		state = strings.TrimSpace(state)
+		if state != "" {
+			return state, true
+		}
+	}
+	return "", false
 }
