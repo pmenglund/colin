@@ -4,18 +4,22 @@ import "time"
 
 // Issue is the normalized tracker record consumed by orchestration, prompting, and logging.
 type Issue struct {
-	ID          string
-	Identifier  string
-	Title       string
-	Description *string
-	Priority    *int
-	State       string
-	BranchName  *string
-	URL         *string
-	Labels      []string
-	BlockedBy   []BlockerRef
-	CreatedAt   *time.Time
-	UpdatedAt   *time.Time
+	ID             string
+	Identifier     string
+	Title          string
+	Description    *string
+	Priority       *int
+	State          string
+	BranchName     *string
+	URL            *string
+	Labels         []string
+	BlockedBy      []BlockerRef
+	ReviewCycle    *ReviewCycle
+	ReviewFeedback []ReviewFeedback
+	ReviewThreads  []GitHubReviewThread
+	PullRequest    *PullRequestRef
+	CreatedAt      *time.Time
+	UpdatedAt      *time.Time
 }
 
 // BlockerRef captures the minimal blocker fields needed for eligibility checks and prompt context.
@@ -23,6 +27,43 @@ type BlockerRef struct {
 	ID         *string
 	Identifier *string
 	State      *string
+}
+
+// ReviewFeedback is one human-authored comment or reply from the latest Review -> Todo cycle.
+type ReviewFeedback struct {
+	Body      string
+	CreatedAt time.Time
+	ParentID  *string
+}
+
+// ReviewCycle captures the latest Review -> Todo loop for an issue.
+type ReviewCycle struct {
+	EnteredReviewAt  time.Time
+	ReturnedToTodoAt time.Time
+}
+
+// PullRequestRef is the minimal PR metadata Colin uses in prompts and comments.
+type PullRequestRef struct {
+	Number int
+	URL    string
+	State  string
+}
+
+// GitHubReviewThread is one unresolved GitHub PR review thread.
+type GitHubReviewThread struct {
+	ID         string
+	Path       string
+	Line       *int
+	StartLine  *int
+	CommentID  string
+	CommentURL string
+	Author     string
+	Body       string
+	CreatedAt  *time.Time
+	IsResolved bool
+	IsOutdated bool
+	CanReply   bool
+	CanResolve bool
 }
 
 // WorkflowDefinition is the parsed WORKFLOW.md content used for config and prompt rendering.

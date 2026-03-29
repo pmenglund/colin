@@ -132,7 +132,17 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			PRState:   result.PRState,
 			Action:    result.Action,
 		})
-		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "succeeded"}
+		return Result{
+			Issue:         issue,
+			RunType:       runType,
+			WorkspacePath: ws.Path,
+			Status:        "succeeded",
+			PR: &domain.PullRequestRef{
+				Number: result.PRNumber,
+				URL:    result.PRURL,
+				State:  result.PRState,
+			},
+		}
 	}
 	if isMergeState(r.cfg, issue.State) {
 		emit(Event{
@@ -171,7 +181,18 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			PRState:   result.PRState,
 			Action:    result.Action,
 		})
-		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "succeeded"}
+		issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
+		return Result{
+			Issue:         issue,
+			RunType:       runType,
+			WorkspacePath: ws.Path,
+			Status:        "succeeded",
+			PR: &domain.PullRequestRef{
+				Number: result.PRNumber,
+				URL:    result.PRURL,
+				State:  result.PRState,
+			},
+		}
 	}
 
 	if err := client.start(ctx, ws.Path); err != nil {
@@ -190,7 +211,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
 		if err != nil {
-			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
 		}
 		if turn > 1 {
 			prompt = fmt.Sprintf(
@@ -249,7 +270,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 		refreshed := false
 		if len(issues) > 0 {
-			current = issues[0]
+			current = mergeIssueContext(current, issues[0])
 			refreshed = true
 		} else {
 			r.logger.Warn(
@@ -318,9 +339,30 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		)
 	}
 
+	summary := client.finalSummary()
+	prRef := (*domain.PullRequestRef)(nil)
+	threadsHandled := 0
+	threadsRemaining := 0
+	if len(current.ReviewThreads) > 0 {
+		var blocked bool
+		current, prRef, threadsHandled, threadsRemaining, summary, blocked = r.finalizeReviewThreads(ctx, current, ws.Path, summary)
+		if blocked {
+			return Result{
+				Issue:            current,
+				RunType:          runType,
+				WorkspacePath:    ws.Path,
+				Status:           "blocked",
+				Summary:          summary,
+				PR:               prRef,
+				ThreadsHandled:   threadsHandled,
+				ThreadsRemaining: threadsRemaining,
+			}
+		}
+	}
+
 	current, err = r.moveSuccessfulCodingRunToPublishState(ctx, current)
 	if err != nil {
-		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
 
 	emit(Event{
@@ -330,7 +372,16 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		State:     current.State,
 		Message:   "Run completed successfully",
 	})
-	return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "succeeded"}
+	return Result{
+		Issue:            current,
+		RunType:          runType,
+		WorkspacePath:    ws.Path,
+		Status:           "succeeded",
+		Summary:          summary,
+		PR:               prRef,
+		ThreadsHandled:   threadsHandled,
+		ThreadsRemaining: threadsRemaining,
+	}
 }
 
 func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
@@ -357,6 +408,183 @@ func (r *Runner) moveSuccessfulCodingRunToPublishState(ctx context.Context, issu
 	now := time.Now().UTC()
 	issue.UpdatedAt = &now
 	return issue, nil
+}
+
+func (r *Runner) applyPostMergeState(ctx context.Context, issue domain.Issue, targetBranch string) domain.Issue {
+	if r.tracker == nil {
+		return issue
+	}
+
+	stateName, ok, err := r.tracker.ResolveGitAutomationState(ctx, issue.ID, "merge", targetBranch)
+	if err != nil {
+		r.logger.Warn(
+			"failed to resolve post-merge Linear automation state",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"target_branch", targetBranch,
+			"error", err,
+		)
+		return issue
+	}
+	if !ok || strings.TrimSpace(stateName) == "" || config.ContainsState([]string{issue.State}, stateName) {
+		return issue
+	}
+	if err := r.tracker.UpdateIssueState(ctx, issue.ID, stateName); err != nil {
+		r.logger.Warn(
+			"failed to update issue to post-merge Linear automation state",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"target_branch", targetBranch,
+			"state", stateName,
+			"error", err,
+		)
+		return issue
+	}
+
+	r.logger.Info(
+		"issue moved to configured post-merge Linear automation state",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"previous_state", issue.State,
+		"current_state", stateName,
+		"target_branch", targetBranch,
+	)
+	issue.State = stateName
+	now := time.Now().UTC()
+	issue.UpdatedAt = &now
+	return issue
+}
+
+func mergeIssueContext(previous, refreshed domain.Issue) domain.Issue {
+	refreshed.Description = firstStringPtr(refreshed.Description, previous.Description)
+	refreshed.Priority = firstIntPtr(refreshed.Priority, previous.Priority)
+	refreshed.BranchName = firstStringPtr(refreshed.BranchName, previous.BranchName)
+	refreshed.URL = firstStringPtr(refreshed.URL, previous.URL)
+	if len(refreshed.Labels) == 0 {
+		refreshed.Labels = append([]string(nil), previous.Labels...)
+	}
+	if len(refreshed.BlockedBy) == 0 {
+		refreshed.BlockedBy = append([]domain.BlockerRef(nil), previous.BlockedBy...)
+	}
+	if refreshed.ReviewCycle == nil {
+		refreshed.ReviewCycle = previous.ReviewCycle
+	}
+	if len(refreshed.ReviewFeedback) == 0 {
+		refreshed.ReviewFeedback = append([]domain.ReviewFeedback(nil), previous.ReviewFeedback...)
+	}
+	if len(refreshed.ReviewThreads) == 0 {
+		refreshed.ReviewThreads = append([]domain.GitHubReviewThread(nil), previous.ReviewThreads...)
+	}
+	if refreshed.PullRequest == nil {
+		refreshed.PullRequest = previous.PullRequest
+	}
+	if refreshed.CreatedAt == nil {
+		refreshed.CreatedAt = previous.CreatedAt
+	}
+	return refreshed
+}
+
+func (r *Runner) finalizeReviewThreads(ctx context.Context, issue domain.Issue, workspacePath string, summary string) (domain.Issue, *domain.PullRequestRef, int, int, string, bool) {
+	reviewContext, err := r.repo.ReviewContext(ctx, issue, workspacePath)
+	if err != nil {
+		return issue, nil, 0, len(issue.ReviewThreads), buildReviewBlockedSummary(summary, nil, 0, len(issue.ReviewThreads), fmt.Sprintf("failed to fetch GitHub review threads: %v", err)), true
+	}
+	if reviewContext.PullRequest.Number == 0 && strings.TrimSpace(reviewContext.PullRequest.URL) == "" {
+		return issue, nil, 0, len(issue.ReviewThreads), buildReviewBlockedSummary(summary, nil, 0, len(issue.ReviewThreads), "no pull request found for the issue branch"), true
+	}
+	pr := &reviewContext.PullRequest
+	if len(reviewContext.Threads) == 0 {
+		return issue, pr, 0, 0, buildReviewReadySummary(summary, pr, 0, 0), false
+	}
+
+	replyBody := buildReviewThreadReplyBody(summary)
+	handled := 0
+	failures := 0
+	for _, thread := range reviewContext.Threads {
+		if err := r.repo.ReplyAndResolveReviewThread(ctx, workspacePath, thread, replyBody); err != nil {
+			failures++
+			r.logger.Warn(
+				"failed to reply to or resolve GitHub review thread",
+				"issue_id", issue.ID,
+				"issue_identifier", issue.Identifier,
+				"thread_id", thread.ID,
+				"path", thread.Path,
+				"error", err,
+			)
+			continue
+		}
+		handled++
+	}
+
+	postContext, err := r.repo.ReviewContext(ctx, issue, workspacePath)
+	if err != nil {
+		return issue, pr, handled, len(reviewContext.Threads), buildReviewBlockedSummary(summary, pr, handled, len(reviewContext.Threads), fmt.Sprintf("failed to verify GitHub review threads after update: %v", err)), true
+	}
+	remaining := len(postContext.Threads)
+	if postContext.PullRequest.Number != 0 || strings.TrimSpace(postContext.PullRequest.URL) != "" {
+		pr = &postContext.PullRequest
+	}
+	if failures > 0 || remaining > 0 {
+		return issue, pr, handled, remaining, buildReviewBlockedSummary(summary, pr, handled, remaining, ""), true
+	}
+	return issue, pr, handled, 0, buildReviewReadySummary(summary, pr, handled, 0), false
+}
+
+func buildReviewThreadReplyBody(summary string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "[colin] Addressed in the latest update."
+	}
+	return "[colin] Addressed in the latest update.\n\n" + summary
+}
+
+func buildReviewReadySummary(summary string, pr *domain.PullRequestRef, handled int, remaining int) string {
+	lines := []string{"Ready for review."}
+	if pr != nil && pr.Number > 0 {
+		lines = append(lines, fmt.Sprintf("- PR: `#%d`", pr.Number))
+	}
+	if pr != nil && strings.TrimSpace(pr.URL) != "" {
+		lines = append(lines, fmt.Sprintf("- PR URL: %s", pr.URL))
+	}
+	lines = append(lines, fmt.Sprintf("- Review threads handled: `%d`", handled))
+	lines = append(lines, fmt.Sprintf("- Review threads remaining: `%d`", remaining))
+	if strings.TrimSpace(summary) != "" {
+		lines = append(lines, "", "Codex summary:", "", summary)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildReviewBlockedSummary(summary string, pr *domain.PullRequestRef, handled int, remaining int, reason string) string {
+	lines := []string{"Staying in `Todo` until GitHub review feedback is fully addressed."}
+	if pr != nil && pr.Number > 0 {
+		lines = append(lines, fmt.Sprintf("- PR: `#%d`", pr.Number))
+	}
+	if pr != nil && strings.TrimSpace(pr.URL) != "" {
+		lines = append(lines, fmt.Sprintf("- PR URL: %s", pr.URL))
+	}
+	lines = append(lines, fmt.Sprintf("- Review threads handled: `%d`", handled))
+	lines = append(lines, fmt.Sprintf("- Review threads remaining: `%d`", remaining))
+	if strings.TrimSpace(reason) != "" {
+		lines = append(lines, fmt.Sprintf("- Blocker: %s", reason))
+	}
+	if strings.TrimSpace(summary) != "" {
+		lines = append(lines, "", "Codex summary:", "", summary)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func firstStringPtr(value, fallback *string) *string {
+	if value != nil {
+		return value
+	}
+	return fallback
+}
+
+func firstIntPtr(value, fallback *int) *int {
+	if value != nil {
+		return value
+	}
+	return fallback
 }
 
 func attemptNumber(value *int) int {

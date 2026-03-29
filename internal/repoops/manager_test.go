@@ -70,6 +70,58 @@ func TestMergeMergesExistingPR(t *testing.T) {
 	}
 }
 
+func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
+	workspacePath, _, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address review"}
+	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+
+	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if reviewContext.PullRequest.Number != 1 {
+		t.Fatalf("pull request number = %d, want 1", reviewContext.PullRequest.Number)
+	}
+	if len(reviewContext.Threads) != 1 {
+		t.Fatalf("threads length = %d, want 1", len(reviewContext.Threads))
+	}
+	if reviewContext.Threads[0].Body != "Please fix this." {
+		t.Fatalf("thread body = %q, want %q", reviewContext.Threads[0].Body, "Please fix this.")
+	}
+}
+
+func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	manager := NewManager(testConfig(), testLogger())
+
+	thread := domain.GitHubReviewThread{
+		ID:         "thread-1",
+		Path:       "internal/foo.go",
+		CommentID:  "comment-1",
+		CanReply:   true,
+		CanResolve: true,
+	}
+	if err := manager.ReplyAndResolveReviewThread(context.Background(), workspacePath, thread, "[colin] Addressed."); err != nil {
+		t.Fatalf("ReplyAndResolveReviewThread() error = %v", err)
+	}
+
+	log := readFile(t, ghLogPath)
+	if !strings.Contains(log, "api graphql") || !strings.Contains(log, "ReplyReviewThread") || !strings.Contains(log, "ResolveReviewThread") {
+		t.Fatalf("gh log = %q, want review-thread reply and resolve mutations", log)
+	}
+}
+
 func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath string, ghLogPath string) {
 	t.Helper()
 
@@ -79,6 +131,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	workspacePath = filepath.Join(tempDir, "workspace")
 	binPath := filepath.Join(tempDir, "bin")
 	ghStatePath := filepath.Join(tempDir, "gh-state.json")
+	ghReviewThreadsPath := filepath.Join(tempDir, "gh-review-threads.json")
 	ghLogPath = filepath.Join(tempDir, "gh.log")
 
 	runCmd(t, "", "git", "init", "--bare", remotePath)
@@ -99,6 +152,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	writeFile(t, ghStatePath, "[]\n")
+	writeFile(t, ghReviewThreadsPath, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	writeFile(t, filepath.Join(binPath, "gh"), fakeGHScript)
 	if err := os.Chmod(filepath.Join(binPath, "gh"), 0o755); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -106,6 +160,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 
 	t.Setenv("PATH", binPath+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("COLIN_FAKE_GH_STATE", ghStatePath)
+	t.Setenv("COLIN_FAKE_GH_REVIEW_THREADS", ghReviewThreadsPath)
 	t.Setenv("COLIN_FAKE_GH_LOG", ghLogPath)
 
 	return workspacePath, remotePath, ghLogPath
@@ -162,6 +217,10 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
+func stringPtr(value string) *string {
+	return &value
+}
+
 const fakeGHScript = `#!/bin/sh
 set -eu
 echo "$*" >>"$COLIN_FAKE_GH_LOG"
@@ -175,6 +234,23 @@ case "$1 $2" in
     ;;
   "pr merge")
     printf '[{"number":1,"url":"https://example.test/pr/1","state":"MERGED"}]\n' >"$COLIN_FAKE_GH_STATE"
+    ;;
+  "api graphql")
+    case "$*" in
+      *"ReviewThreads"*)
+        cat "$COLIN_FAKE_GH_REVIEW_THREADS"
+        ;;
+      *"ReplyReviewThread"*)
+        printf '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"reply-1","url":"https://example.test/comment/reply-1"}}}}\n'
+        ;;
+      *"ResolveReviewThread"*)
+        printf '{"data":{"resolveReviewThread":{"thread":{"id":"thread-1","isResolved":true}}}}\n'
+        ;;
+      *)
+        echo "unexpected graphql invocation: $*" >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2

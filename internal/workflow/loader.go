@@ -139,18 +139,22 @@ func convertMap(value any) any {
 
 func issueToMap(issue domain.Issue) map[string]any {
 	return map[string]any{
-		"id":          issue.ID,
-		"identifier":  issue.Identifier,
-		"title":       issue.Title,
-		"description": derefString(issue.Description),
-		"priority":    derefInt(issue.Priority),
-		"state":       issue.State,
-		"branch_name": derefString(issue.BranchName),
-		"url":         derefString(issue.URL),
-		"labels":      cloneStrings(issue.Labels),
-		"blocked_by":  blockersToMaps(issue.BlockedBy),
-		"created_at":  derefTime(issue.CreatedAt),
-		"updated_at":  derefTime(issue.UpdatedAt),
+		"id":              issue.ID,
+		"identifier":      issue.Identifier,
+		"title":           issue.Title,
+		"description":     derefString(issue.Description),
+		"priority":        derefInt(issue.Priority),
+		"state":           issue.State,
+		"branch_name":     derefString(issue.BranchName),
+		"url":             derefString(issue.URL),
+		"labels":          cloneStrings(issue.Labels),
+		"blocked_by":      blockersToMaps(issue.BlockedBy),
+		"review_cycle":    reviewCycleToMap(issue.ReviewCycle),
+		"review_feedback": reviewFeedbackToMaps(issue.ReviewFeedback),
+		"review_threads":  reviewThreadsToMaps(issue.ReviewThreads),
+		"pull_request":    pullRequestToMap(issue.PullRequest),
+		"created_at":      derefTime(issue.CreatedAt),
+		"updated_at":      derefTime(issue.UpdatedAt),
 	}
 }
 
@@ -164,6 +168,61 @@ func blockersToMaps(blockers []domain.BlockerRef) []map[string]any {
 		})
 	}
 	return out
+}
+
+func reviewFeedbackToMaps(items []domain.ReviewFeedback) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, map[string]any{
+			"body":       item.Body,
+			"created_at": item.CreatedAt.Format(time.RFC3339),
+			"parent_id":  derefString(item.ParentID),
+		})
+	}
+	return out
+}
+
+func reviewCycleToMap(value *domain.ReviewCycle) any {
+	if value == nil {
+		return nil
+	}
+	return map[string]any{
+		"entered_review_at":   value.EnteredReviewAt.Format(time.RFC3339),
+		"returned_to_todo_at": value.ReturnedToTodoAt.Format(time.RFC3339),
+	}
+}
+
+func reviewThreadsToMaps(items []domain.GitHubReviewThread) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, map[string]any{
+			"id":          item.ID,
+			"path":        item.Path,
+			"line":        derefInt(item.Line),
+			"start_line":  derefInt(item.StartLine),
+			"comment_id":  item.CommentID,
+			"comment_url": item.CommentURL,
+			"author":      item.Author,
+			"body":        item.Body,
+			"created_at":  derefTime(item.CreatedAt),
+			"is_resolved": item.IsResolved,
+			"is_outdated": item.IsOutdated,
+			"can_reply":   item.CanReply,
+			"can_resolve": item.CanResolve,
+		})
+	}
+	return out
+}
+
+func pullRequestToMap(value *domain.PullRequestRef) any {
+	if value == nil {
+		return nil
+	}
+	return map[string]any{
+		"number": value.Number,
+		"url":    value.URL,
+		"state":  value.State,
+	}
 }
 
 func cloneStrings(values []string) []string {

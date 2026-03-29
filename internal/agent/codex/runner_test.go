@@ -84,6 +84,54 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	}
 }
 
+func TestApplyPostMergeStateUsesConfiguredGitAutomationTarget(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{
+		resolvedMergeState:  "Merged",
+		resolveMergeStateOK: true,
+	}
+	runner := &Runner{
+		cfg:     domain.ServiceConfig{},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue := domain.Issue{ID: "issue-1", Identifier: "COLIN-94", State: "Merge"}
+	updated := runner.applyPostMergeState(context.Background(), issue, "main")
+
+	if updated.State != "Merged" {
+		t.Fatalf("updated state = %q, want %q", updated.State, "Merged")
+	}
+	if tracker.updatedIssueID != "issue-1" {
+		t.Fatalf("updated issue id = %q, want %q", tracker.updatedIssueID, "issue-1")
+	}
+	if tracker.updatedState != "Merged" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Merged")
+	}
+}
+
+func TestApplyPostMergeStateSkipsWhenNoAutomationTargetExists(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg:     domain.ServiceConfig{},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue := domain.Issue{ID: "issue-1", Identifier: "COLIN-94", State: "Merge"}
+	updated := runner.applyPostMergeState(context.Background(), issue, "main")
+
+	if updated.State != "Merge" {
+		t.Fatalf("updated state = %q, want %q", updated.State, "Merge")
+	}
+	if tracker.updatedIssueID != "" {
+		t.Fatalf("updated issue id = %q, want empty", tracker.updatedIssueID)
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return
@@ -96,9 +144,11 @@ func TestHelperProcessFakeCodex(t *testing.T) {
 }
 
 type stubTracker struct {
-	refreshedIssue domain.Issue
-	updatedIssueID string
-	updatedState   string
+	refreshedIssue      domain.Issue
+	updatedIssueID      string
+	updatedState        string
+	resolvedMergeState  string
+	resolveMergeStateOK bool
 }
 
 func (s *stubTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
@@ -117,6 +167,13 @@ func (s *stubTracker) UpdateIssueState(_ context.Context, issueID string, stateN
 	s.updatedIssueID = issueID
 	s.updatedState = stateName
 	return nil
+}
+
+func (s *stubTracker) ResolveGitAutomationState(_ context.Context, issueID string, event string, targetBranch string) (string, bool, error) {
+	if issueID == "" || event == "" || targetBranch == "" {
+		return "", false, nil
+	}
+	return s.resolvedMergeState, s.resolveMergeStateOK, nil
 }
 
 func (s *stubTracker) CreateIssueComment(context.Context, string, string) (string, error) {

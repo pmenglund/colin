@@ -8,6 +8,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/tracker"
 	"github.com/pmenglund/colin/internal/workspace"
 )
@@ -17,6 +18,7 @@ type Runtime struct {
 	Workflow  domain.WorkflowDefinition
 	Config    domain.ServiceConfig
 	Tracker   tracker.Client
+	Repo      *repoops.Manager
 	Workspace *workspace.Manager
 	Runner    *codex.Runner
 }
@@ -30,6 +32,7 @@ type Orchestrator struct {
 	running     map[string]*runningEntry
 	claimed     map[string]struct{}
 	retrying    map[string]*retryState
+	reviewSync  map[string]*reviewSyncState
 	completed   map[string]string
 	totalTokens domain.Totals
 	rateLimits  map[string]any
@@ -53,6 +56,13 @@ type retryState struct {
 	entry   domain.RetryEntry
 	timer   *time.Timer
 	comment *commentThreadState
+}
+
+type reviewSyncState struct {
+	firstObserved time.Time
+	nextPollAt    time.Time
+	timedOut      bool
+	comment       *commentThreadState
 }
 
 type commentThreadState struct {

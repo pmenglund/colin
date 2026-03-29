@@ -20,6 +20,7 @@ func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 		running:     map[string]*runningEntry{},
 		claimed:     map[string]struct{}{},
 		retrying:    map[string]*retryState{},
+		reviewSync:  map[string]*reviewSyncState{},
 		completed:   map[string]string{},
 		issueStates: map[string]int{},
 	}
@@ -108,10 +109,16 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.logger.Error("candidate fetch failed", "error", err)
 		return
 	}
+	o.cleanupReviewSync(issues)
 	sortIssues(issues)
 	dispatched := 0
 	eligible := 0
+	now := time.Now().UTC()
 	for _, issue := range issues {
+		issue, ready := o.prepareReviewIssue(ctx, issue, now)
+		if !ready {
+			continue
+		}
 		if !o.shouldDispatch(issue) {
 			continue
 		}

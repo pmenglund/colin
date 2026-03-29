@@ -139,6 +139,9 @@ Work on {{ .issue.identifier }}.
 	if root == nil {
 		t.Fatal("expected top-level Linear progress comment")
 	}
+	if !strings.HasPrefix(root.Body, "[colin] ") {
+		t.Fatalf("root comment body = %q, want [colin] prefix", root.Body)
+	}
 	if !strings.Contains(root.Body, "Workspace: `"+workspacePath+"`") {
 		t.Fatalf("root comment body = %q, want workspace path", root.Body)
 	}
@@ -147,6 +150,11 @@ Work on {{ .issue.identifier }}.
 	}
 	if linear.ReplyCount() == 0 {
 		t.Fatal("expected Linear progress replies")
+	}
+	for _, comment := range linear.Comments() {
+		if !strings.HasPrefix(comment.Body, "[colin] ") {
+			t.Fatalf("comment body = %q, want [colin] prefix", comment.Body)
+		}
 	}
 }
 
@@ -628,6 +636,14 @@ func (s *fakeLinearServer) RootComment() *fakeLinearComment {
 		}
 	}
 	return nil
+}
+
+func (s *fakeLinearServer) Comments() []fakeLinearComment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]fakeLinearComment, len(s.comments))
+	copy(out, s.comments)
+	return out
 }
 
 func (s *fakeLinearServer) recordComment(variables map[string]any) string {

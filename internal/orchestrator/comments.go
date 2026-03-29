@@ -41,6 +41,7 @@ func (o *Orchestrator) createRootComment(ctx context.Context, entry *runningEntr
 	if strings.TrimSpace(body) == "" {
 		return
 	}
+	body = colinCommentBody(body)
 
 	commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
 		return o.runtime.Tracker.CreateIssueComment(ctx, entry.issue.ID, body)
@@ -69,6 +70,7 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 	if o.runtime.Tracker == nil || entry == nil || entry.comment == nil || entry.comment.RootCommentID == "" || strings.TrimSpace(body) == "" {
 		return
 	}
+	body = colinCommentBody(body)
 
 	_, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
 		return o.runtime.Tracker.CreateCommentReply(ctx, entry.issue.ID, entry.comment.RootCommentID, body)
@@ -82,6 +84,47 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 			"error", err,
 		)
 	}
+}
+
+func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) *commentThreadState {
+	if o.runtime.Tracker == nil || strings.TrimSpace(body) == "" {
+		return comment
+	}
+	if comment == nil {
+		comment = &commentThreadState{RunType: codex.RunTypeCoding}
+	}
+	body = colinCommentBody(body)
+
+	if comment.RootCommentID == "" {
+		commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
+			return o.runtime.Tracker.CreateIssueComment(ctx, issue.ID, body)
+		})
+		if err != nil {
+			o.logger.Warn(
+				"failed to create Linear status comment",
+				"issue_id", issue.ID,
+				"issue_identifier", identifier,
+				"error", err,
+			)
+			return comment
+		}
+		comment.RootCommentID = commentID
+		return comment
+	}
+
+	_, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
+		return o.runtime.Tracker.CreateCommentReply(ctx, issue.ID, comment.RootCommentID, body)
+	})
+	if err != nil {
+		o.logger.Warn(
+			"failed to create Linear status reply",
+			"issue_id", issue.ID,
+			"issue_identifier", identifier,
+			"comment_id", comment.RootCommentID,
+			"error", err,
+		)
+	}
+	return comment
 }
 
 func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.Context) (string, error)) (string, error) {
@@ -124,6 +167,17 @@ func rootCommentBody(entry *runningEntry, event codex.Event) string {
 		lines = append(lines, fmt.Sprintf("- Base ref: `%s`", event.BaseRef))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func colinCommentBody(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(body), "[colin]") {
+		return body
+	}
+	return "[colin] " + body
 }
 
 func (o *Orchestrator) replyBodyForEvent(entry *runningEntry, event codex.Event) (string, bool) {

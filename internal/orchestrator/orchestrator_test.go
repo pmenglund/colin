@@ -37,6 +37,10 @@ func (s *trackerStub) UpdateIssueState(context.Context, string, string) error {
 	return nil
 }
 
+func (s *trackerStub) ResolveGitAutomationState(context.Context, string, string, string) (string, bool, error) {
+	return "", false, nil
+}
+
 func (s *trackerStub) CreateIssueComment(context.Context, string, string) (string, error) {
 	return "", nil
 }

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,6 +138,58 @@ mutation UpdateIssueState($id: String!, $stateId: String!) {
 	return nil
 }
 
+// ResolveGitAutomationState returns the team-configured Linear git automation state for the supplied event.
+func (c *Client) ResolveGitAutomationState(ctx context.Context, issueID string, event string, targetBranch string) (string, bool, error) {
+	const query = `
+query GitAutomationState($id: String!) {
+  issue(id: $id) {
+    team {
+      gitAutomationStates(first: 50) {
+        nodes {
+          event
+          state { name }
+          targetBranch {
+            branchPattern
+            isRegex
+          }
+        }
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"id": issueID})
+	if err != nil {
+		return "", false, err
+	}
+	nodes, ok := nestedSlice(resp, "data", "issue", "team", "gitAutomationStates", "nodes")
+	if !ok {
+		return "", false, nil
+	}
+
+	var (
+		bestState string
+		bestScore int
+	)
+	for _, node := range nodes {
+		candidateEvent, _ := stringValue(node["event"])
+		if !strings.EqualFold(strings.TrimSpace(candidateEvent), strings.TrimSpace(event)) {
+			continue
+		}
+		stateName, _ := nestedString(node, "state", "name")
+		score := gitAutomationMatchScore(node, targetBranch)
+		if strings.TrimSpace(stateName) == "" || score == 0 || score < bestScore {
+			continue
+		}
+		bestState = stateName
+		bestScore = score
+	}
+	if strings.TrimSpace(bestState) == "" {
+		return "", false, nil
+	}
+	return bestState, true, nil
+}
+
 // CreateIssueComment creates a top-level comment on a Linear issue.
 func (c *Client) CreateIssueComment(ctx context.Context, issueID string, body string) (string, error) {
 	const query = `
@@ -220,6 +274,29 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
             identifier
             state { name }
           }
+        }
+      }
+      comments(first: 50) {
+        nodes {
+          id
+          body
+          createdAt
+          parentId
+          children(first: 50) {
+            nodes {
+              id
+              body
+              createdAt
+              parentId
+            }
+          }
+        }
+      }
+      history(first: 100) {
+        nodes {
+          createdAt
+          fromState { name }
+          toState { name }
         }
       }
     }
@@ -449,7 +526,219 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 			issue.BlockedBy = append(issue.BlockedBy, blocker)
 		}
 	}
+	if start, end, ok := latestReviewCycleWindow(node); ok && strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
+		issue.ReviewCycle = &domain.ReviewCycle{
+			EnteredReviewAt:  start,
+			ReturnedToTodoAt: end,
+		}
+	}
+	issue.ReviewFeedback = extractReviewFeedback(issue.State, node)
 	return issue, nil
+}
+
+type linearComment struct {
+	ID        string
+	Body      string
+	CreatedAt time.Time
+	ParentID  *string
+}
+
+type linearStateChange struct {
+	CreatedAt time.Time
+	FromState string
+	ToState   string
+}
+
+func extractReviewFeedback(state string, node map[string]any) []domain.ReviewFeedback {
+	if !strings.EqualFold(strings.TrimSpace(state), "Todo") {
+		return nil
+	}
+
+	start, end, ok := latestReviewCycleWindow(node)
+	if !ok {
+		return nil
+	}
+
+	comments := flattenComments(node)
+	feedback := make([]domain.ReviewFeedback, 0, len(comments))
+	for _, comment := range comments {
+		if comment.CreatedAt.Before(start) || comment.CreatedAt.After(end) {
+			continue
+		}
+		body := strings.TrimSpace(comment.Body)
+		if body == "" || isColinComment(body) {
+			continue
+		}
+		feedback = append(feedback, domain.ReviewFeedback{
+			Body:      body,
+			CreatedAt: comment.CreatedAt,
+			ParentID:  comment.ParentID,
+		})
+	}
+	return feedback
+}
+
+func latestReviewCycleWindow(node map[string]any) (time.Time, time.Time, bool) {
+	changes := flattenStateChanges(node)
+	if len(changes) == 0 {
+		return time.Time{}, time.Time{}, false
+	}
+
+	for exitIdx := len(changes) - 1; exitIdx >= 0; exitIdx-- {
+		change := changes[exitIdx]
+		if !strings.EqualFold(strings.TrimSpace(change.FromState), "Review") || !strings.EqualFold(strings.TrimSpace(change.ToState), "Todo") {
+			continue
+		}
+		for enterIdx := exitIdx - 1; enterIdx >= 0; enterIdx-- {
+			enter := changes[enterIdx]
+			if strings.EqualFold(strings.TrimSpace(enter.ToState), "Review") {
+				return enter.CreatedAt, change.CreatedAt, true
+			}
+		}
+		break
+	}
+
+	return time.Time{}, time.Time{}, false
+}
+
+func flattenComments(node map[string]any) []linearComment {
+	nodes, ok := nestedSlice(node, "comments", "nodes")
+	if !ok {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(nodes))
+	out := make([]linearComment, 0, len(nodes))
+	for _, commentNode := range nodes {
+		if comment, ok := parseLinearComment(commentNode); ok {
+			if _, exists := seen[comment.ID]; !exists {
+				out = append(out, comment)
+				seen[comment.ID] = struct{}{}
+			}
+		}
+		if children, ok := nestedSlice(commentNode, "children", "nodes"); ok {
+			for _, childNode := range children {
+				if comment, ok := parseLinearComment(childNode); ok {
+					if _, exists := seen[comment.ID]; !exists {
+						out = append(out, comment)
+						seen[comment.ID] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			leftParent := derefStringValue(out[i].ParentID)
+			rightParent := derefStringValue(out[j].ParentID)
+			if leftParent == rightParent {
+				return out[i].Body < out[j].Body
+			}
+			return leftParent < rightParent
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+
+	return out
+}
+
+func flattenStateChanges(node map[string]any) []linearStateChange {
+	nodes, ok := nestedSlice(node, "history", "nodes")
+	if !ok {
+		return nil
+	}
+
+	out := make([]linearStateChange, 0, len(nodes))
+	for _, historyNode := range nodes {
+		createdAtRaw, ok := stringValue(historyNode["createdAt"])
+		if !ok {
+			continue
+		}
+		createdAt, err := time.Parse(time.RFC3339, createdAtRaw)
+		if err != nil {
+			continue
+		}
+		fromState, _ := nestedString(historyNode, "fromState", "name")
+		toState, _ := nestedString(historyNode, "toState", "name")
+		if strings.TrimSpace(fromState) == "" && strings.TrimSpace(toState) == "" {
+			continue
+		}
+		out = append(out, linearStateChange{
+			CreatedAt: createdAt,
+			FromState: fromState,
+			ToState:   toState,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
+func parseLinearComment(node map[string]any) (linearComment, bool) {
+	id, ok := stringValue(node["id"])
+	if !ok || strings.TrimSpace(id) == "" {
+		return linearComment{}, false
+	}
+	body, ok := stringValue(node["body"])
+	if !ok {
+		return linearComment{}, false
+	}
+	createdAtRaw, ok := stringValue(node["createdAt"])
+	if !ok {
+		return linearComment{}, false
+	}
+	createdAt, err := time.Parse(time.RFC3339, createdAtRaw)
+	if err != nil {
+		return linearComment{}, false
+	}
+	comment := linearComment{
+		ID:        id,
+		Body:      body,
+		CreatedAt: createdAt,
+	}
+	if parentID, ok := stringValue(node["parentId"]); ok && strings.TrimSpace(parentID) != "" {
+		comment.ParentID = &parentID
+	}
+	return comment, true
+}
+
+func isColinComment(body string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(body)), "[colin]")
+}
+
+func derefStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func gitAutomationMatchScore(node map[string]any, targetBranch string) int {
+	targetBranch = strings.TrimSpace(targetBranch)
+	targetNode, ok := node["targetBranch"].(map[string]any)
+	if !ok || targetNode == nil {
+		return 1
+	}
+
+	pattern, _ := stringValue(targetNode["branchPattern"])
+	isRegex, _ := targetNode["isRegex"].(bool)
+	if targetBranch == "" || strings.TrimSpace(pattern) == "" {
+		return 0
+	}
+	if isRegex {
+		matched, err := regexp.MatchString(pattern, targetBranch)
+		if err != nil || !matched {
+			return 0
+		}
+		return 2
+	}
+	if pattern == targetBranch {
+		return 3
+	}
+	return 0
 }
 
 func parseCreatedCommentID(resp map[string]any) (string, error) {

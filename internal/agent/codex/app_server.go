@@ -18,18 +18,19 @@ import (
 )
 
 type appServerClient struct {
-	cfg       domain.ServiceConfig
-	logger    *slog.Logger
-	onEvent   func(Event)
-	issue     domain.Issue
-	workspace string
-	runType   string
-	client    *sdk.Codex
-	thread    *sdk.Thread
-	threadID  string
-	sessionID string
-	pid       *int
-	stopOnce  sync.Once
+	cfg         domain.ServiceConfig
+	logger      *slog.Logger
+	onEvent     func(Event)
+	issue       domain.Issue
+	workspace   string
+	runType     string
+	client      *sdk.Codex
+	thread      *sdk.Thread
+	threadID    string
+	sessionID   string
+	pid         *int
+	lastSummary string
+	stopOnce    sync.Once
 }
 
 func (c *appServerClient) start(ctx context.Context, cwd string) error {
@@ -119,14 +120,19 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 		}
 
 		msg := notificationMessage(note)
+		eventName := translateEvent(note.Method)
+		summary := summarizeMessage(msg)
+		if shouldCaptureSummary(eventName, summary) {
+			c.lastSummary = summary
+		}
 		c.emit(Event{
-			Event:      translateEvent(note.Method),
+			Event:      eventName,
 			Timestamp:  time.Now().UTC(),
 			SessionID:  c.sessionID,
 			ThreadID:   c.threadID,
 			TurnID:     turnID,
 			PID:        c.pid,
-			Message:    summarizeMessage(msg),
+			Message:    summary,
 			Usage:      extractUsage(msg),
 			RateLimits: extractRateLimits(msg),
 			Raw:        msg,
@@ -150,6 +156,23 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 				return turnErr
 			}
 		}
+	}
+}
+
+func (c *appServerClient) finalSummary() string {
+	return strings.TrimSpace(c.lastSummary)
+}
+
+func shouldCaptureSummary(eventName, summary string) bool {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return false
+	}
+	switch eventName {
+	case EventOtherMessage, EventNotification:
+		return true
+	default:
+		return false
 	}
 }
 

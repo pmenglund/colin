@@ -265,3 +265,283 @@ func TestCurrentRateLimitsCapturesRequestHeaders(t *testing.T) {
 		t.Fatalf("nextAllowedAt = %d, want future timestamp", nextAllowedAt)
 	}
 }
+
+func TestResolveGitAutomationStatePrefersBranchSpecificMatch(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issue": map[string]any{
+					"team": map[string]any{
+						"gitAutomationStates": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"event": "merge",
+									"state": map[string]any{"name": "Merged"},
+								},
+								{
+									"event": "merge",
+									"state": map[string]any{"name": "Deployed"},
+									"targetBranch": map[string]any{
+										"branchPattern": "main",
+										"isRegex":       false,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	stateName, ok, err := client.ResolveGitAutomationState(context.Background(), "issue-1", "merge", "main")
+	if err != nil {
+		t.Fatalf("ResolveGitAutomationState() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ResolveGitAutomationState() ok = false, want true")
+	}
+	if stateName != "Deployed" {
+		t.Fatalf("stateName = %q, want %q", stateName, "Deployed")
+	}
+}
+
+func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "comments(first: 50)") {
+			t.Fatalf("query missing comments fetch: %s", request.Query)
+		}
+		if !strings.Contains(request.Query, "history(first: 100)") {
+			t.Fatalf("query missing history fetch: %s", request.Query)
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-94",
+							"title":      "Address review",
+							"state":      map[string]any{"name": "Todo"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":        "comment-old",
+										"body":      "Old review cycle feedback",
+										"createdAt": base.Add(20 * time.Minute).Format(time.RFC3339),
+										"children":  map[string]any{"nodes": []map[string]any{}},
+									},
+									{
+										"id":        "comment-human",
+										"body":      "Address the code review feedback.",
+										"createdAt": base.Add(70 * time.Minute).Format(time.RFC3339),
+										"children": map[string]any{
+											"nodes": []map[string]any{
+												{
+													"id":        "reply-human",
+													"body":      "Then mark the PR comment resolved.",
+													"createdAt": base.Add(71 * time.Minute).Format(time.RFC3339),
+													"parentId":  "comment-human",
+												},
+											},
+										},
+									},
+									{
+										"id":        "comment-colin",
+										"body":      "[colin] Colin started work on this issue.",
+										"createdAt": base.Add(72 * time.Minute).Format(time.RFC3339),
+										"children":  map[string]any{"nodes": []map[string]any{}},
+									},
+									{
+										"id":        "comment-after",
+										"body":      "This was added after the issue moved back to Todo.",
+										"createdAt": base.Add(95 * time.Minute).Format(time.RFC3339),
+										"children":  map[string]any{"nodes": []map[string]any{}},
+									},
+								},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"createdAt": base.Add(10 * time.Minute).Format(time.RFC3339),
+										"fromState": map[string]any{"name": "In Progress"},
+										"toState":   map[string]any{"name": "Review"},
+									},
+									{
+										"createdAt": base.Add(30 * time.Minute).Format(time.RFC3339),
+										"fromState": map[string]any{"name": "Review"},
+										"toState":   map[string]any{"name": "Todo"},
+									},
+									{
+										"createdAt": base.Add(60 * time.Minute).Format(time.RFC3339),
+										"fromState": map[string]any{"name": "In Progress"},
+										"toState":   map[string]any{"name": "Review"},
+									},
+									{
+										"createdAt": base.Add(90 * time.Minute).Format(time.RFC3339),
+										"fromState": map[string]any{"name": "Review"},
+										"toState":   map[string]any{"name": "Todo"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"Todo"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+
+	got := issues[0].ReviewFeedback
+	if len(got) != 2 {
+		t.Fatalf("review feedback length = %d, want 2", len(got))
+	}
+	if got[0].Body != "Address the code review feedback." {
+		t.Fatalf("first review feedback = %q, want %q", got[0].Body, "Address the code review feedback.")
+	}
+	if got[1].Body != "Then mark the PR comment resolved." {
+		t.Fatalf("second review feedback = %q, want %q", got[1].Body, "Then mark the PR comment resolved.")
+	}
+	if got[1].ParentID == nil || *got[1].ParentID != "comment-human" {
+		t.Fatalf("reply parent id = %v, want %q", got[1].ParentID, "comment-human")
+	}
+}
+
+func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-94",
+							"title":      "Address review",
+							"state":      map[string]any{"name": "Todo"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":        "comment-human",
+										"body":      "Address the review feedback.",
+										"createdAt": base.Add(10 * time.Minute).Format(time.RFC3339),
+										"children": map[string]any{
+											"nodes": []map[string]any{
+												{
+													"id":        "reply-human",
+													"body":      "Mark the PR thread resolved.",
+													"createdAt": base.Add(11 * time.Minute).Format(time.RFC3339),
+													"parentId":  "comment-human",
+												},
+											},
+										},
+									},
+									{
+										"id":        "reply-human",
+										"body":      "Mark the PR thread resolved.",
+										"createdAt": base.Add(11 * time.Minute).Format(time.RFC3339),
+										"parentId":  "comment-human",
+										"children":  map[string]any{"nodes": []map[string]any{}},
+									},
+								},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"createdAt": base.Add(5 * time.Minute).Format(time.RFC3339),
+										"fromState": map[string]any{"name": "In Progress"},
+										"toState":   map[string]any{"name": "Review"},
+									},
+									{
+										"createdAt": base.Add(20 * time.Minute).Format(time.RFC3339),
+										"fromState": map[string]any{"name": "Review"},
+										"toState":   map[string]any{"name": "Todo"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"Todo"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+
+	got := issues[0].ReviewFeedback
+	if len(got) != 2 {
+		t.Fatalf("review feedback length = %d, want 2", len(got))
+	}
+	if got[0].Body != "Address the review feedback." {
+		t.Fatalf("first review feedback = %q, want %q", got[0].Body, "Address the review feedback.")
+	}
+	if got[1].Body != "Mark the PR thread resolved." {
+		t.Fatalf("second review feedback = %q, want %q", got[1].Body, "Mark the PR thread resolved.")
+	}
+}

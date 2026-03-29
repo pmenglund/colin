@@ -17,6 +17,7 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
+	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/internal/workspace"
@@ -94,6 +95,7 @@ func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error)
 		return orchestrator.Runtime{}, err
 	}
 	manager := workspace.NewManager(cfg, logger)
+	repoManager := repoops.NewManager(cfg, logger)
 	runner := codex.NewRunner(cfg, def, trackerClient, manager, logger)
 	logger.Info(
 		"runtime loaded",
@@ -109,6 +111,7 @@ func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error)
 		Workflow:  def,
 		Config:    cfg,
 		Tracker:   trackerClient,
+		Repo:      repoManager,
 		Workspace: manager,
 		Runner:    runner,
 	}, nil

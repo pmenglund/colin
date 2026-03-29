@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
@@ -113,7 +114,26 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		return
 	}
 
+	if event.result.Status == "blocked" {
+		if strings.TrimSpace(event.result.Summary) != "" {
+			o.postReply(ctx, entry, event.result.Summary)
+		}
+		o.logger.Info(
+			"worker completed but review follow-up is incomplete; keeping issue in todo",
+			"issue_id", event.issueID,
+			"issue_identifier", entry.identifier,
+			"current_state", event.result.Issue.State,
+			"threads_handled", event.result.ThreadsHandled,
+			"threads_remaining", event.result.ThreadsRemaining,
+		)
+		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "waiting for GitHub review follow-up to complete", reviewSyncSlowPollInterval, entry.comment)
+		return
+	}
+
 	if event.result.Status == "succeeded" {
+		if event.result.RunType == codex.RunTypeCoding && strings.TrimSpace(event.result.Summary) != "" && !o.isActive(event.result.Issue.State) {
+			o.postReply(ctx, entry, event.result.Summary)
+		}
 		if event.result.RunType == codex.RunTypeReviewPublish || event.result.RunType == codex.RunTypeMerge {
 			o.completed[event.issueID] = event.result.Issue.State
 			delete(o.claimed, event.issueID)
@@ -252,8 +272,13 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		o.scheduleRetry(issueID, issue.Identifier, state.entry.Attempt+1, "no available orchestrator slots", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment)
 		return
 	}
+	prepared, ready := o.prepareReviewIssue(ctx, *issue, time.Now().UTC())
+	if !ready {
+		delete(o.claimed, issueID)
+		return
+	}
 	o.logger.Info("retry dispatching issue", "issue_id", issueID, "issue_identifier", issue.Identifier, "attempt", state.entry.Attempt)
-	o.dispatch(ctx, *issue, intPtr(state.entry.Attempt), state.comment)
+	o.dispatch(ctx, prepared, intPtr(state.entry.Attempt), state.comment)
 }
 
 func backoff(max time.Duration, attempt int) time.Duration {

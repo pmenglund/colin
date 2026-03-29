@@ -41,6 +41,8 @@ go run . /path/to/WORKFLOW.md
 - Each issue gets its own workspace directory. Colin preserves that workspace across retries and continuation runs.
 - Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
 - During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
+- Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
+- Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
 
 ## Linear State Handling
@@ -61,9 +63,13 @@ When an issue is in one of these states, Colin:
 - moves the issue to the first configured publish state when a coding run succeeds and the issue is still active
 - stops the coding run when the issue leaves the active state set
 
+When an issue moves from `Review` back to `Todo`, Colin reads the latest `Review -> Todo` cycle from the Linear timeline and injects human comments from that review window into the next prompt as review feedback. Comments starting with `[colin]` are treated as Colin-authored status updates and are excluded.
+
 Additional `Todo` rule:
 
 - Colin will not dispatch a `Todo` issue if any blocker is not in a terminal state.
+- If the issue is returning from `Review`, Colin first polls the linked GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
+- Once unresolved GitHub review threads are visible, Colin injects them into the next coding prompt alongside the human Linear review feedback from that same review cycle.
 
 ### Publish handoff state
 
@@ -84,6 +90,14 @@ Human action is expected in `Review`:
 - either move the issue back to an active state for more work
 - or move the issue to `Merge` when it is ready to land
 
+When Colin sends an issue back to `Review` after a returned review cycle, it first:
+
+- replies to and resolves the unresolved GitHub review threads it addressed
+- verifies whether any unresolved review threads remain
+- posts a Linear summary that says what changed, what was tested, how many review threads were handled, and whether the issue is ready for review
+
+If GitHub review-thread actions fail or unresolved review threads remain, Colin keeps the issue in `Todo` and posts that status in Linear instead of moving it to `Review`.
+
 ### Merge handoff state
 
 This is configured in `WORKFLOW.md` under `repo.merge_states` and currently is:
@@ -94,8 +108,9 @@ When an issue is moved to `Merge`, Colin:
 
 - ensures the branch and PR exist
 - merges the PR using the configured merge method
+- checks the team's configured Linear git `merge` automation target and, when one is configured, updates the issue to that state as part of merge completion
 
-Human action is still required after merge:
+Human action is still required after merge only if no post-merge Linear automation state is configured:
 
 - move the Linear issue to its final terminal state
 
@@ -104,6 +119,7 @@ Human action is still required after merge:
 These are configured in `WORKFLOW.md` under `tracker.terminal_states` and currently are:
 
 - `Done`
+- `Merged`
 - `Closed`
 - `Cancelled`
 - `Canceled`
@@ -126,7 +142,9 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 
 - Colin uses structured logging so `go run .` shows service activity, dispatches, retries, Codex session progress, and handoff automation.
 - Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
+- Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
 - The dashboard shows current running issues, queued retries, token totals, and the latest rate-limit snapshot. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.
 - Colin automatically moves successful coding runs into the first configured publish state, which is currently `Review`.
-- Colin does not automatically move issues out of `Review` or `Merge`; those handoffs still require a human.
+- Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.
+- Colin can automatically move an issue out of `Merge` when the Linear team has a git `merge` automation target configured, which this repository currently does (`Merged`).

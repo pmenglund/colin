@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -27,6 +29,12 @@ type Result struct {
 	PRState  string
 	Commit   string
 	Action   string
+}
+
+// ReviewContext captures the PR and its unresolved review threads for an issue branch.
+type ReviewContext struct {
+	PullRequest domain.PullRequestRef
+	Threads     []domain.GitHubReviewThread
 }
 
 // Manager performs git and GitHub operations for a workspace.
@@ -139,6 +147,86 @@ func (m *Manager) Merge(ctx context.Context, issue domain.Issue, workspacePath s
 	return result, nil
 }
 
+// ReviewContext returns the current PR and unresolved review threads for the issue branch.
+func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspacePath string) (ReviewContext, error) {
+	branch := ""
+	if issue.BranchName != nil {
+		branch = strings.TrimSpace(*issue.BranchName)
+	}
+	if branch == "" {
+		current, err := m.currentBranch(ctx, workspacePath)
+		if err != nil {
+			return ReviewContext{}, err
+		}
+		branch = current
+	}
+
+	pr, err := m.findPullRequest(ctx, workspacePath, branch)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+	if pr == nil {
+		return ReviewContext{}, nil
+	}
+
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+
+	threads, err := m.fetchReviewThreads(ctx, workspacePath, owner, name, pr.Number)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+	return ReviewContext{
+		PullRequest: domain.PullRequestRef{
+			Number: pr.Number,
+			URL:    pr.URL,
+			State:  pr.State,
+		},
+		Threads: threads,
+	}, nil
+}
+
+// ReplyAndResolveReviewThread posts a reply and resolves a review thread.
+func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath string, thread domain.GitHubReviewThread, body string) error {
+	if strings.TrimSpace(thread.ID) == "" {
+		return errors.New("missing review thread id")
+	}
+	if !thread.CanReply {
+		return errors.New("review thread not replyable")
+	}
+	if !thread.CanResolve {
+		return errors.New("review thread not resolvable")
+	}
+	replyBody := strings.TrimSpace(body)
+	if replyBody == "" {
+		return errors.New("missing review reply body")
+	}
+
+	const replyMutation = `mutation ReplyReviewThread($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+    comment { id url }
+  }
+}`
+	if _, err := m.runGraphQL(ctx, workspacePath, 30*time.Second, replyMutation, map[string]string{
+		"threadId": thread.ID,
+		"body":     replyBody,
+	}); err != nil {
+		return err
+	}
+
+	const resolveMutation = `mutation ResolveReviewThread($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
+    thread { id isResolved }
+  }
+}`
+	_, err := m.runGraphQL(ctx, workspacePath, 30*time.Second, resolveMutation, map[string]string{
+		"threadId": thread.ID,
+	})
+	return err
+}
+
 type pullRequest struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
@@ -231,6 +319,256 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func (m *Manager) remoteRepository(ctx context.Context, workspacePath string) (string, string, error) {
+	remoteURL, err := m.run(ctx, workspacePath, 15*time.Second, "git", "remote", "get-url", m.cfg.Repo.RemoteName)
+	if err != nil {
+		return "", "", err
+	}
+	return parseRemoteRepository(strings.TrimSpace(remoteURL))
+}
+
+func parseRemoteRepository(remoteURL string) (string, string, error) {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return "", "", errors.New("empty remote url")
+	}
+	if strings.Contains(remoteURL, "://") {
+		u, err := url.Parse(remoteURL)
+		if err != nil {
+			return "", "", err
+		}
+		repoPath := strings.Trim(path.Clean(u.Path), "/")
+		parts := strings.Split(repoPath, "/")
+		if len(parts) < 2 {
+			return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
+		}
+		return parts[len(parts)-2], strings.TrimSuffix(parts[len(parts)-1], ".git"), nil
+	}
+	if idx := strings.Index(remoteURL, ":"); idx >= 0 {
+		repoPath := strings.Trim(remoteURL[idx+1:], "/")
+		parts := strings.Split(repoPath, "/")
+		if len(parts) < 2 {
+			return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
+		}
+		return parts[len(parts)-2], strings.TrimSuffix(parts[len(parts)-1], ".git"), nil
+	}
+	if strings.HasSuffix(remoteURL, ".git") {
+		return "local", strings.TrimSuffix(path.Base(remoteURL), ".git"), nil
+	}
+	return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
+}
+
+func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.GitHubReviewThread, error) {
+	const query = `query ReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50, after: $cursor) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          viewerCanReply
+          viewerCanResolve
+          path
+          line
+          startLine
+          comments(first: 20) {
+            nodes {
+              id
+              body
+              url
+              createdAt
+              author { login }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`
+
+	var (
+		cursor  string
+		threads []domain.GitHubReviewThread
+	)
+	for {
+		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
+			"owner":  owner,
+			"name":   name,
+			"number": fmt.Sprintf("%d", prNumber),
+			"cursor": cursor,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		nodes, ok := nestedSlice(resp, "data", "repository", "pullRequest", "reviewThreads", "nodes")
+		if !ok {
+			return nil, nil
+		}
+		for _, node := range nodes {
+			thread, ok := parseReviewThread(node)
+			if !ok || thread.IsResolved {
+				continue
+			}
+			threads = append(threads, thread)
+		}
+		hasNextPage, _ := nestedBool(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "hasNextPage")
+		if !hasNextPage {
+			break
+		}
+		nextCursor, ok := nestedString(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "endCursor")
+		if !ok || strings.TrimSpace(nextCursor) == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+	return threads, nil
+}
+
+func (m *Manager) runGraphQL(ctx context.Context, cwd string, timeout time.Duration, query string, vars map[string]string) (map[string]any, error) {
+	args := []string{"api", "graphql", "-f", "query=" + query}
+	for key, value := range vars {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		flag := "-F"
+		if key == "body" {
+			flag = "-f"
+		}
+		args = append(args, flag, fmt.Sprintf("%s=%s", key, value))
+	}
+	out, err := m.run(ctx, cwd, timeout, "gh", args...)
+	if err != nil {
+		return nil, err
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		return nil, err
+	}
+	if errorsField, ok := decoded["errors"]; ok && errorsField != nil {
+		return nil, fmt.Errorf("graphql errors: %v", errorsField)
+	}
+	return decoded, nil
+}
+
+func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
+	id, _ := stringValue(node["id"])
+	pathValue, _ := stringValue(node["path"])
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(pathValue) == "" {
+		return domain.GitHubReviewThread{}, false
+	}
+	comments, ok := nestedSlice(node, "comments", "nodes")
+	if !ok || len(comments) == 0 {
+		return domain.GitHubReviewThread{}, false
+	}
+	comment := comments[len(comments)-1]
+	commentID, _ := stringValue(comment["id"])
+	body, _ := stringValue(comment["body"])
+	commentURL, _ := stringValue(comment["url"])
+	author, _ := nestedString(comment, "author", "login")
+
+	thread := domain.GitHubReviewThread{
+		ID:         id,
+		Path:       pathValue,
+		CommentID:  commentID,
+		CommentURL: commentURL,
+		Author:     author,
+		Body:       strings.TrimSpace(body),
+		IsResolved: boolValue(node["isResolved"]),
+		IsOutdated: boolValue(node["isOutdated"]),
+		CanReply:   boolValue(node["viewerCanReply"]),
+		CanResolve: boolValue(node["viewerCanResolve"]),
+	}
+	if value, ok := intValue(node["line"]); ok {
+		thread.Line = &value
+	}
+	if value, ok := intValue(node["startLine"]); ok {
+		thread.StartLine = &value
+	}
+	if rawCreated, ok := stringValue(comment["createdAt"]); ok {
+		if createdAt, err := time.Parse(time.RFC3339, rawCreated); err == nil {
+			thread.CreatedAt = &createdAt
+		}
+	}
+	return thread, true
+}
+
+func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok || value == nil {
+		return nil, false
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		asMap, ok := item.(map[string]any)
+		if ok {
+			out = append(out, asMap)
+		}
+	}
+	return out, true
+}
+
+func nestedBool(root map[string]any, keys ...string) (bool, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok {
+		return false, false
+	}
+	return boolValue(value), true
+}
+
+func nestedString(root map[string]any, keys ...string) (string, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok {
+		return "", false
+	}
+	return stringValue(value)
+}
+
+func nestedValue(root map[string]any, keys ...string) (any, bool) {
+	current := any(root)
+	for _, key := range keys {
+		asMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = asMap[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func stringValue(value any) (string, bool) {
+	v, ok := value.(string)
+	return v, ok
+}
+
+func intValue(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func boolValue(value any) bool {
+	v, _ := value.(bool)
+	return v
 }
 
 func (m *Manager) run(ctx context.Context, cwd string, timeout time.Duration, name string, args ...string) (string, error) {

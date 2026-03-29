@@ -78,11 +78,15 @@ type Event struct {
 
 // Result is the terminal outcome of one runner invocation for a single issue.
 type Result struct {
-	Issue         domain.Issue
-	RunType       string
-	WorkspacePath string
-	Status        string
-	Err           error
+	Issue            domain.Issue
+	RunType          string
+	WorkspacePath    string
+	Status           string
+	Summary          string
+	PR               *domain.PullRequestRef
+	ThreadsHandled   int
+	ThreadsRemaining int
+	Err              error
 }
 
 type protocolLine struct {

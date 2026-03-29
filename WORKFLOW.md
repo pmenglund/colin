@@ -8,6 +8,7 @@ tracker:
     - In Progress
   terminal_states:
     - Done
+    - Merged
     - Closed
     - Cancelled
     - Canceled
@@ -72,6 +73,23 @@ Issue context:
 Issue description:
 
 {{.issue.description}}
+{{- end }}
+
+{{- if .issue.review_feedback }}
+Review feedback:
+{{- range .issue.review_feedback }}
+- {{ .body }}
+{{- end }}
+
+{{- end }}
+
+{{- if .issue.review_threads }}
+GitHub review threads:
+{{- range .issue.review_threads }}
+- {{ .path }}{{- if .line }}:{{ .line }}{{ end }} by {{ .author }}: {{ .body }}
+  {{- if .comment_url }} ({{ .comment_url }}){{ end }}
+{{- end }}
+
 {{- end }}
 
 {{- if .attempt }}
