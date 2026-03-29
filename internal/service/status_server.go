@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -460,6 +461,9 @@ func buildStatusPage(snapshot domain.Snapshot, issues []domain.Issue, activeStat
 				data.DraftPRCount++
 			}
 		}
+		sort.Slice(view.PRs, func(i, j int) bool {
+			return statusPullRequestLess(view.PRs[i], view.PRs[j])
+		})
 		data.Issues = append(data.Issues, view)
 	}
 
@@ -545,6 +549,50 @@ func pullRequestStatus(pr domain.PullRequest) (string, string) {
 	default:
 		return "pending", "pending"
 	}
+}
+
+func statusPullRequestLess(left, right statusPullRequest) bool {
+	leftRepository := strings.ToLower(strings.TrimSpace(left.Repository))
+	rightRepository := strings.ToLower(strings.TrimSpace(right.Repository))
+	if leftRepository != rightRepository {
+		return leftRepository < rightRepository
+	}
+
+	leftNumber, leftHasNumber := statusPullRequestSortNumber(left)
+	rightNumber, rightHasNumber := statusPullRequestSortNumber(right)
+	if leftHasNumber != rightHasNumber {
+		return leftHasNumber
+	}
+	if leftHasNumber && rightHasNumber && leftNumber != rightNumber {
+		return leftNumber < rightNumber
+	}
+
+	if left.URL != right.URL {
+		return left.URL < right.URL
+	}
+	if left.Title != right.Title {
+		return left.Title < right.Title
+	}
+	if left.StatusClass != right.StatusClass {
+		return left.StatusClass < right.StatusClass
+	}
+	return left.Status < right.Status
+}
+
+func statusPullRequestSortNumber(pr statusPullRequest) (int, bool) {
+	if _, _, number, ok := githubutil.ParsePullRequestURL(pr.URL); ok {
+		return number, true
+	}
+
+	raw := strings.TrimPrefix(strings.TrimSpace(pr.Number), "#")
+	if raw == "" {
+		return 0, false
+	}
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return 0, false
+	}
+	return number, true
 }
 
 func runtimePriority(value string) int {

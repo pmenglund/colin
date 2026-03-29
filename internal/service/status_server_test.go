@@ -402,6 +402,65 @@ func TestBuildStatusPageHidesNonActiveIssuesWithOnlyClosedOrMergedPullRequests(t
 	}
 }
 
+func TestBuildStatusPageSortsPullRequestsDeterministically(t *testing.T) {
+	now := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-103",
+		Title:      "Multiple pull requests",
+		State:      "Review",
+		PullRequests: []domain.PullRequest{
+			{
+				URL:    "https://github.com/pmenglund/colin/pull/12",
+				Title:  "COLIN-103: later pull request",
+				Status: "open",
+			},
+			{
+				URL:    "https://github.com/pmenglund/colin/pull/3",
+				Title:  "COLIN-103: earlier pull request",
+				Status: "open",
+			},
+			{
+				URL:    "https://github.com/other/repo/pull/1",
+				Title:  "COLIN-103: different repository",
+				Status: "open",
+			},
+			{
+				URL:    "https://example.com/not-a-pr",
+				Title:  "COLIN-103: fallback ordering",
+				Status: "open",
+			},
+		},
+	}
+
+	page := buildStatusPage(domain.Snapshot{GeneratedAt: now}, []domain.Issue{issue}, []string{"Todo", "In Progress"})
+
+	if len(page.Issues) != 1 {
+		t.Fatalf("len(page.Issues) = %d, want 1", len(page.Issues))
+	}
+	if len(page.Issues[0].PRs) != 4 {
+		t.Fatalf("len(page.Issues[0].PRs) = %d, want 4", len(page.Issues[0].PRs))
+	}
+
+	got := []string{
+		page.Issues[0].PRs[0].URL,
+		page.Issues[0].PRs[1].URL,
+		page.Issues[0].PRs[2].URL,
+		page.Issues[0].PRs[3].URL,
+	}
+	want := []string{
+		"https://example.com/not-a-pr",
+		"https://github.com/other/repo/pull/1",
+		"https://github.com/pmenglund/colin/pull/3",
+		"https://github.com/pmenglund/colin/pull/12",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("page.Issues[0].PRs[%d].URL = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestBuildStatusPullRequestTreatsClosedTimestampAsClosed(t *testing.T) {
 	now := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
 
