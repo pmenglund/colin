@@ -100,6 +100,11 @@ func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error)
 	if err != nil {
 		return orchestrator.Runtime{}, err
 	}
+	validateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := trackerClient.ValidateConfiguredStates(validateCtx); err != nil {
+		return orchestrator.Runtime{}, fmt.Errorf("validate Linear workflow states: %w", err)
+	}
 	manager := workspace.NewManager(cfg, logger)
 	repoManager := repoops.NewManager(cfg, logger)
 	runner := codex.NewRunner(cfg, def, trackerClient, manager, logger)

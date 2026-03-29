@@ -391,6 +391,111 @@ func TestResolveGitAutomationStatePrefersBranchSpecificMatch(t *testing.T) {
 	}
 }
 
+func TestValidateConfiguredStates(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "ProjectWorkflowStates") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Done"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:         server.URL,
+		apiKey:           "token",
+		project:          "test-project",
+		configuredStates: []string{"Todo", "In Progress", "Review", "Merge", "Done"},
+		client:           &http.Client{Timeout: 5 * time.Second},
+	}
+
+	if err := client.ValidateConfiguredStates(context.Background()); err != nil {
+		t.Fatalf("ValidateConfiguredStates() error = %v", err)
+	}
+}
+
+func TestValidateConfiguredStatesMissingState(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Done"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:         server.URL,
+		apiKey:           "token",
+		project:          "test-project",
+		configuredStates: []string{"Todo", "In Progress", "Review", "Merge", "Done"},
+		client:           &http.Client{Timeout: 5 * time.Second},
+	}
+
+	err := client.ValidateConfiguredStates(context.Background())
+	if !errors.Is(err, ErrMissingStates) {
+		t.Fatalf("ValidateConfiguredStates() error = %v, want ErrMissingStates", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "Merge") {
+		t.Fatalf("ValidateConfiguredStates() error = %v, want missing Merge in message", err)
+	}
+}
+
 func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 	t.Parallel()
 

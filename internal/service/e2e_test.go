@@ -259,6 +259,49 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
+func TestServiceStartupFailsWhenConfiguredLinearStateIsMissing(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	linear := newFakeLinearServer(filepath.Join(tempDir, "codex.marker"))
+	linear.availableStates = []string{"Todo", "In Progress", "Review", "Done"}
+	server := httptest.NewServer(linear)
+	defer server.Close()
+
+	workflowPath := filepath.Join(tempDir, "WORKFLOW.md")
+	workflow := fmt.Sprintf(`---
+tracker:
+  kind: linear
+  endpoint: %q
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+---
+Work on {{ .issue.identifier }}.
+`, server.URL)
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := New(logger, workflowPath)
+	if err == nil {
+		t.Fatal("New() error = nil, want missing Linear state failure")
+	}
+	if !strings.Contains(err.Error(), "Merge") {
+		t.Fatalf("New() error = %v, want missing Merge state in message", err)
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return
@@ -490,6 +533,7 @@ type fakeLinearServer struct {
 	markerPath       string
 	authHeader       string
 	current          string
+	availableStates  []string
 	candidateFetches int
 	stateFetches     int
 	comments         []fakeLinearComment
@@ -498,7 +542,12 @@ type fakeLinearServer struct {
 }
 
 func newFakeLinearServer(markerPath string) *fakeLinearServer {
-	return &fakeLinearServer{markerPath: markerPath, current: "Todo", nextCommentID: 1}
+	return &fakeLinearServer{
+		markerPath:      markerPath,
+		current:         "Todo",
+		availableStates: []string{"Todo", "In Progress", "Review", "Merge", "Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
+		nextCommentID:   1,
+	}
 }
 
 func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -549,18 +598,33 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
+	case strings.Contains(request.Query, "ProjectWorkflowStates"):
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"states": map[string]any{
+											"nodes": s.stateNodes(),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
 	case strings.Contains(request.Query, "IssueTeamStates"):
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issue": map[string]any{
 					"team": map[string]any{
 						"states": map[string]any{
-							"nodes": []map[string]any{
-								{"id": "state-todo", "name": "Todo"},
-								{"id": "state-in-progress", "name": "In Progress"},
-								{"id": "state-review", "name": "Review"},
-								{"id": "state-done", "name": "Done"},
-							},
+							"nodes": s.stateNodes(),
 						},
 					},
 				},
@@ -638,6 +702,19 @@ func (s *fakeLinearServer) setCurrentState(state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.current = state
+}
+
+func (s *fakeLinearServer) stateNodes() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nodes := make([]map[string]any, 0, len(s.availableStates))
+	for _, state := range s.availableStates {
+		nodes = append(nodes, map[string]any{
+			"id":   fakeLinearStateID(state),
+			"name": state,
+		})
+	}
+	return nodes
 }
 
 func (s *fakeLinearServer) issueNode(state string) map[string]any {
@@ -780,8 +857,43 @@ func fakeLinearStateName(stateID string) string {
 		return "In Progress"
 	case "state-review":
 		return "Review"
+	case "state-merge":
+		return "Merge"
 	case "state-done":
 		return "Done"
+	case "state-closed":
+		return "Closed"
+	case "state-cancelled":
+		return "Cancelled"
+	case "state-canceled":
+		return "Canceled"
+	case "state-duplicate":
+		return "Duplicate"
+	default:
+		return ""
+	}
+}
+
+func fakeLinearStateID(state string) string {
+	switch state {
+	case "Todo":
+		return "state-todo"
+	case "In Progress":
+		return "state-in-progress"
+	case "Review":
+		return "state-review"
+	case "Merge":
+		return "state-merge"
+	case "Done":
+		return "state-done"
+	case "Closed":
+		return "state-closed"
+	case "Cancelled":
+		return "state-cancelled"
+	case "Canceled":
+		return "state-canceled"
+	case "Duplicate":
+		return "state-duplicate"
 	default:
 		return ""
 	}

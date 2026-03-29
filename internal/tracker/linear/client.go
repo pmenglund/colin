@@ -27,6 +27,7 @@ var (
 	ErrUnknownPayload   = errors.New("linear_unknown_payload")
 	ErrMissingEndCursor = errors.New("linear_missing_end_cursor")
 	ErrUnknownState     = errors.New("linear_unknown_state")
+	ErrMissingStates    = errors.New("linear_missing_states")
 )
 
 const (
@@ -37,13 +38,19 @@ const (
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
-	endpoint string
-	apiKey   string
-	project  string
-	active   []string
-	client   *http.Client
-	rateMu   sync.RWMutex
-	rateInfo map[string]any
+	endpoint         string
+	apiKey           string
+	project          string
+	active           []string
+	configuredStates []string
+	client           *http.Client
+	rateMu           sync.RWMutex
+	rateInfo         map[string]any
+}
+
+type projectTeamStates struct {
+	name   string
+	states []string
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -52,14 +59,57 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		endpoint: cfg.Tracker.Endpoint,
-		apiKey:   cfg.Tracker.APIKey,
-		project:  cfg.Tracker.ProjectSlug,
-		active:   slices.Clone(config.CandidateStates(cfg)),
+		endpoint:         cfg.Tracker.Endpoint,
+		apiKey:           cfg.Tracker.APIKey,
+		project:          cfg.Tracker.ProjectSlug,
+		active:           slices.Clone(config.CandidateStates(cfg)),
+		configuredStates: configuredStates(cfg),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}, nil
+}
+
+// ValidateConfiguredStates checks that the configured workflow states exist in the Linear project.
+func (c *Client) ValidateConfiguredStates(ctx context.Context) error {
+	if len(c.configuredStates) == 0 {
+		return nil
+	}
+
+	teams, err := c.fetchProjectTeams(ctx)
+	if err != nil {
+		return err
+	}
+
+	failures := make([]string, 0)
+	for _, team := range teams {
+		availableSet := config.NormalizedStateSet(team.states)
+		seen := map[string]struct{}{}
+		missing := make([]string, 0)
+		for _, state := range c.configuredStates {
+			state = strings.TrimSpace(state)
+			if state == "" {
+				continue
+			}
+			key := config.StateKey(state)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if _, ok := availableSet[key]; ok {
+				continue
+			}
+			missing = append(missing, state)
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		failures = append(failures, fmt.Sprintf("%s: %s", fallbackString(team.name, "unknown team"), strings.Join(missing, ", ")))
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: project %q is missing required workflow states: %s", ErrMissingStates, c.project, strings.Join(failures, "; "))
 }
 
 // FetchCandidateIssues returns the current active issues for the configured Linear project.
@@ -390,6 +440,64 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
 	return out, nil
 }
 
+func (c *Client) fetchProjectTeams(ctx context.Context) ([]projectTeamStates, error) {
+	const query = `
+query ProjectWorkflowStates($projectSlug: String!) {
+  projects(first: 1, filter: { slugId: { eq: $projectSlug } }) {
+    nodes {
+      teams(first: 50) {
+        nodes {
+          name
+          states(first: 50) {
+            nodes {
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"projectSlug": c.project})
+	if err != nil {
+		return nil, err
+	}
+	projects, ok := nestedSlice(resp, "data", "projects", "nodes")
+	if !ok || len(projects) == 0 {
+		return nil, ErrUnknownPayload
+	}
+
+	teamsOut := make([]projectTeamStates, 0)
+	for _, project := range projects {
+		teams, ok := nestedSlice(project, "teams", "nodes")
+		if !ok {
+			continue
+		}
+		for _, team := range teams {
+			entry := projectTeamStates{}
+			entry.name, _ = stringValue(team["name"])
+			nodes, ok := nestedSlice(team, "states", "nodes")
+			if !ok {
+				continue
+			}
+			for _, node := range nodes {
+				name, _ := stringValue(node["name"])
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				entry.states = append(entry.states, name)
+			}
+			teamsOut = append(teamsOut, entry)
+		}
+	}
+	if len(teamsOut) == 0 {
+		return nil, ErrUnknownPayload
+	}
+	return teamsOut, nil
+}
+
 func (c *Client) lookupStateID(ctx context.Context, issueID string, stateName string) (string, error) {
 	const query = `
 query IssueTeamStates($id: String!) {
@@ -426,6 +534,32 @@ query IssueTeamStates($id: String!) {
 		return stateID, nil
 	}
 	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
+}
+
+func configuredStates(cfg domain.ServiceConfig) []string {
+	seen := map[string]struct{}{}
+	var states []string
+	for _, state := range append(config.CandidateStates(cfg), cfg.Tracker.TerminalStates...) {
+		state = strings.TrimSpace(state)
+		if state == "" {
+			continue
+		}
+		key := config.StateKey(state)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		states = append(states, state)
+	}
+	return states
+}
+
+func fallbackString(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func (c *Client) doQuery(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {
