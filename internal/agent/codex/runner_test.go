@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/workspace"
 )
 
@@ -129,6 +131,87 @@ func TestApplyPostMergeStateSkipsWhenNoAutomationTargetExists(t *testing.T) {
 	}
 	if tracker.updatedIssueID != "" {
 		t.Fatalf("updated issue id = %q, want empty", tracker.updatedIssueID)
+	}
+}
+
+func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenApprovalPending(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, time.March, 28, 18, 1, 0, 0, time.UTC)
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-94",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest:            domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
+		CodexReviewRequestedAt: &requestedAt,
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if issue.State != "Review" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Review")
+	}
+	if tracker.updatedState != "Review" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	}
+	if !strings.Contains(summary, "thumbs up") {
+		t.Fatalf("summary = %q, want thumbs up blocker", summary)
+	}
+}
+
+func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenThreadsRemain(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, time.March, 28, 18, 1, 0, 0, time.UTC)
+	approvedAt := requestedAt.Add(time.Minute)
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-94",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest:            domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
+		CodexReviewRequestedAt: &requestedAt,
+		CodexReviewApprovedAt:  &approvedAt,
+		CodexReviewThreads: []domain.GitHubReviewThread{
+			{ID: "thread-1", Path: "internal/foo.go", Body: "Please fix this."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if issue.State != "Review" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Review")
+	}
+	if len(issue.ReviewThreads) != 1 {
+		t.Fatalf("issue.ReviewThreads length = %d, want 1", len(issue.ReviewThreads))
+	}
+	if !strings.Contains(summary, "Unresolved Codex review threads") {
+		t.Fatalf("summary = %q, want unresolved thread blocker", summary)
 	}
 }
 
@@ -266,6 +349,8 @@ type stubTracker struct {
 	updatedIssueID      string
 	updatedState        string
 	updatedStates       []string
+	issueComments       []string
+	commentReplies      []string
 	metadata            domain.ColinMetadata
 	resolvedMergeState  string
 	resolveMergeStateOK bool
@@ -297,11 +382,13 @@ func (s *stubTracker) ResolveGitAutomationState(_ context.Context, issueID strin
 	return s.resolvedMergeState, s.resolveMergeStateOK, nil
 }
 
-func (s *stubTracker) CreateIssueComment(context.Context, string, string) (string, error) {
+func (s *stubTracker) CreateIssueComment(_ context.Context, _ string, body string) (string, error) {
+	s.issueComments = append(s.issueComments, body)
 	return "", nil
 }
 
-func (s *stubTracker) CreateCommentReply(context.Context, string, string, string) (string, error) {
+func (s *stubTracker) CreateCommentReply(_ context.Context, _ string, _ string, body string) (string, error) {
+	s.commentReplies = append(s.commentReplies, body)
 	return "", nil
 }
 

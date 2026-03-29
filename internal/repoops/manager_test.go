@@ -123,6 +123,38 @@ func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	}
 }
 
+func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
+	workspacePath, _, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address Codex review"}
+	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"chatgpt-codex-connector[bot]"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REACTIONS"), `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-28T18:01:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"content":"THUMBS_UP","createdAt":"2026-03-28T18:02:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+
+	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address Codex review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if len(reviewContext.CodexReviewThreads) != 1 {
+		t.Fatalf("codex review threads length = %d, want 1", len(reviewContext.CodexReviewThreads))
+	}
+	if reviewContext.CodexReviewRequestedAt == nil {
+		t.Fatal("CodexReviewRequestedAt = nil, want timestamp")
+	}
+	if reviewContext.CodexReviewApprovedAt == nil {
+		t.Fatal("CodexReviewApprovedAt = nil, want timestamp")
+	}
+}
+
 func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
 	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
 	manager := NewManager(testConfig(), testLogger())
@@ -154,6 +186,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	binPath := filepath.Join(tempDir, "bin")
 	ghStatePath := filepath.Join(tempDir, "gh-state.json")
 	ghReviewThreadsPath := filepath.Join(tempDir, "gh-review-threads.json")
+	ghReactionsPath := filepath.Join(tempDir, "gh-reactions.json")
 	ghLogPath = filepath.Join(tempDir, "gh.log")
 
 	runCmd(t, "", "git", "init", "--bare", remotePath)
@@ -175,6 +208,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	}
 	writeFile(t, ghStatePath, "[]\n")
 	writeFile(t, ghReviewThreadsPath, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	writeFile(t, ghReactionsPath, `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	writeFile(t, filepath.Join(binPath, "gh"), fakeGHScript)
 	if err := os.Chmod(filepath.Join(binPath, "gh"), 0o755); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -183,6 +217,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	t.Setenv("PATH", binPath+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("COLIN_FAKE_GH_STATE", ghStatePath)
 	t.Setenv("COLIN_FAKE_GH_REVIEW_THREADS", ghReviewThreadsPath)
+	t.Setenv("COLIN_FAKE_GH_REACTIONS", ghReactionsPath)
 	t.Setenv("COLIN_FAKE_GH_LOG", ghLogPath)
 
 	return workspacePath, remotePath, ghLogPath
@@ -261,6 +296,9 @@ case "$1 $2" in
     case "$*" in
       *"ReviewThreads"*)
         cat "$COLIN_FAKE_GH_REVIEW_THREADS"
+        ;;
+      *"PullRequestReactions"*)
+        cat "$COLIN_FAKE_GH_REACTIONS"
         ;;
       *"ReplyReviewThread"*)
         printf '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"reply-1","url":"https://example.test/comment/reply-1"}}}}\n'
