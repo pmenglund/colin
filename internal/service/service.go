@@ -11,6 +11,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/config"
+	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/workflow"
@@ -25,6 +26,9 @@ type Service struct {
 	orch         *orchestrator.Orchestrator
 	runtimeMu    sync.RWMutex
 	runtime      orchestrator.Runtime
+	statusMu     sync.Mutex
+	statusIssues []domain.Issue
+	statusLoaded time.Time
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
@@ -146,6 +150,7 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 			s.runtimeMu.Lock()
 			s.runtime = runtime
 			s.runtimeMu.Unlock()
+			s.invalidateStatusCache()
 			s.logger.Info("workflow reloaded", "path", s.workflowPath)
 			s.orch.UpdateRuntime(runtime)
 		}
@@ -156,6 +161,13 @@ func (s *Service) currentRuntime() orchestrator.Runtime {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	return s.runtime
+}
+
+func (s *Service) invalidateStatusCache() {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.statusIssues = nil
+	s.statusLoaded = time.Time{}
 }
 
 // NewDefaultLogger returns the repo-default structured logger.

@@ -294,12 +294,13 @@ func TestBuildStatusPageHidesNonActiveIssuesWithMergedStatusStringOnly(t *testin
 	}
 }
 
-func TestBuildStatusPageFetchesAllProjectIssues(t *testing.T) {
+func TestBuildStatusPageCachesWholeProjectFetches(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	orch := orchestrator.New(orchestrator.Runtime{}, logger)
 
+	fetchCalls := 0
 	var gotStates []string
 	svc := &Service{
 		logger: logger,
@@ -312,6 +313,7 @@ func TestBuildStatusPageFetchesAllProjectIssues(t *testing.T) {
 			},
 			Tracker: &fakeTrackerClient{
 				fetchIssuesByStates: func(_ context.Context, states []string) ([]domain.Issue, error) {
+					fetchCalls++
 					gotStates = states
 					return []domain.Issue{{
 						ID:         "issue-1",
@@ -344,11 +346,21 @@ func TestBuildStatusPageFetchesAllProjectIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildStatusPage() error = %v", err)
 	}
+	secondPage, err := svc.buildStatusPage(context.Background())
+	if err != nil {
+		t.Fatalf("second buildStatusPage() error = %v", err)
+	}
 	if gotStates != nil {
 		t.Fatalf("FetchIssuesByStates() states = %v, want nil", gotStates)
 	}
+	if fetchCalls != 1 {
+		t.Fatalf("FetchIssuesByStates() call count = %d, want 1", fetchCalls)
+	}
 	if page.VisibleIssues != 1 {
 		t.Fatalf("page.VisibleIssues = %d, want 1", page.VisibleIssues)
+	}
+	if secondPage.VisibleIssues != 1 {
+		t.Fatalf("secondPage.VisibleIssues = %d, want 1", secondPage.VisibleIssues)
 	}
 }
 

@@ -417,18 +417,47 @@ func mergePullRequest(existing, incoming domain.PullRequest) domain.PullRequest 
 	if merged.MergedAt == nil {
 		merged.MergedAt = secondary.MergedAt
 	}
-	if pullRequestStatePriority(secondary) > pullRequestStatePriority(merged) {
-		merged.Status = secondary.Status
-		merged.Draft = secondary.Draft
-		if secondary.ClosedAt != nil {
-			merged.ClosedAt = secondary.ClosedAt
-		}
-		if secondary.MergedAt != nil {
-			merged.MergedAt = secondary.MergedAt
-		}
-	}
+
+	state := selectPullRequestState(existing, incoming)
+	merged.Status = state.Status
+	merged.Draft = state.Draft
+	merged.ClosedAt = state.ClosedAt
+	merged.MergedAt = state.MergedAt
 
 	return merged
+}
+
+func selectPullRequestState(existing, incoming domain.PullRequest) domain.PullRequest {
+	existingUpdated := pullRequestStateUpdatedAt(existing)
+	incomingUpdated := pullRequestStateUpdatedAt(incoming)
+	switch {
+	case existingUpdated != nil && incomingUpdated != nil && !existingUpdated.Equal(*incomingUpdated):
+		if incomingUpdated.After(*existingUpdated) {
+			return incoming
+		}
+		return existing
+	case hasPullRequestState(existing) && !hasPullRequestState(incoming):
+		return existing
+	case hasPullRequestState(incoming) && !hasPullRequestState(existing):
+		return incoming
+	case pullRequestStatePriority(incoming) > pullRequestStatePriority(existing):
+		return incoming
+	default:
+		return existing
+	}
+}
+
+func hasPullRequestState(pr domain.PullRequest) bool {
+	return strings.TrimSpace(pr.Status) != "" || pr.Draft || pr.ClosedAt != nil || pr.MergedAt != nil
+}
+
+func pullRequestStateUpdatedAt(pr domain.PullRequest) *time.Time {
+	for _, candidate := range []*time.Time{pr.UpdatedAt, pr.MergedAt, pr.ClosedAt, pr.CreatedAt} {
+		if candidate != nil {
+			return candidate
+		}
+	}
+	return nil
 }
 
 func pullRequestStatePriority(pr domain.PullRequest) int {

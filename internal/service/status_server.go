@@ -15,7 +15,10 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/githubutil"
+	"github.com/pmenglund/colin/internal/orchestrator"
 )
+
+const statusIssueCacheTTL = 30 * time.Second
 
 type statusPageData struct {
 	GeneratedAt    time.Time           `json:"generated_at"`
@@ -400,12 +403,29 @@ func (s *Service) buildStatusPage(ctx context.Context) (statusPageData, error) {
 	}
 
 	runtime := s.currentRuntime()
-	issues, err := runtime.Tracker.FetchIssuesByStates(ctx, nil)
+	issues, err := s.loadStatusIssues(ctx, runtime)
 	if err != nil {
 		return statusPageData{}, fmt.Errorf("read tracker issues: %w", err)
 	}
 
 	return buildStatusPage(snapshot, issues, runtime.Config.Tracker.ActiveStates), nil
+}
+
+func (s *Service) loadStatusIssues(ctx context.Context, runtime orchestrator.Runtime) ([]domain.Issue, error) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+
+	if !s.statusLoaded.IsZero() && time.Since(s.statusLoaded) < statusIssueCacheTTL {
+		return s.statusIssues, nil
+	}
+
+	issues, err := runtime.Tracker.FetchIssuesByStates(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	s.statusIssues = issues
+	s.statusLoaded = time.Now()
+	return s.statusIssues, nil
 }
 
 func buildStatusPage(snapshot domain.Snapshot, issues []domain.Issue, activeStates []string) statusPageData {

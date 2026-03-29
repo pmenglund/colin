@@ -366,6 +366,69 @@ func TestNormalizeIssuePullRequests(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate github attachments prefer fresher reopened state", func(t *testing.T) {
+		node := map[string]any{
+			"id":         "issue-2e",
+			"identifier": "COLIN-83E",
+			"title":      "Reopened PR URL forms",
+			"state":      map[string]any{"name": "Review"},
+			"attachments": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"title":      "COLIN-83E: fallback",
+						"url":        "https://github.com/pmenglund/colin/pull/14",
+						"sourceType": "github",
+						"metadata": map[string]any{
+							"url":       "https://github.com/pmenglund/colin/pull/14",
+							"title":     "COLIN-83E: fallback",
+							"number":    14.0,
+							"status":    "closed",
+							"repoLogin": "pmenglund",
+							"repoName":  "colin",
+							"closedAt":  "2026-03-03T12:00:00Z",
+							"updatedAt": "2026-03-03T12:00:00Z",
+						},
+					},
+					map[string]any{
+						"title":      "COLIN-83E: fallback",
+						"url":        "https://github.com/pmenglund/colin/pull/14/files",
+						"sourceType": "github",
+						"metadata": map[string]any{
+							"url":          "https://github.com/pmenglund/colin/pull/14",
+							"title":        "COLIN-83E: fallback",
+							"number":       14.0,
+							"status":       "open",
+							"branch":       "colin/COLIN-83E",
+							"targetBranch": "main",
+							"repoLogin":    "pmenglund",
+							"repoName":     "colin",
+							"updatedAt":    "2026-03-04T12:00:00Z",
+						},
+					},
+				},
+			},
+		}
+
+		issue, err := normalizeIssue(node)
+		if err != nil {
+			t.Fatalf("normalizeIssue() error = %v", err)
+		}
+		if len(issue.PullRequests) != 1 {
+			t.Fatalf("len(issue.PullRequests) = %d, want 1", len(issue.PullRequests))
+		}
+
+		pr := issue.PullRequests[0]
+		if pr.Status != "open" {
+			t.Fatalf("pr.Status = %q, want open", pr.Status)
+		}
+		if pr.ClosedAt != nil {
+			t.Fatalf("pr.ClosedAt = %v, want nil after reopen", pr.ClosedAt)
+		}
+		if pr.Branch != "colin/COLIN-83E" {
+			t.Fatalf("pr.Branch = %q, want colin/COLIN-83E", pr.Branch)
+		}
+	})
+
 	t.Run("github attachment without metadata still produces basic pr info", func(t *testing.T) {
 		node := map[string]any{
 			"id":         "issue-3",
