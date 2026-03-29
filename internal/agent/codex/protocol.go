@@ -98,51 +98,87 @@ func collectTextValues(value any) []string {
 }
 
 func extractUsage(msg map[string]any) map[string]int64 {
-	candidates := []any{msg}
+	candidates := []any{}
 	if params, ok := msg["params"]; ok {
 		candidates = append(candidates, params)
 	}
 	if result, ok := msg["result"]; ok {
 		candidates = append(candidates, result)
 	}
+	candidates = append(candidates, msg)
 
-	var best map[string]int64
 	for _, candidate := range candidates {
-		out := map[string]int64{}
-		collectUsage(candidate, out)
-		if len(out) > 0 {
-			best = out
+		if usage, ok := extractNestedUsage(candidate, "total_token_usage"); ok {
+			return usage
 		}
 	}
-	return best
+
+	for _, candidate := range candidates {
+		if usage, ok := extractDirectUsage(candidate); ok {
+			return usage
+		}
+	}
+
+	return nil
 }
 
-func collectUsage(value any, out map[string]int64) {
+func extractNestedUsage(value any, key string) (map[string]int64, bool) {
 	switch v := value.(type) {
 	case map[string]any:
-		for key, item := range v {
-			switch strings.ToLower(key) {
-			case "input_tokens":
-				if n, ok := int64Value(item); ok {
-					out["input_tokens"] = n
+		for nestedKey, item := range v {
+			lower := strings.ToLower(nestedKey)
+			switch lower {
+			case "last_token_usage":
+				continue
+			case strings.ToLower(key):
+				if usage, ok := extractDirectUsage(item); ok {
+					return usage, true
 				}
-			case "output_tokens":
-				if n, ok := int64Value(item); ok {
-					out["output_tokens"] = n
-				}
-			case "total_tokens":
-				if n, ok := int64Value(item); ok {
-					out["total_tokens"] = n
-				}
-			case "total_token_usage":
-				collectUsage(item, out)
-			default:
-				collectUsage(item, out)
+			}
+			if usage, ok := extractNestedUsage(item, key); ok {
+				return usage, true
 			}
 		}
 	case []any:
 		for _, item := range v {
-			collectUsage(item, out)
+			if usage, ok := extractNestedUsage(item, key); ok {
+				return usage, true
+			}
+		}
+	}
+
+	return nil, false
+}
+
+func extractDirectUsage(value any) (map[string]int64, bool) {
+	out := map[string]int64{}
+	collectDirectUsage(value, out)
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+func collectDirectUsage(value any, out map[string]int64) {
+	asMap, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+
+	for key, item := range asMap {
+		switch strings.ToLower(key) {
+		case "input_tokens":
+			if n, ok := int64Value(item); ok {
+				out["input_tokens"] = n
+			}
+		case "output_tokens":
+			if n, ok := int64Value(item); ok {
+				out["output_tokens"] = n
+			}
+		case "total_tokens":
+			if n, ok := int64Value(item); ok {
+				out["total_tokens"] = n
+			}
 		}
 	}
 }
