@@ -158,6 +158,22 @@ Fields:
 - `url` (string or null)
 - `labels` (list of strings)
   - Normalized to lowercase.
+- `pull_requests` (list of pull request refs)
+  - Optional tracker-linked GitHub pull requests associated with the issue.
+  - Each pull request ref may contain:
+    - `url` (string)
+    - `title` (string)
+    - `number` (integer or null)
+    - `status` (string or null)
+    - `draft` (boolean)
+    - `branch` (string or null)
+    - `target_branch` (string or null)
+    - `repo_login` (string or null)
+    - `repo_name` (string or null)
+    - `created_at` (timestamp or null)
+    - `updated_at` (timestamp or null)
+    - `closed_at` (timestamp or null)
+    - `merged_at` (timestamp or null)
 - `blocked_by` (list of blocker refs)
   - Each blocker ref contains:
     - `id` (string or null)
@@ -576,7 +592,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `codex.read_timeout_ms`: integer, default `5000`
 - `codex.stall_timeout_ms`: integer, default `300000`
 - `server.port` (extension): integer, optional; enables the optional HTTP server, `0` may be used
-  for ephemeral local bind, and CLI `--port` overrides it
+  for ephemeral local bind
 
 ## 7. Orchestration State Machine
 
@@ -1364,11 +1380,9 @@ If implemented:
 
 Enablement (extension):
 
-- Start the HTTP server when a CLI `--port` argument is provided.
 - Start the HTTP server when `server.port` is present in `WORKFLOW.md` front matter.
 - `server.port` is extension configuration and is intentionally not part of the core front-matter
   schema in Section 5.3.
-- Precedence: CLI `--port` overrides `server.port` when both are present.
 - `server.port` must be an integer. Positive values bind that port. `0` may be used to request an
   ephemeral port for local development and tests.
 - Implementations should bind loopback by default (`127.0.0.1` or host equivalent) unless explicitly
@@ -1380,7 +1394,8 @@ Enablement (extension):
 
 - Host a human-readable dashboard at `/`.
 - The returned document should depict the current state of the system (for example active sessions,
-  retry delays, token consumption, runtime totals, recent events, and health/error indicators).
+  retry delays, token consumption, runtime totals, recent events, tracker-linked pull requests,
+  and health/error indicators).
 - It is up to the implementation whether this is server-generated HTML or a client-side app that
   consumes the JSON API below.
 
@@ -1438,6 +1453,14 @@ Minimum endpoints:
       "rate_limits": null
     }
     ```
+
+Additional observability endpoints are allowed:
+
+- `GET /api/status`
+  - Returns a dashboard-oriented summary that combines orchestrator runtime state with tracker
+    issue data.
+  - Suitable response fields include visible issue counts, retry/running counts, pull request
+    counts, and per-issue summaries with runtime status and tracker-linked PR metadata.
 
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
@@ -2091,8 +2114,8 @@ Use the same validation profiles as Section 17:
 
 ### 18.2 Recommended Extensions (Not Required for Conformance)
 
-- Optional HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and
-  exposes the baseline endpoints/error semantics in Section 13.7 if shipped.
+- Optional HTTP server uses a safe default bind host and exposes the baseline endpoints/error
+  semantics in Section 13.7 if shipped.
 - Optional `linear_graphql` client-side tool extension exposes raw Linear GraphQL access through the
   app-server session using configured Symphony auth.
 - TODO: Persist retry queue and session metadata across process restarts.

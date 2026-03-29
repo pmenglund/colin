@@ -4,18 +4,36 @@ import "time"
 
 // Issue is the normalized tracker record consumed by orchestration, prompting, and logging.
 type Issue struct {
-	ID          string
-	Identifier  string
-	Title       string
-	Description *string
-	Priority    *int
-	State       string
-	BranchName  *string
-	URL         *string
-	Labels      []string
-	BlockedBy   []BlockerRef
-	CreatedAt   *time.Time
-	UpdatedAt   *time.Time
+	ID           string
+	Identifier   string
+	Title        string
+	Description  *string
+	Priority     *int
+	State        string
+	BranchName   *string
+	URL          *string
+	Labels       []string
+	PullRequests []PullRequest
+	BlockedBy    []BlockerRef
+	CreatedAt    *time.Time
+	UpdatedAt    *time.Time
+}
+
+// PullRequest is the normalized GitHub pull request metadata attached to an issue.
+type PullRequest struct {
+	URL          string
+	Title        string
+	Number       *int
+	Status       string
+	Draft        bool
+	Branch       string
+	TargetBranch string
+	RepoLogin    string
+	RepoName     string
+	CreatedAt    *time.Time
+	UpdatedAt    *time.Time
+	ClosedAt     *time.Time
+	MergedAt     *time.Time
 }
 
 // BlockerRef captures the minimal blocker fields needed for eligibility checks and prompt context.

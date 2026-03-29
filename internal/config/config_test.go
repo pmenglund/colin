@@ -38,6 +38,120 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildReadsServerPort(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"server": map[string]any{
+				"port": 4312,
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if cfg.Server.Port == nil {
+		t.Fatal("cfg.Server.Port = nil, want value")
+	}
+	if *cfg.Server.Port != 4312 {
+		t.Fatalf("*cfg.Server.Port = %d, want 4312", *cfg.Server.Port)
+	}
+}
+
+func TestBuildReadsEphemeralServerPort(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"server": map[string]any{
+				"port": 0,
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if cfg.Server.Port == nil {
+		t.Fatal("cfg.Server.Port = nil, want value")
+	}
+	if *cfg.Server.Port != 0 {
+		t.Fatalf("*cfg.Server.Port = %d, want 0", *cfg.Server.Port)
+	}
+}
+
+func TestBuildRejectsNegativeServerPort(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"server": map[string]any{
+				"port": -1,
+			},
+		},
+	}
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err != ErrInvalidWorkflowConfig {
+		t.Fatalf("Build() error = %v, want %v", err, ErrInvalidWorkflowConfig)
+	}
+}
+
+func TestBuildRejectsTooLargeServerPort(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"server": map[string]any{
+				"port": 65536,
+			},
+		},
+	}
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err != ErrInvalidWorkflowConfig {
+		t.Fatalf("Build() error = %v, want %v", err, ErrInvalidWorkflowConfig)
+	}
+}
+
+func TestBuildRejectsFractionalServerPort(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"server": map[string]any{
+				"port": 4312.5,
+			},
+		},
+	}
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err != ErrInvalidWorkflowConfig {
+		t.Fatalf("Build() error = %v, want %v", err, ErrInvalidWorkflowConfig)
+	}
+}
+
+func TestBuildRejectsInvalidServerPortType(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"server": map[string]any{
+				"port": "wat",
+			},
+		},
+	}
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err != ErrInvalidWorkflowConfig {
+		t.Fatalf("Build() error = %v, want %v", err, ErrInvalidWorkflowConfig)
+	}
+}
+
 func TestBuildRejectsPartialWorkspaceGitConfig(t *testing.T) {
 	t.Parallel()
 

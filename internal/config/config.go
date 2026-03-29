@@ -284,8 +284,14 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	if raw == nil {
 		return nil
 	}
-	if value, ok := readInt(raw, "port"); ok {
-		cfg.Server.Port = &value
+	value, exists := raw["port"]
+	if !exists || value == nil {
+		return nil
 	}
+	port, ok := toExactInt(value)
+	if !ok || port < 0 || port > 65535 {
+		return ErrInvalidWorkflowConfig
+	}
+	cfg.Server.Port = &port
 	return nil
 }
