@@ -20,7 +20,7 @@ polling:
 workspace:
   root: ./.colin/workspaces
   repo_url: git@github.com:pmenglund/colin.git
-  base_ref: symphony
+  base_ref: main
 
 repo:
   publish_states:
