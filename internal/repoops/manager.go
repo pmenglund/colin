@@ -398,6 +398,10 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
               createdAt
               author { login }
             }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
           }
         }
         pageInfo {
@@ -435,7 +439,11 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 				continue
 			}
 			threads = append(threads, thread)
-			if reviewThreadContainsAuthor(node, codexReviewBotLogin) {
+			containsAuthor, err := m.reviewThreadContainsAuthor(ctx, workspacePath, node, codexReviewBotLogin)
+			if err != nil {
+				return nil, nil, err
+			}
+			if containsAuthor {
 				codexThreads = append(codexThreads, thread)
 			}
 		}
@@ -450,6 +458,67 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 		cursor = nextCursor
 	}
 	return threads, codexThreads, nil
+}
+
+func (m *Manager) reviewThreadContainsAuthor(ctx context.Context, workspacePath string, node map[string]any, login string) (bool, error) {
+	if reviewThreadPageContainsAuthor(node, login) {
+		return true, nil
+	}
+	if !reviewThreadCommentsHasNextPage(node) {
+		return false, nil
+	}
+	threadID, _ := stringValue(node["id"])
+	if strings.TrimSpace(threadID) == "" {
+		return false, nil
+	}
+	return m.fetchReviewThreadCommentAuthor(ctx, workspacePath, threadID, login)
+}
+
+func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID, login string) (bool, error) {
+	const query = `query ReviewThreadComments($threadId: ID!, $cursor: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        nodes {
+          author { login }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`
+
+	cursor := ""
+	for {
+		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
+			"threadId": threadID,
+			"cursor":   cursor,
+		})
+		if err != nil {
+			return false, err
+		}
+		nodes, ok := nestedSlice(resp, "data", "node", "comments", "nodes")
+		if ok {
+			for _, node := range nodes {
+				author, _ := nestedString(node, "author", "login")
+				if strings.EqualFold(strings.TrimSpace(author), login) {
+					return true, nil
+				}
+			}
+		}
+		hasNextPage, _ := nestedBool(resp, "data", "node", "comments", "pageInfo", "hasNextPage")
+		if !hasNextPage {
+			return false, nil
+		}
+		nextCursor, ok := nestedString(resp, "data", "node", "comments", "pageInfo", "endCursor")
+		if !ok || strings.TrimSpace(nextCursor) == "" {
+			return false, nil
+		}
+		cursor = nextCursor
+	}
 }
 
 func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, owner, name string, prNumber int) (*time.Time, *time.Time, error) {
@@ -587,7 +656,7 @@ func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
 	return thread, true
 }
 
-func reviewThreadContainsAuthor(node map[string]any, login string) bool {
+func reviewThreadPageContainsAuthor(node map[string]any, login string) bool {
 	comments, ok := nestedSlice(node, "comments", "nodes")
 	if !ok {
 		return false
@@ -599,6 +668,11 @@ func reviewThreadContainsAuthor(node map[string]any, login string) bool {
 		}
 	}
 	return false
+}
+
+func reviewThreadCommentsHasNextPage(node map[string]any) bool {
+	hasNextPage, _ := nestedBool(node, "comments", "pageInfo", "hasNextPage")
+	return hasNextPage
 }
 
 func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {
