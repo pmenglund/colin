@@ -34,8 +34,15 @@ func Page(snapshot domain.Snapshot, shellRenderedAt time.Time) g.Node {
 						h.Class("hero-grid"),
 						h.Div(
 							h.Span(h.Class("hero-label"), g.Text("Live Orchestrator View")),
-							h.H1(g.Text("Inspect what Colin is working on right now.")),
-							h.P(g.Text("The dashboard shows active issue runs, queued retries, token usage, and the latest orchestrator state without tailing logs.")),
+							h.H1(g.Text("Colin")),
+							h.P(
+								g.Text("Colin is a Go service that watches a Linear project, runs Codex in per-issue workspaces, and hands off review-ready changes. "),
+								h.A(
+									h.Href("https://github.com/pmenglund/colin"),
+									g.Text("View the GitHub repository"),
+								),
+								g.Text("."),
+							),
 						),
 						h.Div(
 							h.Class("shell-meta"),
