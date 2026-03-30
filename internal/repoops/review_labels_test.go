@@ -21,11 +21,33 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 	}{
 		{
 			name: "none without codex review signals",
+			context: ReviewContext{
+				PullRequest: domain.PullRequestRef{State: "OPEN"},
+			},
+			want: CodexReviewStateNone,
+		},
+		{
+			name: "none when pull request is closed",
+			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "CLOSED"},
+				CodexReviewRequestedAt: &requestedAt,
+				CodexReviewApprovedAt:  &approvedAt,
+				CodexReviewThreads:     []domain.GitHubReviewThread{{ID: "thread-1"}},
+			},
+			want: CodexReviewStateNone,
+		},
+		{
+			name: "none when pull request is merged",
+			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "MERGED"},
+				CodexReviewRequestedAt: &requestedAt,
+			},
 			want: CodexReviewStateNone,
 		},
 		{
 			name: "pending when request exists without approval",
 			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "OPEN"},
 				CodexReviewRequestedAt: &requestedAt,
 			},
 			want: CodexReviewStatePending,
@@ -33,6 +55,7 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 		{
 			name: "pending when approval is older than latest request",
 			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "OPEN"},
 				CodexReviewRequestedAt: &requestedAt,
 				CodexReviewApprovedAt:  &approvedBeforeRequest,
 			},
@@ -41,6 +64,7 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 		{
 			name: "approved when approval is newer than latest request",
 			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "OPEN"},
 				CodexReviewRequestedAt: &requestedAt,
 				CodexReviewApprovedAt:  &approvedAt,
 			},
@@ -49,6 +73,7 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 		{
 			name: "unresolved feedback takes precedence",
 			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "OPEN"},
 				CodexReviewRequestedAt: &requestedAt,
 				CodexReviewApprovedAt:  &approvedAt,
 				CodexReviewThreads:     []domain.GitHubReviewThread{{ID: "thread-1"}},

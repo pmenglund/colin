@@ -1,6 +1,10 @@
 package repoops
 
-import "github.com/pmenglund/colin/internal/domain"
+import (
+	"strings"
+
+	"github.com/pmenglund/colin/internal/domain"
+)
 
 // CodexReviewState captures the board-visible Codex PR review status.
 type CodexReviewState string
@@ -14,6 +18,9 @@ const (
 
 // CodexReviewStateFromContext classifies the current Codex PR review state.
 func CodexReviewStateFromContext(reviewContext ReviewContext) CodexReviewState {
+	if !strings.EqualFold(strings.TrimSpace(reviewContext.PullRequest.State), "OPEN") {
+		return CodexReviewStateNone
+	}
 	if len(reviewContext.CodexReviewThreads) > 0 {
 		return CodexReviewStateUnresolvedFeedback
 	}

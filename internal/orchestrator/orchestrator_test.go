@@ -160,6 +160,31 @@ func TestSyncIssueCodexReviewLabelClearsManagedLabelsWhenNoStateWanted(t *testin
 	}
 }
 
+func TestSyncIssueCodexReviewLabelKeepsCurrentLabelWhenReplacementAddFails(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{addIssueLabelErr: os.ErrPermission}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker},
+	}
+
+	orch.syncIssueCodexReviewLabel(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Labels: []string{
+			domain.CodexReviewApprovedLabel,
+		},
+	}, domain.CodexReviewPendingLabel)
+
+	if got, want := tracker.addedLabels, []string{"issue-1:" + domain.CodexReviewPendingLabel}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("addedLabels = %v, want %v", got, want)
+	}
+	if len(tracker.removedLabels) != 0 {
+		t.Fatalf("removedLabels = %v, want none", tracker.removedLabels)
+	}
+}
+
 type runnerStub struct {
 	invoked chan struct{}
 	release chan struct{}

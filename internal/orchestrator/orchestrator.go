@@ -216,17 +216,15 @@ func (o *Orchestrator) syncCodexReviewLabels(ctx context.Context, issues []domai
 }
 
 func (o *Orchestrator) syncIssueCodexReviewLabel(ctx context.Context, issue domain.Issue, wantLabel string) {
-	for _, labelName := range domain.ManagedCodexReviewLabels() {
-		if labelName == wantLabel {
-			if hasIssueLabel(issue, labelName) {
-				continue
-			}
-			if err := o.runtime.Tracker.AddIssueLabel(ctx, issue.ID, labelName); err != nil {
-				o.logger.Warn("failed to add codex review label", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "label", labelName, "error", err)
-			}
-			continue
+	if wantLabel != "" && !hasIssueLabel(issue, wantLabel) {
+		if err := o.runtime.Tracker.AddIssueLabel(ctx, issue.ID, wantLabel); err != nil {
+			o.logger.Warn("failed to add codex review label", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "label", wantLabel, "error", err)
+			return
 		}
-		if !hasIssueLabel(issue, labelName) {
+	}
+
+	for _, labelName := range domain.ManagedCodexReviewLabels() {
+		if labelName == wantLabel || !hasIssueLabel(issue, labelName) {
 			continue
 		}
 		if err := o.runtime.Tracker.RemoveIssueLabel(ctx, issue.ID, labelName); err != nil {
