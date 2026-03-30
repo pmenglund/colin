@@ -22,12 +22,13 @@ import (
 )
 
 var (
-	ErrAPIRequest       = errors.New("linear_api_request")
-	ErrAPIStatus        = errors.New("linear_api_status")
-	ErrGraphQLErrors    = errors.New("linear_graphql_errors")
-	ErrUnknownPayload   = errors.New("linear_unknown_payload")
-	ErrMissingEndCursor = errors.New("linear_missing_end_cursor")
-	ErrUnknownState     = errors.New("linear_unknown_state")
+	ErrAPIRequest           = errors.New("linear_api_request")
+	ErrAPIStatus            = errors.New("linear_api_status")
+	ErrGraphQLErrors        = errors.New("linear_graphql_errors")
+	ErrUnknownPayload       = errors.New("linear_unknown_payload")
+	ErrMissingEndCursor     = errors.New("linear_missing_end_cursor")
+	ErrUnknownState         = errors.New("linear_unknown_state")
+	ErrMissingWorkflowState = errors.New("linear_missing_workflow_state")
 )
 
 const (
@@ -36,6 +37,7 @@ const (
 	colinMetadataURLSuffix       = "/metadata"
 	colinExecPlanAttachmentTitle = "Colin ExecPlan"
 	colinExecPlanURLSuffix       = "/exec-plan"
+	refineStateName              = "Refine"
 )
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
@@ -57,7 +59,7 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	if err := config.ValidateDispatch(cfg); err != nil {
 		return nil, err
 	}
-	return &Client{
+	client := &Client{
 		endpoint:  cfg.Tracker.Endpoint,
 		apiKey:    cfg.Tracker.APIKey,
 		project:   cfg.Tracker.ProjectSlug,
@@ -67,7 +69,11 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-	}, nil
+	}
+	if err := client.validateWorkflowStates(context.Background(), cfg); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 // FetchCandidateIssues returns the current active issues for the configured Linear project.
@@ -579,6 +585,153 @@ query IssueTeamStates($id: String!) {
 		return stateID, nil
 	}
 	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
+}
+
+func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) error {
+	requiredStates := requiredWorkflowStates(cfg)
+	if len(requiredStates) == 0 {
+		return nil
+	}
+
+	const query = `
+query ProjectTeamStates($slug: String!) {
+  projects(first: 1, filter: { slugId: { eq: $slug } }) {
+    nodes {
+      id
+      teams {
+        nodes {
+          id
+          name
+          states {
+            nodes {
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"slug": c.project})
+	if err != nil {
+		return err
+	}
+	projects, ok := nestedSlice(resp, "data", "projects", "nodes")
+	if !ok || len(projects) == 0 {
+		return fmt.Errorf("%w: project %q not found", ErrUnknownPayload, c.project)
+	}
+	teamNodes, ok := nestedSlice(projects[0], "teams", "nodes")
+	if !ok || len(teamNodes) == 0 {
+		return fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, c.project)
+	}
+
+	var missing []string
+	for _, team := range teamNodes {
+		available := make(map[string]struct{})
+		if stateNodes, ok := nestedSlice(team, "states", "nodes"); ok {
+			for _, stateNode := range stateNodes {
+				name, _ := stringValue(stateNode["name"])
+				key := config.StateKey(name)
+				if key == "" {
+					continue
+				}
+				available[key] = struct{}{}
+			}
+		}
+
+		var missingForTeam []string
+		for _, requirement := range requiredStates {
+			if requirement.satisfiedBy(available) {
+				continue
+			}
+			missingForTeam = append(missingForTeam, requirement.Description)
+		}
+		if len(missingForTeam) == 0 {
+			continue
+		}
+
+		teamName, _ := stringValue(team["name"])
+		if strings.TrimSpace(teamName) == "" {
+			teamName, _ = stringValue(team["id"])
+		}
+		if strings.TrimSpace(teamName) == "" {
+			teamName = "unknown"
+		}
+		missing = append(missing, fmt.Sprintf("team %q missing [%s]", teamName, strings.Join(missingForTeam, ", ")))
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, c.project, strings.Join(missing, "; "))
+	}
+	return nil
+}
+
+type workflowStateRequirement struct {
+	Description  string
+	Alternatives []string
+}
+
+func (r workflowStateRequirement) satisfiedBy(available map[string]struct{}) bool {
+	for _, state := range r.Alternatives {
+		if _, ok := available[config.StateKey(state)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func requiredWorkflowStates(cfg domain.ServiceConfig) []workflowStateRequirement {
+	seen := map[string]struct{}{}
+	var out []workflowStateRequirement
+
+	appendState := func(state string) {
+		trimmed := strings.TrimSpace(state)
+		if trimmed == "" {
+			return
+		}
+		key := config.StateKey(trimmed)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, workflowStateRequirement{
+			Description:  trimmed,
+			Alternatives: []string{trimmed},
+		})
+	}
+	appendStates := func(states []string) {
+		for _, state := range states {
+			appendState(state)
+		}
+	}
+	appendAlternativeStates := func(states []string) {
+		var alternatives []string
+		for _, state := range states {
+			trimmed := strings.TrimSpace(state)
+			if trimmed == "" {
+				continue
+			}
+			key := config.StateKey(trimmed)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			alternatives = append(alternatives, trimmed)
+		}
+		if len(alternatives) == 0 {
+			return
+		}
+		out = append(out, workflowStateRequirement{
+			Description:  fmt.Sprintf("one of [%s]", strings.Join(alternatives, ", ")),
+			Alternatives: alternatives,
+		})
+	}
+	appendStates(cfg.Tracker.ActiveStates)
+	appendStates(cfg.Repo.PublishStates)
+	appendStates(cfg.Repo.MergeStates)
+	appendAlternativeStates(cfg.Tracker.TerminalStates)
+	appendState(refineStateName)
+	return out
 }
 
 func (c *Client) doQuery(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {

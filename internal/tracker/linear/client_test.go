@@ -14,6 +14,201 @@ import (
 	"github.com/pmenglund/colin/internal/domain"
 )
 
+func TestNewValidatesWorkflowStates(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "ProjectTeamStates") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Product",
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Done"},
+												{"name": "Refine"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := New(domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			Kind:           "linear",
+			Endpoint:       server.URL,
+			APIKey:         "token",
+			ProjectSlug:    "project-1",
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Done"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Codex: domain.CodexConfig{
+			Command: "codex app-server",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if client == nil {
+		t.Fatal("New() returned nil client")
+	}
+}
+
+func TestNewFailsWhenWorkflowStateMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Product",
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Done"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	_, err := New(domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			Kind:           "linear",
+			Endpoint:       server.URL,
+			APIKey:         "token",
+			ProjectSlug:    "project-1",
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Done"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Codex: domain.CodexConfig{
+			Command: "codex app-server",
+		},
+	})
+	if !errors.Is(err, ErrMissingWorkflowState) {
+		t.Fatalf("New() error = %v, want ErrMissingWorkflowState", err)
+	}
+	if !strings.Contains(err.Error(), "Refine") {
+		t.Fatalf("New() error = %q, want missing Refine state", err)
+	}
+}
+
+func TestNewAllowsTerminalStateAliasesWhenOneExists(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Product",
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Canceled"},
+												{"name": "Refine"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := New(domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			Kind:           "linear",
+			Endpoint:       server.URL,
+			APIKey:         "token",
+			ProjectSlug:    "project-1",
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Cancelled", "Canceled"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Codex: domain.CodexConfig{
+			Command: "codex app-server",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if client == nil {
+		t.Fatal("New() returned nil client")
+	}
+}
+
 func TestCreateIssueComment(t *testing.T) {
 	t.Parallel()
 

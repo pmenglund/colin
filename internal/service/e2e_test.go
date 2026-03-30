@@ -575,6 +575,29 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
+	case strings.Contains(request.Query, "ProjectTeamStates"):
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Colin",
+										"states": map[string]any{
+											"nodes": fakeLinearWorkflowStates(),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
 	case strings.Contains(request.Query, "commentCreate"):
 		commentID := s.recordComment(request.Variables)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -612,12 +635,7 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"issue": map[string]any{
 					"team": map[string]any{
 						"states": map[string]any{
-							"nodes": []map[string]any{
-								{"id": "state-todo", "name": "Todo"},
-								{"id": "state-in-progress", "name": "In Progress"},
-								{"id": "state-review", "name": "Review"},
-								{"id": "state-done", "name": "Done"},
-							},
+							"nodes": fakeLinearWorkflowStates(),
 						},
 					},
 				},
@@ -835,11 +853,41 @@ func fakeLinearStateName(stateID string) string {
 		return "Todo"
 	case "state-in-progress":
 		return "In Progress"
+	case "state-refine":
+		return "Refine"
 	case "state-review":
 		return "Review"
+	case "state-merge":
+		return "Merge"
 	case "state-done":
 		return "Done"
+	case "state-merged":
+		return "Merged"
+	case "state-closed":
+		return "Closed"
+	case "state-cancelled":
+		return "Cancelled"
+	case "state-canceled":
+		return "Canceled"
+	case "state-duplicate":
+		return "Duplicate"
 	default:
 		return ""
+	}
+}
+
+func fakeLinearWorkflowStates() []map[string]any {
+	return []map[string]any{
+		{"id": "state-todo", "name": "Todo"},
+		{"id": "state-in-progress", "name": "In Progress"},
+		{"id": "state-refine", "name": "Refine"},
+		{"id": "state-review", "name": "Review"},
+		{"id": "state-merge", "name": "Merge"},
+		{"id": "state-done", "name": "Done"},
+		{"id": "state-merged", "name": "Merged"},
+		{"id": "state-closed", "name": "Closed"},
+		{"id": "state-cancelled", "name": "Cancelled"},
+		{"id": "state-canceled", "name": "Canceled"},
+		{"id": "state-duplicate", "name": "Duplicate"},
 	}
 }
