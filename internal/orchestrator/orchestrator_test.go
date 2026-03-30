@@ -36,6 +36,15 @@ func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain
 	return s.issuesByID, nil
 }
 
+func (s *trackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
+	for _, issue := range s.issuesByID {
+		if issue.ID == issueID {
+			return issue, nil
+		}
+	}
+	return domain.Issue{}, nil
+}
+
 func (s *trackerStub) UpdateIssueState(context.Context, string, string) error {
 	return nil
 }

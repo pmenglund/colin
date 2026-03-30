@@ -29,9 +29,12 @@ type Service struct {
 	logger       *slog.Logger
 	loader       workflow.Loader
 	workflowPath string
+	options      options
 	serverPort   *int
 	serverMu     sync.RWMutex
 	serverURL    string
+	runtimeMu    sync.RWMutex
+	runtime      orchestrator.Runtime
 	orch         *orchestrator.Orchestrator
 }
 
@@ -39,20 +42,19 @@ type Service struct {
 func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Service, error) {
 	loader := workflow.Loader{}
 	path := loader.ResolvePath(workflowPath)
-	runtime, err := loadRuntime(path, logger)
+	options := buildOptions(optionFns...)
+	runtime, err := loadRuntime(path, logger, options)
 	if err != nil {
 		return nil, err
-	}
-	options := buildOptions(optionFns...)
-	if options.serverPortOverride != nil {
-		runtime.Config.Server.Port = intPtr(*options.serverPortOverride)
 	}
 	orch := orchestrator.New(runtime, logger)
 	return &Service{
 		logger:       logger,
 		loader:       loader,
 		workflowPath: path,
+		options:      options,
 		serverPort:   clonePort(runtime.Config.Server.Port),
+		runtime:      runtime,
 		orch:         orch,
 	}, nil
 }
@@ -83,7 +85,7 @@ func (s *Service) DashboardEnabled() bool {
 	return s.serverPort != nil
 }
 
-func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error) {
+func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.Runtime, error) {
 	loader := workflow.Loader{}
 	def, err := loader.Load(path)
 	if err != nil {
@@ -92,6 +94,9 @@ func loadRuntime(path string, logger *slog.Logger) (orchestrator.Runtime, error)
 	cfg, err := config.Build(def, path)
 	if err != nil {
 		return orchestrator.Runtime{}, err
+	}
+	if opts.serverPortOverride != nil {
+		cfg.Server.Port = intPtr(*opts.serverPortOverride)
 	}
 	if err := config.ValidateDispatch(cfg); err != nil {
 		return orchestrator.Runtime{}, err
@@ -154,12 +159,13 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 			lastModTime = stat.ModTime()
 			lastSize = stat.Size()
 
-			runtime, err := loadRuntime(s.workflowPath, s.logger)
+			runtime, err := loadRuntime(s.workflowPath, s.logger, s.options)
 			if err != nil {
 				s.logger.Error("workflow reload failed; keeping last good config", "path", s.workflowPath, "error", err)
 				continue
 			}
 			s.logger.Info("workflow reloaded", "path", s.workflowPath)
+			s.setRuntime(runtime)
 			s.orch.UpdateRuntime(runtime)
 		}
 	}
@@ -170,9 +176,18 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 		return nil
 	}
 
-	handler, err := app.NewObservabilityServer(func(snapshotCtx context.Context) (domain.Snapshot, error) {
-		return s.orch.Snapshot(snapshotCtx)
-	})
+	handler, err := app.NewObservabilityServer(
+		func(snapshotCtx context.Context) (domain.Snapshot, error) {
+			return s.orch.Snapshot(snapshotCtx)
+		},
+		func(snapshotCtx context.Context, issueID string) (domain.Issue, error) {
+			runtime := s.currentRuntime()
+			if runtime.Tracker == nil {
+				return domain.Issue{}, errors.New("tracker unavailable")
+			}
+			return runtime.Tracker.FetchIssueByID(snapshotCtx, issueID)
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("create dashboard server: %w", err)
 	}
@@ -215,6 +230,18 @@ func clonePort(value *int) *int {
 		return nil
 	}
 	return intPtr(*value)
+}
+
+func (s *Service) currentRuntime() orchestrator.Runtime {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.runtime
+}
+
+func (s *Service) setRuntime(runtime orchestrator.Runtime) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.runtime = runtime
 }
 
 func intPtr(value int) *int {

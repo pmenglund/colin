@@ -543,7 +543,7 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"attachment": map[string]any{
 						"id":       "attachment-1",
 						"title":    "Colin metadata",
-						"url":      "https://colin.invalid/linear/issues/issue-1/metadata",
+						"url":      "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
 						"metadata": metadata,
 					},
 				},
@@ -650,7 +650,7 @@ func (s *fakeLinearServer) issueNode(state string) map[string]any {
 		attachments = append(attachments, map[string]any{
 			"id":       "attachment-1",
 			"title":    "Colin metadata",
-			"url":      "https://colin.invalid/linear/issues/issue-1/metadata",
+			"url":      "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
 			"metadata": metadata,
 		})
 	}

@@ -23,6 +23,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Counts:      map[string]int{"running": 1, "retrying": 0},
 			IssueStates: map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
 			Running: []domain.SnapshotRunning{{
+				IssueID:      "issue-1",
 				Identifier:   "COLIN-93",
 				Title:        "Add dashboard",
 				State:        "In Progress",
@@ -35,7 +36,25 @@ func TestObservabilityServerRoutes(t *testing.T) {
 				InputTokens:  11,
 				OutputTokens: 12,
 				TotalTokens:  23,
+				OutputLog: []domain.OutputLog{{
+					Timestamp: now.Add(-2 * time.Second),
+					Event:     "turn_completed",
+					Message:   "refresh complete",
+				}},
 			}},
+		}, nil
+	}, func(context.Context, string) (domain.Issue, error) {
+		return domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-93",
+			Title:      "Add dashboard",
+			State:      "In Progress",
+			ColinMetadata: &domain.ColinMetadata{
+				LastRunType: "coding",
+				LastOutcome: "ready_for_review",
+				CodexOutput: nil,
+				UpdatedAt:   ptr(time.Date(2026, 3, 28, 12, 34, 55, 0, time.UTC)),
+			},
 		}, nil
 	})
 	if err != nil {
@@ -119,6 +138,30 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			}
 			if len(body) == 0 {
 				t.Fatalf("%s returned empty body", path)
+			}
+		}
+	})
+
+	t.Run("issue metadata page", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/linear/issues/issue-1/metadata")
+		if err != nil {
+			t.Fatalf("GET metadata page error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		text := string(body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		for _, want := range []string{
+			`data-testid="issue-metadata-panel"`,
+			`COLIN-93 - Add dashboard`,
+			`Last outcome`,
+			`ready_for_review`,
+			`refresh complete`,
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("metadata page missing %q: %s", want, text)
 			}
 		}
 	})

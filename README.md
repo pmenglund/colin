@@ -42,6 +42,8 @@ To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pas
 go run . --port 9999
 ```
 
+If Colin is exposed through a reverse proxy or any non-loopback address, set `server.public_url` in `WORKFLOW.md` so the `Colin metadata` attachment in Linear points at the externally reachable web UI address instead of the local loopback bind.
+
 You can also point it at a specific workflow file:
 
 ```bash
@@ -58,6 +60,7 @@ go run . /path/to/WORKFLOW.md
 - During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
+- That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
@@ -178,6 +181,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
 - use `codex app-server` for coding runs
+- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.public_url` is set for an external address
 
 ## Operational Notes
 
@@ -186,7 +190,9 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
 - Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
+- When `server.public_url` is unset, Colin uses the loopback UI address for Linear metadata links. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
 - The dashboard shows current running issues, queued retries, token totals, and the latest rate-limit snapshot. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.
+- The issue-specific metadata page is separate from the main dashboard and is meant for reviewing one issue's latest Colin run, including the captured Codex output that Colin persisted to Linear metadata.
 - Colin automatically moves successful, reviewable coding runs into the first configured publish state, which is currently `Review`.
 - Colin moves clarification-only or max-turn no-PR handoffs into `Refine` instead of `Review`.
 - Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.

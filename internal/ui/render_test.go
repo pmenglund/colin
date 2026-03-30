@@ -190,6 +190,44 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	}
 }
 
+func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.app/example/issue/COLIN-111"
+	updatedAt := time.Date(2026, 3, 29, 18, 4, 0, 0, time.UTC)
+	html := renderNode(t, IssueMetadataPage(domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-111",
+		Title:      "Update metadata link",
+		State:      "Review",
+		URL:        &issueURL,
+		ColinMetadata: &domain.ColinMetadata{
+			LastRunType:          "coding",
+			LastOutcome:          "ready_for_review",
+			LastSummaryCommentID: "comment-12",
+			UpdatedAt:            &updatedAt,
+			CodexOutput: []domain.OutputLog{
+				{Timestamp: time.Date(2026, 3, 29, 18, 3, 0, 0, time.UTC), Event: "turn_completed", Message: "Updated the metadata link."},
+			},
+		},
+	}, updatedAt))
+
+	for _, want := range []string{
+		`data-testid="issue-metadata-panel"`,
+		`data-testid="issue-metadata-output"`,
+		`COLIN-111 - Update metadata link`,
+		`Last run type`,
+		`ready_for_review`,
+		`comment-12`,
+		`href="https://linear.app/example/issue/COLIN-111"`,
+		`Updated the metadata link.`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
+	}
+}
+
 func renderNode(t *testing.T, node g.Node) string {
 	t.Helper()
 

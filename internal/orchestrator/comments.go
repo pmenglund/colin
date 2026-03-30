@@ -136,13 +136,29 @@ func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.C
 }
 
 func (o *Orchestrator) persistSummaryCommentMetadata(ctx context.Context, issue domain.Issue, commentID string) domain.Issue {
-	if o.runtime.Tracker == nil || strings.TrimSpace(commentID) == "" {
+	return o.persistIssueMetadata(ctx, issue, strings.TrimSpace(commentID), nil)
+}
+
+func (o *Orchestrator) persistIssueOutputMetadata(ctx context.Context, issue domain.Issue, output []domain.OutputLog) domain.Issue {
+	return o.persistIssueMetadata(ctx, issue, "", output)
+}
+
+func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Issue, commentID string, output []domain.OutputLog) domain.Issue {
+	if o.runtime.Tracker == nil {
+		return issue
+	}
+	if strings.TrimSpace(commentID) == "" && len(output) == 0 {
 		return issue
 	}
 	metadata := domain.ColinMetadata{LastSummaryCommentID: strings.TrimSpace(commentID)}
 	if issue.ColinMetadata != nil {
 		metadata = *issue.ColinMetadata
+	}
+	if strings.TrimSpace(commentID) != "" {
 		metadata.LastSummaryCommentID = strings.TrimSpace(commentID)
+	}
+	if len(output) > 0 {
+		metadata.CodexOutput = append([]domain.OutputLog(nil), output...)
 	}
 	now := time.Now().UTC()
 	metadata.UpdatedAt = &now

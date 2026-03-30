@@ -105,6 +105,13 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	}
 	delete(o.running, event.issueID)
 	o.totalTokens.SecondsRunning += time.Since(entry.startedAt).Seconds()
+	if len(entry.outputLog) > 0 {
+		issue := event.result.Issue
+		if strings.TrimSpace(issue.ID) == "" {
+			issue = entry.issue
+		}
+		event.result.Issue = o.persistIssueOutputMetadata(ctx, issue, entry.outputLog)
+	}
 
 	switch entry.stopReason {
 	case "terminal":

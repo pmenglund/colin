@@ -36,6 +36,7 @@ type ColinMetadata struct {
 	LastOutcome            string
 	LastSummaryCommentID   string
 	UpdatedAt              *time.Time
+	CodexOutput            []OutputLog
 }
 
 // BlockerRef captures the minimal blocker fields needed for eligibility checks and prompt context.
@@ -164,7 +165,8 @@ type CodexConfig struct {
 
 // ServerConfig reserves space for optional server extensions.
 type ServerConfig struct {
-	Port *int
+	Port      *int
+	PublicURL string
 }
 
 // Workspace describes a prepared per-issue workspace directory.
