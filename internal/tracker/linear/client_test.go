@@ -189,6 +189,76 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 }
 
+func TestUpsertIssueExecPlan(t *testing.T) {
+	t.Parallel()
+
+	var (
+		gotIssueID  string
+		gotTitle    string
+		gotURL      string
+		gotMetadata map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		input, _ := request.Variables["input"].(map[string]any)
+		gotIssueID, _ = input["issueId"].(string)
+		gotTitle, _ = input["title"].(string)
+		gotURL, _ = input["url"].(string)
+		gotMetadata, _ = input["metadata"].(map[string]any)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"attachmentCreate": map[string]any{
+					"success": true,
+					"attachment": map[string]any{
+						"id":       "attachment-2",
+						"title":    gotTitle,
+						"url":      gotURL,
+						"metadata": gotMetadata,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	now := time.Date(2026, 3, 29, 17, 5, 0, 0, time.UTC)
+	plan, err := client.UpsertIssueExecPlan(context.Background(), "issue-1", domain.ExecPlan{
+		Body:      "# Plan\n\nDetails.",
+		UpdatedAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueExecPlan() error = %v", err)
+	}
+	if gotIssueID != "issue-1" {
+		t.Fatalf("issueId = %q, want %q", gotIssueID, "issue-1")
+	}
+	if gotTitle != "Colin ExecPlan" {
+		t.Fatalf("title = %q, want %q", gotTitle, "Colin ExecPlan")
+	}
+	if gotURL != "https://colin.invalid/linear/issues/issue-1/exec-plan" {
+		t.Fatalf("url = %q, want %q", gotURL, "https://colin.invalid/linear/issues/issue-1/exec-plan")
+	}
+	if gotMetadata["body"] != "# Plan\n\nDetails." {
+		t.Fatalf("body = %v, want plan body", gotMetadata["body"])
+	}
+	if plan.AttachmentID != "attachment-2" {
+		t.Fatalf("plan.AttachmentID = %q, want %q", plan.AttachmentID, "attachment-2")
+	}
+}
+
 func TestUpdateIssueState(t *testing.T) {
 	t.Parallel()
 
@@ -731,5 +801,75 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.ActualBranchName != "colin-94" {
 		t.Fatalf("ActualBranchName = %q, want %q", issues[0].ColinMetadata.ActualBranchName, "colin-94")
+	}
+}
+
+func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 29, 18, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-108",
+							"title":      "Add exec plans",
+							"state":      map[string]any{"name": "In Progress"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":    "attachment-2",
+										"title": "Colin ExecPlan",
+										"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+										"metadata": map[string]any{
+											"body":       "# Plan\n\nDetails.",
+											"updated_at": base.Format(time.RFC3339),
+										},
+									},
+								},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"In Progress"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if issues[0].ExecPlan == nil {
+		t.Fatal("issues[0].ExecPlan = nil, want plan")
+	}
+	if issues[0].ExecPlan.Body != "# Plan\n\nDetails." {
+		t.Fatalf("ExecPlan.Body = %q, want plan body", issues[0].ExecPlan.Body)
 	}
 }

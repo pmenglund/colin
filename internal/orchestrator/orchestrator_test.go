@@ -67,6 +67,10 @@ func (s *trackerStub) UpsertIssueMetadata(_ context.Context, _ string, metadata 
 	return metadata, nil
 }
 
+func (s *trackerStub) UpsertIssueExecPlan(_ context.Context, _ string, plan domain.ExecPlan) (domain.ExecPlan, error) {
+	return plan, nil
+}
+
 func (s *trackerStub) CurrentRateLimits() map[string]any {
 	return s.rateLimits
 }

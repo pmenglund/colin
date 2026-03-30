@@ -37,6 +37,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Agent.MaxTurns != 20 {
 		t.Fatalf("cfg.Agent.MaxTurns = %d", cfg.Agent.MaxTurns)
 	}
+	if cfg.Agent.CreateExecPlan {
+		t.Fatal("cfg.Agent.CreateExecPlan = true, want false by default")
+	}
 	if cfg.Repo.BranchTemplate != "colin/{{.issue.identifier}}-{{.issue.title}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q", cfg.Repo.BranchTemplate)
 	}
@@ -234,5 +237,30 @@ func TestBuildReadsBranchTemplate(t *testing.T) {
 	}
 	if got := cfg.Repo.BranchTemplate; got != "feature/{{.issue.identifier}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q, want %q", got, "feature/{{.issue.identifier}}")
+	}
+}
+
+func TestBuildReadsCreateExecPlan(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"agent": map[string]any{
+				"create_exec_plan": true,
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !cfg.Agent.CreateExecPlan {
+		t.Fatal("cfg.Agent.CreateExecPlan = false, want true")
 	}
 }

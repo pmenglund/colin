@@ -38,6 +38,7 @@ agent:
   max_concurrent_agents: 4
   max_turns: 8
   max_retry_backoff_ms: 300000
+  create_exec_plan: true
 
 codex:
   command: codex app-server

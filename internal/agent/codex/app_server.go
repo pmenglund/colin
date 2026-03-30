@@ -18,19 +18,20 @@ import (
 )
 
 type appServerClient struct {
-	cfg         domain.ServiceConfig
-	logger      *slog.Logger
-	onEvent     func(Event)
-	issue       domain.Issue
-	workspace   string
-	runType     string
-	client      *sdk.Codex
-	thread      *sdk.Thread
-	threadID    string
-	sessionID   string
-	pid         *int
-	lastSummary string
-	stopOnce    sync.Once
+	cfg          domain.ServiceConfig
+	logger       *slog.Logger
+	onEvent      func(Event)
+	issue        domain.Issue
+	workspace    string
+	runType      string
+	client       *sdk.Codex
+	thread       *sdk.Thread
+	threadID     string
+	sessionID    string
+	pid          *int
+	lastSummary  string
+	lastTurnText string
+	stopOnce     sync.Once
 }
 
 func (c *appServerClient) start(ctx context.Context, cwd string) error {
@@ -97,9 +98,25 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 	}
 	defer stream.Close()
 
+	var turnText []string
+	appendTurnText := func(summary string) {
+		summary = strings.TrimSpace(summary)
+		if summary == "" {
+			return
+		}
+		if len(turnText) > 0 && turnText[len(turnText)-1] == summary {
+			return
+		}
+		turnText = append(turnText, summary)
+	}
+	finishTurn := func() {
+		c.lastTurnText = strings.TrimSpace(strings.Join(turnText, "\n\n"))
+	}
+
 	for {
 		note, err := stream.Next(ctx)
 		if err != nil {
+			finishTurn()
 			return mapRuntimeError(err)
 		}
 
@@ -125,6 +142,9 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 		if shouldCaptureSummary(eventName, summary) {
 			c.lastSummary = summary
 		}
+		if shouldCaptureTurnText(eventName, summary) {
+			appendTurnText(summary)
+		}
 		c.emit(Event{
 			Event:      eventName,
 			Timestamp:  time.Now().UTC(),
@@ -140,19 +160,23 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 
 		switch note.Method {
 		case "turn/completed":
+			finishTurn()
 			if turnErr := notificationRuntimeError(note); turnErr != nil {
 				return turnErr
 			}
 			return nil
 		case "turn/failed":
+			finishTurn()
 			if turnErr := notificationRuntimeError(note); turnErr != nil {
 				return turnErr
 			}
 			return ErrTurnFailed
 		case "turn/cancelled":
+			finishTurn()
 			return ErrTurnCancelled
 		case "error":
 			if turnErr := notificationRuntimeError(note); turnErr != nil {
+				finishTurn()
 				return turnErr
 			}
 		}
@@ -163,7 +187,24 @@ func (c *appServerClient) finalSummary() string {
 	return strings.TrimSpace(c.lastSummary)
 }
 
+func (c *appServerClient) lastOutput() string {
+	return strings.TrimSpace(c.lastTurnText)
+}
+
 func shouldCaptureSummary(eventName, summary string) bool {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return false
+	}
+	switch eventName {
+	case EventOtherMessage, EventNotification:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldCaptureTurnText(eventName, summary string) bool {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return false

@@ -411,6 +411,90 @@ func TestHandleMergeFailureReturnsIssueToReview(t *testing.T) {
 	}
 }
 
+func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-108",
+			Title:      "Add exec plans",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-108",
+		Title:       "Add exec plans",
+		Description: testStringPtr("Create and reuse an execution plan."),
+		State:       "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.ExecPlan == nil {
+		t.Fatal("result.Issue.ExecPlan = nil, want exec plan")
+	}
+	if result.Issue.ExecPlan.Body != "# Fake ExecPlan\n\nPlan details." {
+		t.Fatalf("ExecPlan.Body = %q, want fake plan", result.Issue.ExecPlan.Body)
+	}
+	if tracker.execPlan.Body != "# Fake ExecPlan\n\nPlan details." {
+		t.Fatalf("tracker exec plan = %q, want fake plan", tracker.execPlan.Body)
+	}
+
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
+		t.Fatalf("prompts log missing exec plan turn: %q", logText)
+	}
+	if !strings.Contains(logText, "Work on COLIN-108.\n\nExecPlan:\n\n# Fake ExecPlan\n\nPlan details.") {
+		t.Fatalf("prompts log missing coding prompt with injected plan: %q", logText)
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return
@@ -430,6 +514,7 @@ type stubTracker struct {
 	issueComments       []string
 	commentReplies      []string
 	metadata            domain.ColinMetadata
+	execPlan            domain.ExecPlan
 	resolvedMergeState  string
 	resolveMergeStateOK bool
 }
@@ -479,6 +564,11 @@ func (s *stubTracker) UpsertIssueMetadata(_ context.Context, _ string, metadata 
 	return metadata, nil
 }
 
+func (s *stubTracker) UpsertIssueExecPlan(_ context.Context, _ string, plan domain.ExecPlan) (domain.ExecPlan, error) {
+	s.execPlan = plan
+	return plan, nil
+}
+
 func (s *stubTracker) CurrentRateLimits() map[string]any {
 	return nil
 }
@@ -526,12 +616,18 @@ func runFakeCodex() error {
 				return err
 			}
 		case "turn/start":
+			promptText := extractPromptText(msg)
 			turnID = "turn-1"
 			if err := writeJSONMessage(writer, map[string]any{
 				"id":     msg["id"],
 				"result": map[string]any{},
 			}); err != nil {
 				return err
+			}
+			if promptLog := os.Getenv("COLIN_FAKE_CODEX_PROMPTS_LOG"); promptLog != "" {
+				if err := appendPromptLog(promptLog, promptText); err != nil {
+					return err
+				}
 			}
 			if err := writeJSONMessage(writer, map[string]any{
 				"id":     "approval-1",
@@ -573,7 +669,7 @@ func runFakeCodex() error {
 				"params": map[string]any{
 					"threadId": threadID,
 					"item": map[string]any{
-						"text": "done",
+						"text": fakeCodexTurnText(promptText),
 					},
 				},
 			}); err != nil {
@@ -593,6 +689,66 @@ func runFakeCodex() error {
 			}
 		}
 	}
+}
+
+func testStringPtr(value string) *string {
+	return &value
+}
+
+func fakeCodexTurnText(prompt string) string {
+	if strings.Contains(prompt, "Create an ExecPlan for the Linear issue below.") {
+		return "# Fake ExecPlan\n\nPlan details."
+	}
+	return outcomeReadyForReview + "\n\nImplemented the requested change."
+}
+
+func extractPromptText(msg map[string]any) string {
+	params, _ := msg["params"].(map[string]any)
+	values := promptTextValues(params)
+	return strings.TrimSpace(strings.Join(values, "\n\n"))
+}
+
+func promptTextValues(value any) []string {
+	var out []string
+
+	var walk func(any)
+	walk = func(current any) {
+		switch v := current.(type) {
+		case map[string]any:
+			for key, item := range v {
+				if strings.EqualFold(strings.TrimSpace(key), "text") {
+					if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+						out = append(out, strings.TrimSpace(text))
+					}
+					continue
+				}
+				walk(item)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		}
+	}
+
+	walk(value)
+	return out
+}
+
+func appendPromptLog(path string, prompt string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := fmt.Fprintln(file, "===TURN==="); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(file, prompt); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(file, "===END===")
+	return err
 }
 
 func readJSONMessage(reader *bufio.Reader) (map[string]any, error) {

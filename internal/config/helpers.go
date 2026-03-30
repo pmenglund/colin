@@ -103,6 +103,14 @@ func readInt(raw map[string]any, key string) (int, bool) {
 	return toInt(value)
 }
 
+func readBool(raw map[string]any, key string) (bool, bool) {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return false, false
+	}
+	return toBool(value)
+}
+
 func toInt(value any) (int, bool) {
 	switch v := value.(type) {
 	case int:
@@ -116,6 +124,18 @@ func toInt(value any) (int, bool) {
 		return n, err == nil
 	default:
 		return 0, false
+	}
+}
+
+func toBool(value any) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		return parsed, err == nil
+	default:
+		return false, false
 	}
 }
 

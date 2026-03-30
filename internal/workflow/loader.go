@@ -153,6 +153,7 @@ func issueToMap(issue domain.Issue) map[string]any {
 		"url":             derefString(issue.URL),
 		"labels":          cloneStrings(issue.Labels),
 		"colin_metadata":  colinMetadataToMap(issue.ColinMetadata),
+		"exec_plan":       execPlanToMap(issue.ExecPlan),
 		"blocked_by":      blockersToMaps(issue.BlockedBy),
 		"review_cycle":    reviewCycleToMap(issue.ReviewCycle),
 		"review_feedback": reviewFeedbackToMaps(issue.ReviewFeedback),
@@ -242,6 +243,17 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"last_outcome":             value.LastOutcome,
 		"last_summary_comment_id":  value.LastSummaryCommentID,
 		"updated_at":               derefTime(value.UpdatedAt),
+	}
+}
+
+func execPlanToMap(value *domain.ExecPlan) any {
+	if value == nil {
+		return nil
+	}
+	return map[string]any{
+		"attachment_id": value.AttachmentID,
+		"body":          value.Body,
+		"updated_at":    derefTime(value.UpdatedAt),
 	}
 }
 

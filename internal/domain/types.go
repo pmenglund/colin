@@ -15,6 +15,7 @@ type Issue struct {
 	Labels         []string
 	BlockedBy      []BlockerRef
 	ColinMetadata  *ColinMetadata
+	ExecPlan       *ExecPlan
 	ReviewCycle    *ReviewCycle
 	ReviewFeedback []ReviewFeedback
 	ReviewThreads  []GitHubReviewThread
@@ -38,6 +39,13 @@ type ColinMetadata struct {
 	LastSummaryCommentID   string
 	UpdatedAt              *time.Time
 	CodexOutput            []OutputLog
+}
+
+// ExecPlan is persisted on the Linear issue to track the current issue execution plan.
+type ExecPlan struct {
+	AttachmentID string
+	Body         string
+	UpdatedAt    *time.Time
 }
 
 // BlockerRef captures the minimal blocker fields needed for eligibility checks and prompt context.
@@ -151,6 +159,7 @@ type AgentConfig struct {
 	MaxRetryBackoff            time.Duration
 	MaxConcurrentAgentsByState map[string]int
 	MaxTurns                   int
+	CreateExecPlan             bool
 }
 
 // CodexConfig configures the Codex app-server process and timeout behavior.
