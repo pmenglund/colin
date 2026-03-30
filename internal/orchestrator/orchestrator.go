@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,15 +16,16 @@ import (
 // New constructs an Orchestrator for the supplied runtime dependencies.
 func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 	return &Orchestrator{
-		logger:      logger,
-		eventCh:     make(chan any, 256),
-		runtime:     runtime,
-		running:     map[string]*runningEntry{},
-		claimed:     map[string]struct{}{},
-		retrying:    map[string]*retryState{},
-		reviewSync:  map[string]*reviewSyncState{},
-		completed:   map[string]string{},
-		issueStates: map[string]int{},
+		logger:            logger,
+		eventCh:           make(chan any, 256),
+		runtime:           runtime,
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
 	}
 }
 
@@ -150,6 +153,7 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
 	stateNames := trackedStateNames(o.runtime.Config)
 	if len(stateNames) == 0 {
 		o.issueStates = map[string]int{}
+		o.pausedIssueStates = map[string]domain.PausedStateSummary{}
 		return
 	}
 	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
@@ -164,10 +168,21 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
 	}
 
 	counts := make(map[string]int, len(stateNames))
+	paused := map[string]domain.PausedStateSummary{}
 	for _, issue := range issues {
 		counts[issue.State]++
+		if !hasIssueLabel(issue, domain.PausedIssueLabel) {
+			continue
+		}
+		summary := paused[issue.State]
+		summary.Count++
+		if strings.TrimSpace(summary.URL) == "" && issue.URL != nil {
+			summary.URL = buildPausedIssueSearchURL(*issue.URL, issue.State)
+		}
+		paused[issue.State] = summary
 	}
 	o.issueStates = counts
+	o.pausedIssueStates = paused
 }
 
 func (o *Orchestrator) trackerThrottleDelay(now time.Time) time.Duration {
@@ -256,6 +271,33 @@ func trackedStateNames(cfg domain.ServiceConfig) []string {
 		out = append(out, state)
 	}
 	return out
+}
+
+func buildPausedIssueSearchURL(issueURL string, state string) string {
+	parsed, err := url.Parse(strings.TrimSpace(issueURL))
+	if err != nil {
+		return ""
+	}
+	if strings.TrimSpace(parsed.Scheme) == "" || strings.TrimSpace(parsed.Host) == "" {
+		return ""
+	}
+
+	pathSegments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(pathSegments) == 0 || strings.TrimSpace(pathSegments[0]) == "" {
+		return ""
+	}
+	workspace := pathSegments[0]
+
+	query := fmt.Sprintf(`label:%s status:"%s"`, domain.PausedIssueLabel, strings.TrimSpace(state))
+	values := url.Values{}
+	values.Set("q", query)
+
+	return (&url.URL{
+		Scheme:   parsed.Scheme,
+		Host:     parsed.Host,
+		Path:     "/" + workspace + "/search",
+		RawQuery: values.Encode(),
+	}).String()
 }
 
 func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) {

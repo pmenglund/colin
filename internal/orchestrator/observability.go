@@ -74,7 +74,8 @@ func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 			"running":  len(running),
 			"retrying": len(retrying),
 		},
-		IssueStates: cloneCounts(o.issueStates),
+		IssueStates:       cloneCounts(o.issueStates),
+		PausedIssueStates: clonePausedStateSummaries(o.pausedIssueStates),
 	}
 }
 
@@ -83,6 +84,17 @@ func cloneCounts(input map[string]int) map[string]int {
 		return map[string]int{}
 	}
 	out := make(map[string]int, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func clonePausedStateSummaries(input map[string]domain.PausedStateSummary) map[string]domain.PausedStateSummary {
+	if len(input) == 0 {
+		return map[string]domain.PausedStateSummary{}
+	}
+	out := make(map[string]domain.PausedStateSummary, len(input))
 	for key, value := range input {
 		out[key] = value
 	}

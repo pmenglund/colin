@@ -190,6 +190,12 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 			"Merge":       1,
 			"Done":        14,
 		},
+		PausedIssueStates: map[string]domain.PausedStateSummary{
+			"Review": {
+				Count: 1,
+				URL:   "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+			},
+		},
 		Running: []domain.SnapshotRunning{
 			{
 				IssueID:      "issue-demo-1",
