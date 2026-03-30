@@ -72,6 +72,11 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	for _, want := range []string{
 		`data-testid="dashboard-root"`,
 		`data-testid="refresh-button"`,
+		`data-testid="refresh-status"`,
+		`data-refresh-status="live"`,
+		`data-generated-at="2026-03-28T12:00:00Z"`,
+		`title="Last successful update at 2026-03-28T12:00:00Z"`,
+		`Live data`,
 		`data-refresh-toggle="true"`,
 		`❚❚`,
 		`<h1>Colin</h1>`,
@@ -211,6 +216,12 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	}
 	if !strings.Contains(html, `id="dashboard-root"`) {
 		t.Fatalf("fragment missing dashboard root:\n%s", html)
+	}
+	if !strings.Contains(html, `data-testid="refresh-status"`) {
+		t.Fatalf("fragment missing refresh status badge:\n%s", html)
+	}
+	if !strings.Contains(html, `data-refresh-status="live"`) {
+		t.Fatalf("fragment missing live refresh status:\n%s", html)
 	}
 }
 

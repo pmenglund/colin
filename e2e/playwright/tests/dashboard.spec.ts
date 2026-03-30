@@ -66,3 +66,43 @@ test("worker card expands and refresh updates the fragment without reloading the
   const afterShellInstance = await page.getByTestId("shell-instance").textContent();
   expect(afterShellInstance).toBe(shellInstance);
 });
+
+test("dashboard marks the view stale when refresh fails and recovers after a later success", async ({ page }) => {
+  await page.goto("/");
+
+  const refreshStatus = page.getByTestId("refresh-status");
+  await expect(refreshStatus).toHaveAttribute("data-refresh-status", "live");
+  const generatedAt = await refreshStatus.getAttribute("data-generated-at");
+  expect(generatedAt).toBeTruthy();
+
+  await page.getByTestId("refresh-button").click();
+  await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
+
+  let failNextRefresh = true;
+  const routeHandler = async (route) => {
+    const request = route.request();
+    const headers = request.headers();
+    const path = new URL(request.url()).pathname;
+    if (failNextRefresh && headers["hx-request"] === "true" && path === "/") {
+      failNextRefresh = false;
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  };
+  await page.route("**/*", routeHandler);
+
+  await page.getByTestId("refresh-button").click();
+  await expect(refreshStatus).toHaveAttribute("data-refresh-status", "stale");
+  await expect(refreshStatus).toHaveText("Stale data");
+  await expect(refreshStatus).toHaveAttribute("data-generated-at", generatedAt ?? "");
+  await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
+
+  await page.getByTestId("refresh-button").click();
+  await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
+  await page.getByTestId("refresh-button").click();
+  await expect(refreshStatus).toHaveAttribute("data-refresh-status", "live");
+  await expect(refreshStatus).toHaveText("Live data");
+
+  await page.unroute("**/*", routeHandler);
+});

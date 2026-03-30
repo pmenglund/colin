@@ -170,6 +170,7 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 }
 
 func toolbar(snapshot domain.Snapshot) g.Node {
+	generatedAt := snapshot.GeneratedAt.UTC().Format(time.RFC3339)
 	return h.Section(
 		h.Class("card dashboard-toolbar"),
 		h.Div(
@@ -179,7 +180,8 @@ func toolbar(snapshot domain.Snapshot) g.Node {
 		),
 		h.Div(
 			h.Class("toolbar-actions"),
-			h.Span(h.Class("badge badge-accent"), h.Data("testid", "snapshot-generated"), g.Text(snapshot.GeneratedAt.Format(time.RFC3339))),
+			h.Span(h.Class("badge badge-success"), h.Data("testid", "refresh-status"), g.Attr("data-refresh-status", "live"), g.Attr("data-generated-at", generatedAt), g.Attr("aria-live", "polite"), g.Attr("title", "Last successful update at "+generatedAt), g.Text("Live data")),
+			h.Span(h.Class("badge badge-accent"), h.Data("testid", "snapshot-generated"), g.Text(generatedAt)),
 			h.Button(
 				h.Type("button"),
 				h.Class("btn"),
