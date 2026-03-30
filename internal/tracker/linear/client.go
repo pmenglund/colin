@@ -276,6 +276,40 @@ mutation AddIssueLabel($id: String!, $labelId: String!) {
 	return nil
 }
 
+// RemoveIssueLabel removes the named Linear issue label from the supplied issue.
+func (c *Client) RemoveIssueLabel(ctx context.Context, issueID string, labelName string) error {
+	labelID, err := c.findIssueLabelID(ctx, labelName)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(labelID) == "" {
+		return nil
+	}
+
+	const query = `
+mutation RemoveIssueLabel($id: String!, $labelId: String!) {
+  issueRemoveLabel(id: $id, labelId: $labelId) {
+    success
+    issue {
+      id
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"id":      issueID,
+		"labelId": labelID,
+	})
+	if err != nil {
+		return err
+	}
+	success, _ := nestedBool(resp, "data", "issueRemoveLabel", "success")
+	if !success {
+		return ErrUnknownPayload
+	}
+	return nil
+}
+
 // ResolveGitAutomationState returns the team-configured Linear git automation state for the supplied event.
 func (c *Client) ResolveGitAutomationState(ctx context.Context, issueID string, event string, targetBranch string) (string, bool, error) {
 	const query = `

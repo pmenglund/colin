@@ -616,6 +616,113 @@ func TestAddIssueLabelUsesExistingLabelID(t *testing.T) {
 	}
 }
 
+func TestRemoveIssueLabelUsesExistingLabelID(t *testing.T) {
+	t.Parallel()
+
+	var gotIssueID string
+	var gotLabelID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":   "label-1",
+								"name": "paused",
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation RemoveIssueLabel"):
+			gotIssueID, _ = request.Variables["id"].(string)
+			gotLabelID, _ = request.Variables["labelId"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueRemoveLabel": map[string]any{
+						"success": true,
+						"issue": map[string]any{
+							"id": gotIssueID,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
+	}
+
+	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
+		t.Fatalf("RemoveIssueLabel() error = %v", err)
+	}
+	if gotIssueID != "issue-1" {
+		t.Fatalf("gotIssueID = %q, want %q", gotIssueID, "issue-1")
+	}
+	if gotLabelID != "label-1" {
+		t.Fatalf("gotLabelID = %q, want %q", gotLabelID, "label-1")
+	}
+}
+
+func TestRemoveIssueLabelNoopWhenLabelMissing(t *testing.T) {
+	t.Parallel()
+
+	queryCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		queryCount++
+		if !strings.Contains(request.Query, "query IssueLabelsByName") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issueLabels": map[string]any{
+					"nodes": []map[string]any{},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
+	}
+
+	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
+		t.Fatalf("RemoveIssueLabel() error = %v", err)
+	}
+	if queryCount != 1 {
+		t.Fatalf("query count = %d, want 1", queryCount)
+	}
+}
+
 func TestUpsertIssueExecPlan(t *testing.T) {
 	t.Parallel()
 

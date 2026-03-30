@@ -30,9 +30,31 @@ const (
 	ReviewPublishDirectivePublish = "publish"
 	ReviewPublishDirectiveSkip    = "skip"
 	PausedIssueLabel              = "paused"
+	CodexReviewPendingLabel       = "codex-review: pending"
+	CodexReviewApprovedLabel      = "codex-review: approved"
+	CodexReviewUnresolvedLabel    = "codex-review: unresolved-feedback"
 	ExecPlanDecisionOneShot       = "one_shot"
 	ExecPlanDecisionExecPlan      = "exec_plan"
 )
+
+// ManagedIssueLabels returns the Colin-managed Linear labels that must exist at startup.
+func ManagedIssueLabels() []string {
+	return []string{
+		PausedIssueLabel,
+		CodexReviewPendingLabel,
+		CodexReviewApprovedLabel,
+		CodexReviewUnresolvedLabel,
+	}
+}
+
+// ManagedCodexReviewLabels returns the mutually exclusive Codex PR review status labels.
+func ManagedCodexReviewLabels() []string {
+	return []string{
+		CodexReviewPendingLabel,
+		CodexReviewApprovedLabel,
+		CodexReviewUnresolvedLabel,
+	}
+}
 
 // ColinMetadata is persisted on the Linear issue to track Colin-specific workflow state.
 type ColinMetadata struct {

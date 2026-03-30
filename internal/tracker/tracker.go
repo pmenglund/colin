@@ -18,6 +18,7 @@ type Client interface {
 	UpdateIssueState(ctx context.Context, issueID string, stateName string) error
 	EnsureIssueLabel(ctx context.Context, labelName string) error
 	AddIssueLabel(ctx context.Context, issueID string, labelName string) error
+	RemoveIssueLabel(ctx context.Context, issueID string, labelName string) error
 	ResolveGitAutomationState(ctx context.Context, issueID string, event string, targetBranch string) (string, bool, error)
 	CreateIssueComment(ctx context.Context, issueID string, body string) (string, error)
 	CreateCommentReply(ctx context.Context, issueID string, parentCommentID string, body string) (string, error)

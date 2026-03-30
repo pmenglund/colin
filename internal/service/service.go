@@ -76,7 +76,7 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 	s.applyPublicURLResolver(s.currentRuntime())
-	if err := s.ensurePausedLabel(ctx); err != nil {
+	if err := s.ensureManagedLabels(ctx); err != nil {
 		return err
 	}
 	if err := s.orch.StartupTerminalCleanup(ctx); err != nil {
@@ -281,13 +281,15 @@ func intPtr(value int) *int {
 	return &value
 }
 
-func (s *Service) ensurePausedLabel(ctx context.Context) error {
+func (s *Service) ensureManagedLabels(ctx context.Context) error {
 	runtime := s.currentRuntime()
 	if runtime.Tracker == nil {
 		return nil
 	}
-	if err := runtime.Tracker.EnsureIssueLabel(ctx, domain.PausedIssueLabel); err != nil {
-		return fmt.Errorf("ensure %s label: %w", domain.PausedIssueLabel, err)
+	for _, labelName := range domain.ManagedIssueLabels() {
+		if err := runtime.Tracker.EnsureIssueLabel(ctx, labelName); err != nil {
+			return fmt.Errorf("ensure %s label: %w", labelName, err)
+		}
 	}
 	return nil
 }
