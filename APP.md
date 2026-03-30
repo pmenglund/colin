@@ -36,8 +36,9 @@ Today, the checked-in workflow uses:
 2. Poll Linear for candidate issues in the configured project and tracked states.
 3. Reconcile running issues and queued retries.
 4. Create or reuse a workspace for each dispatched issue.
-5. Run Codex for active issues, or repo automation for handoff states.
-6. Post high-level progress back to Linear as a comment thread.
+5. For active issues, optionally decide once whether the work is a one-shot change or needs a stored ExecPlan, then run Codex with that persisted decision.
+6. Run repo automation for handoff states.
+7. Post high-level progress back to Linear as a comment thread.
 
 The orchestrator owns claims, running sessions, retries, and live telemetry.
 

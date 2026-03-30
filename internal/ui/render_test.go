@@ -226,6 +226,7 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		State:      "Review",
 		URL:        &issueURL,
 		ColinMetadata: &domain.ColinMetadata{
+			ExecPlanDecision:     domain.ExecPlanDecisionOneShot,
 			LastRunType:          "coding",
 			LastOutcome:          "ready_for_review",
 			LastSummaryCommentID: "comment-12",
@@ -240,6 +241,8 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`data-testid="issue-metadata-panel"`,
 		`data-testid="issue-metadata-output"`,
 		`COLIN-111 - Update metadata link`,
+		`ExecPlan decision`,
+		`one_shot`,
 		`Last run type`,
 		`ready_for_review`,
 		`comment-12`,

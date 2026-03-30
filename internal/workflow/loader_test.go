@@ -100,3 +100,21 @@ func TestRenderPromptIncludesExecPlan(t *testing.T) {
 		t.Fatalf("prompt = %q, want %q", prompt, "Plan body")
 	}
 }
+
+func TestRenderPromptIncludesExecPlanDecision(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{PromptTemplate: `{{.issue.colin_metadata.exec_plan_decision}}`}
+	prompt, err := RenderPrompt(def, domain.Issue{
+		Identifier: "ABC-123",
+		ColinMetadata: &domain.ColinMetadata{
+			ExecPlanDecision: domain.ExecPlanDecisionOneShot,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RenderPrompt() error = %v", err)
+	}
+	if prompt != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("prompt = %q, want %q", prompt, domain.ExecPlanDecisionOneShot)
+	}
+}

@@ -119,6 +119,7 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 							h.Class("worker-grid"),
 							metadataStatCard("Identifier", fallback(issue.Identifier, "unknown")),
 							metadataStatCard("State", fallback(issue.State, "unknown")),
+							metadataStatCard("ExecPlan decision", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.ExecPlanDecision }), "not recorded")),
 							metadataStatCard("Last run type", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastRunType }), "unknown")),
 							metadataStatCard("Last outcome", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastOutcome }), "unknown")),
 							metadataStatCard("Summary comment", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastSummaryCommentID }), "not recorded")),
