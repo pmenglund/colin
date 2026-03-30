@@ -753,6 +753,7 @@ func (r *Runner) buildMergedResult(ctx context.Context, issue domain.Issue, work
 		Action:    result.Action,
 	})
 	issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
+	issue = r.clearManagedCodexReviewLabelsBestEffort(ctx, issue)
 	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
 	issue.PullRequest = &domain.PullRequestRef{
 		Number:  result.PRNumber,
@@ -775,6 +776,31 @@ func (r *Runner) buildMergedResult(ctx context.Context, issue domain.Issue, work
 			BaseRef: result.PRBaseRef,
 		},
 	}
+}
+
+func (r *Runner) clearManagedCodexReviewLabelsBestEffort(ctx context.Context, issue domain.Issue) domain.Issue {
+	if r.tracker == nil {
+		return issue
+	}
+	kept := issue.Labels[:0]
+	for _, labelName := range issue.Labels {
+		managed := false
+		for _, managedLabel := range domain.ManagedCodexReviewLabels() {
+			if strings.EqualFold(strings.TrimSpace(labelName), managedLabel) {
+				managed = true
+				if err := r.tracker.RemoveIssueLabel(ctx, issue.ID, managedLabel); err != nil {
+					r.logger.Warn("failed to remove managed codex review label after merge", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "label", managedLabel, "error", err)
+					kept = append(kept, labelName)
+				}
+				break
+			}
+		}
+		if !managed {
+			kept = append(kept, labelName)
+		}
+	}
+	issue.Labels = kept
+	return issue
 }
 
 func (r *Runner) handlePublishWithoutReviewableChanges(ctx context.Context, issue domain.Issue, workspacePath string) Result {

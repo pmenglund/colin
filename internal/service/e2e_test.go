@@ -97,13 +97,13 @@ Work on {{ .issue.identifier }}.
 	}()
 
 	waitFor(t, 5*time.Second, func() bool {
-		if _, err := os.Stat(markerPath); err != nil {
-			return false
-		}
-		return linear.StateFetches() > 0 && linear.ReplyCount() > 0
+		_, err := os.Stat(markerPath)
+		return err == nil
 	})
 
-	time.Sleep(300 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		return linear.ReplyCount() > 0
+	})
 	cancel()
 
 	select {

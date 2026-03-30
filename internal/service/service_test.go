@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 )
 
@@ -122,4 +125,89 @@ Work on {{ .issue.identifier }}.
 	if !errors.Is(err, linear.ErrMissingWorkflowState) {
 		t.Fatalf("New() error = %v, want linear.ErrMissingWorkflowState", err)
 	}
+}
+
+func TestEnsureManagedLabelsEnsuresPausedAndCodexReviewLabels(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{}
+	svc := &Service{
+		runtime: orchestrator.Runtime{
+			Tracker: tracker,
+		},
+	}
+
+	if err := svc.ensureManagedLabels(context.Background()); err != nil {
+		t.Fatalf("ensureManagedLabels() error = %v", err)
+	}
+
+	if len(tracker.ensuredLabels) != len(domain.ManagedIssueLabels()) {
+		t.Fatalf("ensured label count = %d, want %d", len(tracker.ensuredLabels), len(domain.ManagedIssueLabels()))
+	}
+	for i, want := range domain.ManagedIssueLabels() {
+		if tracker.ensuredLabels[i] != want {
+			t.Fatalf("ensuredLabels[%d] = %q, want %q", i, tracker.ensuredLabels[i], want)
+		}
+	}
+}
+
+type serviceTrackerStub struct {
+	ensuredLabels []string
+}
+
+func (s *serviceTrackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+	return nil, nil
+}
+
+func (s *serviceTrackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+
+func (s *serviceTrackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+
+func (s *serviceTrackerStub) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+
+func (s *serviceTrackerStub) UpdateIssueState(context.Context, string, string) error {
+	return nil
+}
+
+func (s *serviceTrackerStub) EnsureIssueLabel(_ context.Context, labelName string) error {
+	s.ensuredLabels = append(s.ensuredLabels, labelName)
+	return nil
+}
+
+func (s *serviceTrackerStub) AddIssueLabel(context.Context, string, string) error {
+	return nil
+}
+
+func (s *serviceTrackerStub) RemoveIssueLabel(context.Context, string, string) error {
+	return nil
+}
+
+func (s *serviceTrackerStub) ResolveGitAutomationState(context.Context, string, string, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (s *serviceTrackerStub) CreateIssueComment(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
+func (s *serviceTrackerStub) CreateCommentReply(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
+
+func (s *serviceTrackerStub) UpsertIssueMetadata(context.Context, string, domain.ColinMetadata) (domain.ColinMetadata, error) {
+	return domain.ColinMetadata{}, nil
+}
+
+func (s *serviceTrackerStub) UpsertIssueExecPlan(context.Context, string, domain.ExecPlan) (domain.ExecPlan, error) {
+	return domain.ExecPlan{}, nil
+}
+
+func (s *serviceTrackerStub) CurrentRateLimits() map[string]any {
+	return nil
 }

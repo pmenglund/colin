@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,20 +15,22 @@ import (
 )
 
 type trackerStub struct {
-	candidateIssues    []domain.Issue
-	candidateCalls     int
-	candidateInvoked   chan struct{}
-	issuesByState      []domain.Issue
-	issuesByStateCalls int
-	issuesByID         []domain.Issue
-	rateLimits         map[string]any
-	issueComments      []string
-	commentReplies     []string
-	metadata           domain.ColinMetadata
-	ensuredLabels      []string
-	addedLabels        []string
-	ensureLabelErr     error
-	addIssueLabelErr   error
+	candidateIssues     []domain.Issue
+	candidateCalls      int
+	candidateInvoked    chan struct{}
+	issuesByState       []domain.Issue
+	issuesByStateCalls  int
+	issuesByID          []domain.Issue
+	rateLimits          map[string]any
+	issueComments       []string
+	commentReplies      []string
+	metadata            domain.ColinMetadata
+	ensuredLabels       []string
+	addedLabels         []string
+	removedLabels       []string
+	ensureLabelErr      error
+	addIssueLabelErr    error
+	removeIssueLabelErr error
 }
 
 func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
@@ -73,6 +77,11 @@ func (s *trackerStub) AddIssueLabel(_ context.Context, issueID string, labelName
 	return s.addIssueLabelErr
 }
 
+func (s *trackerStub) RemoveIssueLabel(_ context.Context, issueID string, labelName string) error {
+	s.removedLabels = append(s.removedLabels, issueID+":"+labelName)
+	return s.removeIssueLabelErr
+}
+
 func (s *trackerStub) ResolveGitAutomationState(context.Context, string, string, string) (string, bool, error) {
 	return "", false, nil
 }
@@ -98,6 +107,90 @@ func (s *trackerStub) UpsertIssueExecPlan(_ context.Context, _ string, plan doma
 
 func (s *trackerStub) CurrentRateLimits() map[string]any {
 	return s.rateLimits
+}
+
+func TestSyncIssueCodexReviewLabelAddsDesiredAndRemovesOthers(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker},
+	}
+
+	orch.syncIssueCodexReviewLabel(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Labels: []string{
+			domain.CodexReviewApprovedLabel,
+			domain.CodexReviewUnresolvedLabel,
+			"e2e",
+		},
+	}, domain.CodexReviewPendingLabel)
+
+	if len(tracker.addedLabels) != 1 || tracker.addedLabels[0] != "issue-1:"+domain.CodexReviewPendingLabel {
+		t.Fatalf("addedLabels = %v, want pending label", tracker.addedLabels)
+	}
+	if got, want := tracker.removedLabels, []string{
+		"issue-1:" + domain.CodexReviewApprovedLabel,
+		"issue-1:" + domain.CodexReviewUnresolvedLabel,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("removedLabels = %v, want %v", got, want)
+	}
+}
+
+func TestSyncIssueCodexReviewLabelClearsManagedLabelsWhenNoStateWanted(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker},
+	}
+
+	orch.syncIssueCodexReviewLabel(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Labels: []string{
+			domain.CodexReviewPendingLabel,
+			domain.CodexReviewApprovedLabel,
+		},
+	}, "")
+
+	if len(tracker.addedLabels) != 0 {
+		t.Fatalf("addedLabels = %v, want none", tracker.addedLabels)
+	}
+	if got, want := tracker.removedLabels, []string{
+		"issue-1:" + domain.CodexReviewPendingLabel,
+		"issue-1:" + domain.CodexReviewApprovedLabel,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("removedLabels = %v, want %v", got, want)
+	}
+}
+
+func TestSyncIssueCodexReviewLabelKeepsCurrentLabelWhenReplacementAddFails(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{addIssueLabelErr: os.ErrPermission}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker},
+	}
+
+	orch.syncIssueCodexReviewLabel(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Labels: []string{
+			domain.CodexReviewApprovedLabel,
+		},
+	}, domain.CodexReviewPendingLabel)
+
+	if got, want := tracker.addedLabels, []string{"issue-1:" + domain.CodexReviewPendingLabel}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("addedLabels = %v, want %v", got, want)
+	}
+	if len(tracker.removedLabels) != 0 {
+		t.Fatalf("removedLabels = %v, want none", tracker.removedLabels)
+	}
 }
 
 type runnerStub struct {

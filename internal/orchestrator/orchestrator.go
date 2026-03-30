@@ -11,6 +11,7 @@ import (
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repoops"
 )
 
 // New constructs an Orchestrator for the supplied runtime dependencies.
@@ -100,7 +101,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	}
 	o.logger.Debug("poll tick started", args...)
 	o.reconcileRunning(ctx)
-	o.refreshIssueStateCounts(ctx)
+	trackedIssues := o.refreshIssueStateCounts(ctx)
+	o.syncCodexReviewLabels(ctx, trackedIssues)
 	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
@@ -151,22 +153,22 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.logger.Debug("poll tick completed", args...)
 }
 
-func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
+func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Issue {
 	stateNames := trackedStateNames(o.runtime.Config)
 	if len(stateNames) == 0 {
 		o.issueStates = map[string]int{}
 		o.pausedIssueStates = map[string]domain.PausedStateSummary{}
-		return
+		return nil
 	}
 	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
 		o.logger.Debug("issue state count refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
-		return
+		return nil
 	}
 
 	issues, err := o.runtime.Tracker.FetchIssuesByStates(ctx, stateNames)
 	if err != nil {
 		o.logger.Warn("issue state count refresh failed", "error", err)
-		return
+		return nil
 	}
 
 	counts := make(map[string]int, len(stateNames))
@@ -185,6 +187,52 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
 	}
 	o.issueStates = counts
 	o.pausedIssueStates = paused
+	return issues
+}
+
+func (o *Orchestrator) syncCodexReviewLabels(ctx context.Context, issues []domain.Issue) {
+	if len(issues) == 0 || o.runtime.Tracker == nil {
+		return
+	}
+	for _, issue := range issues {
+		if !hasIssueReviewSyncPullRequestSignal(issue) {
+			o.syncIssueCodexReviewLabel(ctx, issue, "")
+			continue
+		}
+		if o.runtime.Repo == nil || o.runtime.Workspace == nil {
+			continue
+		}
+		workspace, err := o.runtime.Workspace.Ensure(ctx, issue)
+		if err != nil {
+			o.logger.Warn("failed to prepare workspace for codex review label sync", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+			continue
+		}
+		reviewContext, err := o.runtime.Repo.ReviewContext(ctx, issue, workspace.Path)
+		if err != nil {
+			o.logger.Warn("failed to read review context for codex review label sync", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+			continue
+		}
+		labelName := repoops.LinearLabelForCodexReviewState(repoops.CodexReviewStateFromContext(reviewContext))
+		o.syncIssueCodexReviewLabel(ctx, issue, labelName)
+	}
+}
+
+func (o *Orchestrator) syncIssueCodexReviewLabel(ctx context.Context, issue domain.Issue, wantLabel string) {
+	if wantLabel != "" && !hasIssueLabel(issue, wantLabel) {
+		if err := o.runtime.Tracker.AddIssueLabel(ctx, issue.ID, wantLabel); err != nil {
+			o.logger.Warn("failed to add codex review label", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "label", wantLabel, "error", err)
+			return
+		}
+	}
+
+	for _, labelName := range domain.ManagedCodexReviewLabels() {
+		if labelName == wantLabel || !hasIssueLabel(issue, labelName) {
+			continue
+		}
+		if err := o.runtime.Tracker.RemoveIssueLabel(ctx, issue.ID, labelName); err != nil {
+			o.logger.Warn("failed to remove codex review label", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "label", labelName, "error", err)
+		}
+	}
 }
 
 func (o *Orchestrator) trackerThrottleDelay(now time.Time) time.Duration {

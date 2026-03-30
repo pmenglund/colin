@@ -167,6 +167,33 @@ func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
 	}
 }
 
+func TestClearManagedCodexReviewLabelsBestEffortRemovesOnlyManagedReviewLabels(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue := runner.clearManagedCodexReviewLabelsBestEffort(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Labels: []string{
+			"e2e",
+			domain.CodexReviewPendingLabel,
+			domain.CodexReviewApprovedLabel,
+		},
+	})
+
+	if got, want := strings.Join(tracker.removedLabels, ","), "issue-1:"+domain.CodexReviewPendingLabel+",issue-1:"+domain.CodexReviewApprovedLabel; got != want {
+		t.Fatalf("removedLabels = %q, want %q", got, want)
+	}
+	if len(issue.Labels) != 1 || issue.Labels[0] != "e2e" {
+		t.Fatalf("remaining labels = %v, want [e2e]", issue.Labels)
+	}
+}
+
 func TestApplyPostMergeStateUsesConfiguredGitAutomationTarget(t *testing.T) {
 	t.Parallel()
 
@@ -1348,6 +1375,7 @@ type stubTracker struct {
 	updatedIssueID      string
 	updatedState        string
 	updatedStates       []string
+	removedLabels       []string
 	issueComments       []string
 	commentReplies      []string
 	metadata            domain.ColinMetadata
@@ -1384,6 +1412,11 @@ func (s *stubTracker) EnsureIssueLabel(context.Context, string) error {
 }
 
 func (s *stubTracker) AddIssueLabel(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubTracker) RemoveIssueLabel(_ context.Context, issueID string, labelName string) error {
+	s.removedLabels = append(s.removedLabels, issueID+":"+labelName)
 	return nil
 }
 

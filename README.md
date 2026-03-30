@@ -69,6 +69,7 @@ go run . /path/to/WORKFLOW.md
 - Each issue gets its own workspace directory. Colin preserves that workspace across retries and continuation runs.
 - Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
 - On startup, Colin ensures the Linear issue label `paused` exists and never dispatches issues carrying that label.
+- On startup, Colin also ensures the managed Codex PR review labels `codex-review: pending`, `codex-review: approved`, and `codex-review: unresolved-feedback` exist.
 - During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
@@ -78,6 +79,7 @@ go run . /path/to/WORKFLOW.md
 - If an issue ever has multiple `Colin ExecPlan` attachments, Colin fails closed, moves the issue to `Refine`, and requires human cleanup instead of guessing which plan to use.
 - Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
+- For tracked issues that already have a linked GitHub PR, Colin mirrors the current Codex PR review status back into Linear labels so the board shows whether Codex review is pending, approved, or still has unresolved feedback. Colin removes stale Codex review labels when no current Codex review status applies.
 - If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/`, JSON state at `/api/v1/state`, and buffered internal logs at `/api/v1/logs`.
