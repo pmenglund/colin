@@ -84,6 +84,7 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 	if c.thread == nil {
 		return fmt.Errorf("%w: thread not started", ErrPortExit)
 	}
+	c.resetTurnState()
 
 	ctx, cancel := context.WithTimeout(parent, c.cfg.Codex.TurnTimeout)
 	defer cancel()
@@ -189,6 +190,11 @@ func (c *appServerClient) finalSummary() string {
 
 func (c *appServerClient) lastOutput() string {
 	return strings.TrimSpace(c.lastTurnText)
+}
+
+func (c *appServerClient) resetTurnState() {
+	c.lastSummary = ""
+	c.lastTurnText = ""
 }
 
 func shouldCaptureSummary(eventName, summary string) bool {

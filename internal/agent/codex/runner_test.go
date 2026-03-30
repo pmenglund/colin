@@ -495,6 +495,156 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: false,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-108",
+			Title:      "Add exec plans",
+			State:      "Todo",
+			ExecPlan: &domain.ExecPlan{
+				Body: "# Persisted plan\n\nExisting details.",
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-108",
+		Title:       "Add exec plans",
+		Description: testStringPtr("Create and reuse an execution plan."),
+		State:       "Todo",
+		ExecPlan: &domain.ExecPlan{
+			Body: "# Persisted plan\n\nExisting details.",
+		},
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Contains(logText, "ExecPlan:\n\n# Persisted plan\n\nExisting details.") {
+		t.Fatalf("prompts log unexpectedly injected persisted exec plan: %q", logText)
+	}
+}
+
+func TestRunnerClearsExecPlanSummaryBeforeCodingTurn(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_CODING_TEXT= %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo", "In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-108",
+			Title:      "Add exec plans",
+			State:      "In Progress",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-108",
+		Title:       "Add exec plans",
+		Description: testStringPtr("Create and reuse an execution plan."),
+		State:       "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Refine" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
+	}
+	if strings.Contains(result.Summary, "# Fake ExecPlan") {
+		t.Fatalf("Summary = %q, want exec plan summary cleared before coding turn", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Colin reached the maximum of `1` turns") {
+		t.Fatalf("Summary = %q, want max-turn handoff note", result.Summary)
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return
@@ -697,7 +847,13 @@ func testStringPtr(value string) *string {
 
 func fakeCodexTurnText(prompt string) string {
 	if strings.Contains(prompt, "Create an ExecPlan for the Linear issue below.") {
+		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_TEXT"); ok {
+			return value
+		}
 		return "# Fake ExecPlan\n\nPlan details."
+	}
+	if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_CODING_TEXT"); ok {
+		return value
 	}
 	return outcomeReadyForReview + "\n\nImplemented the requested change."
 }

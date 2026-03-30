@@ -260,7 +260,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		if err != nil {
 			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
 		}
-		if turn == 1 {
+		if turn == 1 && r.cfg.Agent.CreateExecPlan {
 			prompt = injectExecPlanPrompt(prompt, current.ExecPlan)
 		}
 		if turn > 1 {
