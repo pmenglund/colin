@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,5 +84,73 @@ func TestAnnounceStartupWithoutDashboardPrintsRunningMessage(t *testing.T) {
 	}
 	if got, want := stdout.String(), "Colin is running.\n"; got != want {
 		t.Fatalf("startup output = %q, want %q", got, want)
+	}
+}
+
+func TestRunHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("run(--help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "setup") {
+		t.Fatalf("help output = %q, want to mention setup", got)
+	}
+}
+
+func TestRunRejectsExtraRootArgs(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"one", "two"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("run(extra root args) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "colin [path-to-WORKFLOW.md]") {
+		t.Fatalf("stderr = %q, want root usage", got)
+	}
+}
+
+func TestRunRejectsSetupWithoutSubcommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("run(setup) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "colin setup [command]") {
+		t.Fatalf("stderr = %q, want setup help", got)
+	}
+}
+
+func TestRunRejectsExtraSetupFunnelArgs(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "funnel", "one", "two"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("run(setup funnel extra args) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "funnel [path-to-WORKFLOW.md]") {
+		t.Fatalf("stderr = %q, want setup funnel usage", got)
 	}
 }
