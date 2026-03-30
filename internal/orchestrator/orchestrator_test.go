@@ -227,8 +227,11 @@ func TestHandleWorkerExitMergeBlockedBackToReviewPostsSummary(t *testing.T) {
 		},
 	})
 
-	if len(tracker.commentReplies) != 1 {
-		t.Fatalf("commentReplies length = %d, want 1", len(tracker.commentReplies))
+	if len(tracker.commentReplies) != 2 {
+		t.Fatalf("commentReplies length = %d, want 2", len(tracker.commentReplies))
+	}
+	if tracker.commentReplies[0] != "[colin] Returning issue to `Review` because Codex PR feedback still needs to be resolved." {
+		t.Fatalf("first comment reply = %q", tracker.commentReplies[0])
 	}
 	if got := orch.completed["1"]; got != "Review" {
 		t.Fatalf("completed state = %q, want %q", got, "Review")
