@@ -48,6 +48,11 @@ codex:
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
+
+server:
+  port: 8888
+  # Optional when Colin is reachable through a reverse proxy or non-loopback host.
+  # public_url: https://colin.example.com
 ---
 
 You are working on Linear issue {{.issue.identifier}}: {{.issue.title}}.

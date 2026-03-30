@@ -368,6 +368,10 @@ func (s *stubTracker) FetchIssueStatesByIDs(context.Context, []string) ([]domain
 	return []domain.Issue{s.refreshedIssue}, nil
 }
 
+func (s *stubTracker) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+	return s.refreshedIssue, nil
+}
+
 func (s *stubTracker) UpdateIssueState(_ context.Context, issueID string, stateName string) error {
 	s.updatedIssueID = issueID
 	s.updatedState = stateName

@@ -371,6 +371,9 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	if value, ok := readInt(raw, "port"); ok {
 		cfg.Server.Port = &value
 	}
+	if value, ok := readString(raw, "public_url"); ok {
+		cfg.Server.PublicURL = resolveEnvToken(value)
+	}
 	return nil
 }
 

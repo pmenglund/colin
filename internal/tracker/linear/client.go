@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -31,19 +32,18 @@ var (
 
 const (
 	colinMetadataAttachmentTitle = "Colin metadata"
-	colinMetadataURLPrefix       = "https://colin.invalid/linear/issues/"
-	colinMetadataURLSuffix       = "/metadata"
 )
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
-	endpoint string
-	apiKey   string
-	project  string
-	active   []string
-	client   *http.Client
-	rateMu   sync.RWMutex
-	rateInfo map[string]any
+	endpoint  string
+	apiKey    string
+	project   string
+	active    []string
+	client    *http.Client
+	publicURL string
+	rateMu    sync.RWMutex
+	rateInfo  map[string]any
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -52,10 +52,11 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		endpoint: cfg.Tracker.Endpoint,
-		apiKey:   cfg.Tracker.APIKey,
-		project:  cfg.Tracker.ProjectSlug,
-		active:   slices.Clone(config.CandidateStates(cfg)),
+		endpoint:  cfg.Tracker.Endpoint,
+		apiKey:    cfg.Tracker.APIKey,
+		project:   cfg.Tracker.ProjectSlug,
+		active:    slices.Clone(config.CandidateStates(cfg)),
+		publicURL: metadataBaseURL(cfg.Server),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -110,6 +111,77 @@ query IssueStates($ids: [ID!]!) {
 		issues = append(issues, issue)
 	}
 	return issues, nil
+}
+
+// FetchIssueByID returns the current issue snapshot for a single Linear issue.
+func (c *Client) FetchIssueByID(ctx context.Context, issueID string) (domain.Issue, error) {
+	const query = `
+query IssueByID($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    title
+    description
+    priority
+    branchName
+    url
+    createdAt
+    updatedAt
+    state { name }
+    labels { nodes { name } }
+    inverseRelations {
+      nodes {
+        type
+        issue {
+          id
+          identifier
+          state { name }
+        }
+      }
+    }
+    attachments(first: 50) {
+      nodes {
+        id
+        title
+        url
+        metadata
+      }
+    }
+    comments(first: 50) {
+      nodes {
+        id
+        body
+        createdAt
+        parentId
+        children(first: 50) {
+          nodes {
+            id
+            body
+            createdAt
+            parentId
+          }
+        }
+      }
+    }
+    history(first: 100) {
+      nodes {
+        createdAt
+        fromState { name }
+        toState { name }
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"id": issueID})
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	node, ok := nestedMap(resp, "data", "issue")
+	if !ok {
+		return domain.Issue{}, ErrUnknownPayload
+	}
+	return normalizeIssue(node)
 }
 
 // UpdateIssueState moves an issue to the named workflow state within the issue's team.
@@ -260,7 +332,7 @@ mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
 		"input": map[string]any{
 			"issueId":  issueID,
 			"title":    colinMetadataAttachmentTitle,
-			"url":      colinMetadataAttachmentURL(issueID),
+			"url":      c.metadataAttachmentURL(issueID),
 			"metadata": colinMetadataValue(metadata),
 		},
 	})
@@ -795,6 +867,31 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 			metadata.UpdatedAt = &parsed
 		}
 	}
+	if nodes, ok := metadataMap["codex_output"].([]any); ok {
+		output := make([]domain.OutputLog, 0, len(nodes))
+		for _, raw := range nodes {
+			node, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			timestampValue, ok := stringValue(node["timestamp"])
+			if !ok || strings.TrimSpace(timestampValue) == "" {
+				continue
+			}
+			timestamp, err := time.Parse(time.RFC3339, timestampValue)
+			if err != nil {
+				continue
+			}
+			event, _ := stringValue(node["event"])
+			message, _ := stringValue(node["message"])
+			output = append(output, domain.OutputLog{
+				Timestamp: timestamp,
+				Event:     event,
+				Message:   message,
+			})
+		}
+		metadata.CodexOutput = output
+	}
 	return metadata, nil
 }
 
@@ -808,16 +905,45 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	if metadata.UpdatedAt != nil {
 		value["updated_at"] = metadata.UpdatedAt.UTC().Format(time.RFC3339)
 	}
+	if len(metadata.CodexOutput) > 0 {
+		output := make([]map[string]any, 0, len(metadata.CodexOutput))
+		for _, item := range metadata.CodexOutput {
+			output = append(output, map[string]any{
+				"timestamp": item.Timestamp.UTC().Format(time.RFC3339),
+				"event":     strings.TrimSpace(item.Event),
+				"message":   strings.TrimSpace(item.Message),
+			})
+		}
+		value["codex_output"] = output
+	}
 	return value
 }
 
 func colinMetadataAttachmentURL(issueID string) string {
-	return colinMetadataURLPrefix + strings.TrimSpace(issueID) + colinMetadataURLSuffix
+	return domain.ColinMetadataPath(issueID)
+}
+
+func (c *Client) metadataAttachmentURL(issueID string) string {
+	return strings.TrimRight(c.publicURL, "/") + colinMetadataAttachmentURL(issueID)
 }
 
 func isColinMetadataURL(value string) bool {
-	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, colinMetadataURLPrefix) && strings.HasSuffix(value, colinMetadataURLSuffix)
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	_, ok := domain.ParseColinMetadataPath(parsed.EscapedPath())
+	return ok
+}
+
+func metadataBaseURL(cfg domain.ServerConfig) string {
+	if value := strings.TrimSpace(cfg.PublicURL); value != "" {
+		return value
+	}
+	if cfg.Port != nil {
+		return fmt.Sprintf("http://127.0.0.1:%d", *cfg.Port)
+	}
+	return "http://127.0.0.1"
 }
 
 func derefStringValue(value *string) string {

@@ -16,13 +16,17 @@ import (
 // SnapshotProvider returns the current dashboard snapshot for the request.
 type SnapshotProvider func(context.Context) (domain.Snapshot, error)
 
+// IssueProvider returns the current issue snapshot for a single tracker issue.
+type IssueProvider func(context.Context, string) (domain.Issue, error)
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
-	return NewObservabilityServer(newDemoSnapshotSource().Snapshot)
+	source := newDemoSnapshotSource()
+	return NewObservabilityServer(source.Snapshot, source.Issue)
 }
 
 // NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider) (http.Handler, error) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
@@ -55,6 +59,37 @@ func NewObservabilityServer(provider SnapshotProvider) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
+	mux.HandleFunc("/linear/issues/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		issueID, ok := domain.ParseColinMetadataPath(r.URL.EscapedPath())
+		if !ok || issueProvider == nil {
+			http.NotFound(w, r)
+			return
+		}
+		snapshot, err := provider(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		issue, err := issueProvider(r.Context(), issueID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		mergeLiveIssueOutput(&issue, snapshot)
+
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := ui.IssueMetadataPage(issue, time.Now().UTC()).Render(w); err != nil && !errors.Is(err, context.Canceled) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -84,6 +119,22 @@ func NewObservabilityServer(provider SnapshotProvider) (http.Handler, error) {
 	})
 
 	return secureHeaders(mux), nil
+}
+
+func mergeLiveIssueOutput(issue *domain.Issue, snapshot domain.Snapshot) {
+	if issue == nil {
+		return
+	}
+	for _, entry := range snapshot.Running {
+		if entry.IssueID != issue.ID {
+			continue
+		}
+		if issue.ColinMetadata == nil {
+			issue.ColinMetadata = &domain.ColinMetadata{}
+		}
+		issue.ColinMetadata.CodexOutput = append([]domain.OutputLog(nil), entry.OutputLog...)
+		return
+	}
 }
 
 func isHXRequest(r *http.Request) bool {
@@ -196,6 +247,32 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 			},
 		},
 	}, nil
+}
+
+func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.Issue, error) {
+	snapshot, err := s.Snapshot(ctx)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	for _, entry := range snapshot.Running {
+		if entry.IssueID != issueID {
+			continue
+		}
+		issue := domain.Issue{
+			ID:         entry.IssueID,
+			Identifier: entry.Identifier,
+			Title:      entry.Title,
+			State:      entry.State,
+			URL:        entry.URL,
+			ColinMetadata: &domain.ColinMetadata{
+				LastRunType: "coding",
+				LastOutcome: "ready_for_review",
+				UpdatedAt:   ptrTime(snapshot.GeneratedAt),
+			},
+		}
+		return issue, nil
+	}
+	return domain.Issue{}, errors.New("issue not found")
 }
 
 func ptrTime(value time.Time) *time.Time {

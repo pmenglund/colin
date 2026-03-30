@@ -66,6 +66,86 @@ func Page(snapshot domain.Snapshot, shellRenderedAt time.Time) g.Node {
 	))
 }
 
+// IssueMetadataPage renders a standalone page for one issue's Colin metadata.
+func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
+	title := strings.TrimSpace(issue.Identifier)
+	if title == "" {
+		title = "Issue metadata"
+	}
+	if strings.TrimSpace(issue.Title) != "" {
+		title += " - " + issue.Title
+	}
+
+	metadata := issue.ColinMetadata
+	return h.Doctype(h.HTML(
+		h.Lang("en"),
+		h.Head(
+			h.Meta(h.Charset("utf-8")),
+			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
+			h.Title("Colin Metadata: "+title),
+			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
+		),
+		h.Body(
+			h.Class("page-shell"),
+			h.Div(
+				h.Class("page-inner"),
+				h.Header(
+					h.Class("hero"),
+					h.Div(
+						h.Class("hero-grid"),
+						h.Div(
+							h.Span(h.Class("hero-label"), g.Text("Linear Issue Metadata")),
+							h.H1(g.Text(title)),
+							h.P(g.Text("Colin metadata and captured Codex output for this issue.")),
+						),
+						h.Div(
+							h.Class("shell-meta"),
+							h.Div(
+								h.Class("card"),
+								h.Data("testid", "metadata-rendered-at"),
+								h.Span(h.Class("badge badge-info"), g.Text("Rendered")),
+								h.Div(h.Class("issue-title"), g.Text(shellRenderedAt.UTC().Format(time.RFC3339))),
+							),
+						),
+					),
+				),
+				h.Main(
+					h.Class("dashboard-root"),
+					h.Section(
+						h.Class("table-card"),
+						h.Data("testid", "issue-metadata-panel"),
+						h.H3(g.Text("Issue")),
+						h.Div(
+							h.Class("worker-grid"),
+							metadataStatCard("Identifier", fallback(issue.Identifier, "unknown")),
+							metadataStatCard("State", fallback(issue.State, "unknown")),
+							metadataStatCard("Last run type", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastRunType }), "unknown")),
+							metadataStatCard("Last outcome", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastOutcome }), "unknown")),
+							metadataStatCard("Summary comment", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastSummaryCommentID }), "not recorded")),
+							metadataStatCard("Updated", fallback(metadataTimestamp(metadata), "not recorded")),
+						),
+						issueLinks(issue),
+					),
+					h.Section(
+						h.Class("table-card"),
+						h.Data("testid", "issue-metadata-output"),
+						h.H3(g.Text("Codex output")),
+						h.P(g.Text("Captured output for the latest Colin run on this issue.")),
+						h.Div(
+							h.Class("worker-output-list"),
+							renderOutputEntries(metadataOutput(metadata)),
+						),
+					),
+				),
+				h.Footer(
+					h.Class("footnote"),
+					h.A(h.Href("/"), g.Text("Back to dashboard")),
+				),
+			),
+		),
+	))
+}
+
 // Dashboard renders the HTMX-replaceable dashboard fragment.
 func Dashboard(snapshot domain.Snapshot) g.Node {
 	return h.Main(
@@ -167,6 +247,45 @@ func statCard(title, value, desc string) g.Node {
 		h.Div(h.Class("stat-value"), g.Text(value)),
 		h.Div(h.Class("stat-desc"), g.Text(desc)),
 	)
+}
+
+func metadataStatCard(title, value string) g.Node {
+	return h.Div(
+		h.Class("card"),
+		h.Div(h.Class("stat-title"), g.Text(title)),
+		h.Div(h.Class("issue-title"), g.Text(value)),
+	)
+}
+
+func issueLinks(issue domain.Issue) g.Node {
+	items := g.Group{
+		h.A(h.Href("/"), g.Text("Dashboard")),
+	}
+	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
+		items = append(items, g.Text(" | "), h.A(h.Href(*issue.URL), g.Text("Linear issue")))
+	}
+	return h.P(items)
+}
+
+func metadataValue(value *domain.ColinMetadata, field func(*domain.ColinMetadata) string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(field(value))
+}
+
+func metadataTimestamp(value *domain.ColinMetadata) string {
+	if value == nil || value.UpdatedAt == nil {
+		return ""
+	}
+	return value.UpdatedAt.UTC().Format(time.RFC3339)
+}
+
+func metadataOutput(value *domain.ColinMetadata) []domain.OutputLog {
+	if value == nil {
+		return nil
+	}
+	return value.CodexOutput
 }
 
 func runningPanel(snapshot domain.Snapshot) g.Node {

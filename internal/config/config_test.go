@@ -45,6 +45,31 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildReadsServerPublicURL(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"server": map[string]any{
+				"public_url": "https://colin.example.test",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Server.PublicURL; got != "https://colin.example.test" {
+		t.Fatalf("cfg.Server.PublicURL = %q, want %q", got, "https://colin.example.test")
+	}
+}
+
 func TestBuildRejectsPartialWorkspaceGitConfig(t *testing.T) {
 	t.Parallel()
 

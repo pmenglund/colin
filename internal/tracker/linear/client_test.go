@@ -43,9 +43,10 @@ func TestCreateIssueComment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		publicURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	commentID, err := client.CreateIssueComment(context.Background(), "issue-1", "hello world")
@@ -89,9 +90,10 @@ func TestCreateCommentReply(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		publicURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	commentID, err := client.CreateCommentReply(context.Background(), "issue-1", "comment-1", "reply")
@@ -146,9 +148,10 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		publicURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
@@ -168,8 +171,8 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotTitle != "Colin metadata" {
 		t.Fatalf("title = %q, want %q", gotTitle, "Colin metadata")
 	}
-	if gotURL != "https://colin.invalid/linear/issues/issue-1/metadata" {
-		t.Fatalf("url = %q, want %q", gotURL, "https://colin.invalid/linear/issues/issue-1/metadata")
+	if gotURL != "https://colin.example.test/root/linear/issues/issue-1/metadata" {
+		t.Fatalf("url = %q, want %q", gotURL, "https://colin.example.test/root/linear/issues/issue-1/metadata")
 	}
 	if gotMetadata["review_publish_directive"] != "skip" {
 		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
@@ -646,13 +649,20 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 									{
 										"id":    "attachment-1",
 										"title": "Colin metadata",
-										"url":   "https://colin.invalid/linear/issues/issue-1/metadata",
+										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
 										"metadata": map[string]any{
 											"review_publish_directive": "skip",
 											"last_run_type":            "coding",
 											"last_outcome":             "needs_spec",
 											"last_summary_comment_id":  "comment-2",
 											"updated_at":               base.Add(2 * time.Minute).Format(time.RFC3339),
+											"codex_output": []map[string]any{
+												{
+													"timestamp": base.Add(90 * time.Second).Format(time.RFC3339),
+													"event":     "turn_completed",
+													"message":   "Implemented the change.",
+												},
+											},
 										},
 									},
 								},
@@ -704,5 +714,11 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.ReviewPublishDirective != "skip" {
 		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ColinMetadata.ReviewPublishDirective, "skip")
+	}
+	if got := len(issues[0].ColinMetadata.CodexOutput); got != 1 {
+		t.Fatalf("CodexOutput length = %d, want 1", got)
+	}
+	if got := issues[0].ColinMetadata.CodexOutput[0].Message; got != "Implemented the change." {
+		t.Fatalf("CodexOutput[0].Message = %q, want %q", got, "Implemented the change.")
 	}
 }
