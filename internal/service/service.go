@@ -18,6 +18,7 @@ import (
 	"github.com/pmenglund/colin/internal/app"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/logbuffer"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
@@ -29,6 +30,7 @@ import (
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
 type Service struct {
 	logger       *slog.Logger
+	logBuffer    *logbuffer.Buffer
 	loader       workflow.Loader
 	workflowPath string
 	options      options
@@ -46,13 +48,17 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 	loader := workflow.Loader{}
 	path := loader.ResolvePath(workflowPath)
 	options := buildOptions(optionFns...)
+	buffer := logbuffer.New(domain.DefaultLogBufferLines)
+	logger = wrapLogger(logger, buffer)
 	runtime, err := loadRuntime(path, logger, options)
 	if err != nil {
 		return nil, err
 	}
+	buffer.Resize(runtime.Config.Server.LogBufferLines)
 	orch := orchestrator.New(runtime, logger)
 	return &Service{
 		logger:       logger,
+		logBuffer:    buffer,
 		loader:       loader,
 		workflowPath: path,
 		options:      options,
@@ -178,6 +184,9 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 				s.logger.Error("workflow reload failed; keeping last good config", "path", s.workflowPath, "error", err)
 				continue
 			}
+			if s.logBuffer != nil {
+				s.logBuffer.Resize(runtime.Config.Server.LogBufferLines)
+			}
 			s.logger.Info("workflow reloaded", "path", s.workflowPath)
 			s.setRuntime(runtime)
 			s.orch.UpdateRuntime(runtime)
@@ -204,6 +213,12 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 		},
 		func(snapshotCtx context.Context) (domain.FunnelSetupStatus, error) {
 			return s.funnelSetupStatus(snapshotCtx), nil
+		},
+		func(_ context.Context, minLevel *slog.Level) (domain.BufferedLogSnapshot, error) {
+			if s.logBuffer == nil {
+				return domain.BufferedLogSnapshot{}, nil
+			}
+			return s.logBuffer.Snapshot(minLevel), nil
 		},
 	)
 	if err != nil {
@@ -316,6 +331,16 @@ func (s *Service) applyPublicURLResolver(runtime orchestrator.Runtime) {
 // NewDefaultLogger returns the repo-default structured logger.
 func NewDefaultLogger(verbose bool) *slog.Logger {
 	return newLogger(os.Stderr, verbose)
+}
+
+func wrapLogger(logger *slog.Logger, buffer *logbuffer.Buffer) *slog.Logger {
+	if logger == nil {
+		logger = NewDefaultLogger(false)
+	}
+	if buffer == nil {
+		return logger
+	}
+	return slog.New(logbuffer.NewHandler(logger.Handler(), buffer))
 }
 
 func newLogger(w io.Writer, verbose bool) *slog.Logger {

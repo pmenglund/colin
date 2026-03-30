@@ -194,8 +194,9 @@ type CodexConfig struct {
 
 // ServerConfig reserves space for optional server extensions.
 type ServerConfig struct {
-	Port      *int
-	PublicURL string
+	Port           *int
+	PublicURL      string
+	LogBufferLines int
 }
 
 // SetupCheck is one operator-facing readiness check.

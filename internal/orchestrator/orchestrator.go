@@ -96,7 +96,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	if summaries := o.retrySummaries(); len(summaries) > 0 {
 		args = append(args, "retry_issues", summaries)
 	}
-	o.logger.Info("poll tick started", args...)
+	o.logger.Debug("poll tick started", args...)
 	o.reconcileRunning(ctx)
 	o.refreshIssueStateCounts(ctx)
 	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
@@ -104,7 +104,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		return
 	}
 	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
-		o.logger.Info("candidate fetch deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+		o.logger.Debug("candidate fetch deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
 		return
 	}
 	issues, err := o.runtime.Tracker.FetchCandidateIssues(ctx)
@@ -146,7 +146,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	if summaries := o.retrySummaries(); len(summaries) > 0 {
 		args = append(args, "retry_issues", summaries)
 	}
-	o.logger.Info("poll tick completed", args...)
+	o.logger.Debug("poll tick completed", args...)
 }
 
 func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
@@ -157,7 +157,7 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) {
 		return
 	}
 	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
-		o.logger.Info("issue state count refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+		o.logger.Debug("issue state count refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
 		return
 	}
 

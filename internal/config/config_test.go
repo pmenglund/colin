@@ -46,6 +46,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
 		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
 	}
+	if cfg.Server.LogBufferLines != domain.DefaultLogBufferLines {
+		t.Fatalf("cfg.Server.LogBufferLines = %d, want %d", cfg.Server.LogBufferLines, domain.DefaultLogBufferLines)
+	}
 }
 
 func TestBuildReadsServerPublicURL(t *testing.T) {
@@ -70,6 +73,31 @@ func TestBuildReadsServerPublicURL(t *testing.T) {
 	}
 	if got := cfg.Server.PublicURL; got != "https://colin.example.test" {
 		t.Fatalf("cfg.Server.PublicURL = %q, want %q", got, "https://colin.example.test")
+	}
+}
+
+func TestBuildReadsServerLogBufferLines(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"server": map[string]any{
+				"log_buffer_lines": 250,
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Server.LogBufferLines; got != 250 {
+		t.Fatalf("cfg.Server.LogBufferLines = %d, want %d", got, 250)
 	}
 }
 

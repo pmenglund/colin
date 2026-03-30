@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
 )
 
 func TestServiceRunsIssueEndToEnd(t *testing.T) {
@@ -80,7 +82,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("write workflow: %v", err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := newLogger(io.Discard, false)
 	svc, err := New(logger, workflowPath)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -240,6 +242,22 @@ Work on {{ .issue.identifier }}.
 		return strings.Contains(string(body), `"running":1`)
 	})
 
+	waitFor(t, 5*time.Second, func() bool {
+		snapshot, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=info")
+		if err != nil {
+			return false
+		}
+		return containsBufferedLog(snapshot, "service starting")
+	})
+
+	waitFor(t, 5*time.Second, func() bool {
+		snapshot, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=debug")
+		if err != nil {
+			return false
+		}
+		return containsBufferedLog(snapshot, "poll tick started") || containsBufferedLog(snapshot, "poll tick completed")
+	})
+
 	resp, err := http.Get(svc.DashboardURL() + "/")
 	if err != nil {
 		t.Fatalf("GET dashboard: %v", err)
@@ -251,6 +269,25 @@ Work on {{ .issue.identifier }}.
 	}
 	if !strings.Contains(string(html), "COLIN-93") {
 		t.Fatalf("dashboard body = %q, want issue identifier", string(html))
+	}
+
+	infoLogs, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=info")
+	if err != nil {
+		t.Fatalf("fetch info logs: %v", err)
+	}
+	if !containsBufferedLog(infoLogs, "service starting") {
+		t.Fatalf("info logs = %#v, want service starting", infoLogs.Entries)
+	}
+	if containsBufferedLog(infoLogs, "poll tick started") || containsBufferedLog(infoLogs, "poll tick completed") {
+		t.Fatalf("info logs = %#v, want poll tick logs filtered out", infoLogs.Entries)
+	}
+
+	debugLogs, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=debug")
+	if err != nil {
+		t.Fatalf("fetch debug logs: %v", err)
+	}
+	if !containsBufferedLog(debugLogs, "poll tick started") && !containsBufferedLog(debugLogs, "poll tick completed") {
+		t.Fatalf("debug logs = %#v, want poll tick debug log", debugLogs.Entries)
 	}
 
 	cancel()
@@ -489,6 +526,32 @@ func nonEmptyLines(value string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+func fetchBufferedLogs(url string) (domain.BufferedLogSnapshot, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return domain.BufferedLogSnapshot{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return domain.BufferedLogSnapshot{}, fmt.Errorf("status = %d body = %s", resp.StatusCode, string(body))
+	}
+	var snapshot domain.BufferedLogSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		return domain.BufferedLogSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func containsBufferedLog(snapshot domain.BufferedLogSnapshot, message string) bool {
+	for _, entry := range snapshot.Entries {
+		if entry.Message == message {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeLinearServer struct {
