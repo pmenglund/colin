@@ -180,9 +180,9 @@ When an issue is moved to `Merge`, Colin:
 
 - ensures the branch and PR exist
 - checks the PR for Codex web review status before merging
-- moves the issue back to `Review` with a Linear comment instead of merging when `chatgpt-codex-connector[bot]` has left a newer `eyes` reaction than `thumbs up`, or when unresolved review threads from that bot remain
+- keeps the issue in `Merge` while `chatgpt-codex-connector[bot]` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that bot remain
 - if GitHub reports that the PR cannot be merged cleanly, asks Codex to merge the latest base branch into the issue branch, resolve conflicts in the workspace, and retry the merge while the issue stays in `Merge`
-- moves the issue back to `Review` with a Linear comment when that automatic conflict-repair attempt fails or when the repaired branch needs fresh Codex review before merge
+- moves the issue back to `Review` with a Linear comment when that automatic conflict-repair attempt fails, or when the repaired branch receives unresolved Codex review feedback; otherwise it keeps waiting in `Merge` while fresh Codex review is still pending
 - merges the PR using the configured merge method
 - checks the team's configured Linear git `merge` automation target and, when one is configured, updates the issue to that state as part of merge completion
 

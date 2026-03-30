@@ -242,7 +242,7 @@ func TestApplyPostMergeStateSkipsWhenNoAutomationTargetExists(t *testing.T) {
 	}
 }
 
-func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenApprovalPending(t *testing.T) {
+func TestBlockMergeForCodexReviewKeepsIssueInMergeWhenApprovalPending(t *testing.T) {
 	t.Parallel()
 
 	requestedAt := time.Date(2026, time.March, 28, 18, 1, 0, 0, time.UTC)
@@ -269,14 +269,17 @@ func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenApprovalPending(t *test
 	if !blocked {
 		t.Fatal("blocked = false, want true")
 	}
-	if issue.State != "Review" {
-		t.Fatalf("issue.State = %q, want %q", issue.State, "Review")
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
 	}
-	if tracker.updatedState != "Review" {
-		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
 	}
 	if !strings.Contains(summary, "thumbs up") {
 		t.Fatalf("summary = %q, want thumbs up blocker", summary)
+	}
+	if !strings.Contains(summary, "Keeping issue in `Merge`") {
+		t.Fatalf("summary = %q, want keep in merge message", summary)
 	}
 }
 
@@ -637,7 +640,7 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	}
 }
 
-func TestRunnerReturnsMergeConflictToReviewWhenRepairNeedsFreshCodexApproval(t *testing.T) {
+func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *testing.T) {
 	tempDir := t.TempDir()
 	repoURL := createRunnerGitOrigin(t, tempDir)
 	branch := "pmenglund/colin-124-internal-log-buffer"
@@ -696,17 +699,20 @@ func TestRunnerReturnsMergeConflictToReviewWhenRepairNeedsFreshCodexApproval(t *
 	if result.Status != "succeeded" {
 		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
 	}
-	if result.Issue.State != "Review" {
-		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Review")
+	if result.Issue.State != "Merge" {
+		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Merge")
 	}
-	if tracker.updatedState != "Review" {
-		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
 	}
 	if !strings.Contains(result.Summary, "repaired the merge conflict") {
 		t.Fatalf("result.Summary = %q, want repaired merge conflict note", result.Summary)
 	}
 	if !strings.Contains(result.Summary, "waiting for a `thumbs up` reaction") {
 		t.Fatalf("result.Summary = %q, want thumbs up blocker", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Keep the issue in `Merge`") {
+		t.Fatalf("result.Summary = %q, want keep in merge instruction", result.Summary)
 	}
 
 	ghLog := readRunnerFile(t, ghLogPath)
