@@ -152,10 +152,17 @@ When an issue is moved to `Merge`, Colin:
 - moves the issue back to `Review` with a Linear comment instead of merging when `chatgpt-codex-connector[bot]` has left a newer `eyes` reaction than `thumbs up`, or when unresolved review threads from that bot remain
 - merges the PR using the configured merge method
 - checks the team's configured Linear git `merge` automation target and, when one is configured, updates the issue to that state as part of merge completion
+- if GitHub reports that the PR cannot be merged cleanly, moves the issue back to `Review` and posts a `[colin]` comment explaining the failure and the next manual steps
 
 Human action is still required after merge only if no post-merge Linear automation state is configured:
 
 - move the Linear issue to its final terminal state
+
+Human action is required before another merge attempt when Colin returns an issue from `Merge` to `Review`:
+
+- resolve the merge problem on the PR branch, usually by merging the latest base branch and fixing conflicts
+- push the updated branch
+- move the issue back to `Merge` when it is ready to land
 
 ### Terminal states
 

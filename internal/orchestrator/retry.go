@@ -154,6 +154,10 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 			commentID := o.postReply(ctx, entry, event.result.Summary)
 			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
 		}
+		if (event.result.RunType == codex.RunTypeReviewPublish || event.result.RunType == codex.RunTypeMerge) && strings.TrimSpace(event.result.Summary) != "" {
+			commentID := o.postReply(ctx, entry, event.result.Summary)
+			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
+		}
 		if event.result.RunType == codex.RunTypeCoding && !o.isActive(event.result.Issue.State) && !o.isPublishState(event.result.Issue.State) && !o.isMergeState(event.result.Issue.State) {
 			o.completed[event.issueID] = event.result.Issue.State
 			delete(o.claimed, event.issueID)

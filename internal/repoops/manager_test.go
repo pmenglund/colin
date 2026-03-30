@@ -92,6 +92,29 @@ func TestMergeMergesExistingPR(t *testing.T) {
 	}
 }
 
+func TestMergeReturnsPublishContextWhenGitHubMergeFails(t *testing.T) {
+	workspacePath, _, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	t.Setenv("COLIN_FAKE_GH_MERGE_ERROR", "X Pull request pmenglund/colin#11 is not mergeable: the merge commit cannot be cleanly created.")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
+	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	result, err := manager.Merge(context.Background(), issue, workspacePath)
+	if err == nil {
+		t.Fatal("Merge() error = nil, want error")
+	}
+	if result.PRNumber != 1 {
+		t.Fatalf("result.PRNumber = %d, want 1", result.PRNumber)
+	}
+	if result.Branch != "colin-93" {
+		t.Fatalf("result.Branch = %q, want %q", result.Branch, "colin-93")
+	}
+}
+
 func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	workspacePath, _, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
@@ -381,6 +404,10 @@ case "$1 $2" in
     printf 'https://example.test/pr/1\n'
     ;;
   "pr merge")
+    if [ -n "${COLIN_FAKE_GH_MERGE_ERROR:-}" ]; then
+      printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR" >&2
+      exit 1
+    fi
     printf '[{"number":1,"url":"https://example.test/pr/1","state":"MERGED"}]\n' >"$COLIN_FAKE_GH_STATE"
     ;;
   "api graphql")

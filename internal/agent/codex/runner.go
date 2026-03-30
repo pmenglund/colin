@@ -190,6 +190,9 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 		result, err := r.repo.Merge(ctx, issue, ws.Path)
 		if err != nil {
+			if isHumanMergeFailure(err) {
+				return r.handleMergeFailure(ctx, issue, ws.Path, result, err)
+			}
 			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 		}
 		r.logger.Info(
@@ -467,6 +470,29 @@ func (r *Runner) blockMergeForCodexReview(ctx context.Context, issue domain.Issu
 	}
 	issue.ReviewThreads = append([]domain.GitHubReviewThread(nil), reviewContext.CodexReviewThreads...)
 	return issue, summary, true, nil
+}
+
+func (r *Runner) handleMergeFailure(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, err error) Result {
+	reviewState := mergeReviewState(r.cfg)
+	updated, updateErr := r.moveIssueToState(ctx, issue, reviewState)
+	if updateErr != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
+	}
+	updated = r.persistActualBranchNameValueBestEffort(ctx, updated, result.Branch)
+	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeMerge, metadataOutcomeReady, ""))
+
+	return Result{
+		Issue:         updated,
+		RunType:       RunTypeMerge,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		Summary:       buildMergeFailureSummary(result, reviewState, err),
+		PR: &domain.PullRequestRef{
+			Number: result.PRNumber,
+			URL:    result.PRURL,
+			State:  result.PRState,
+		},
+	}
 }
 
 func (r *Runner) moveActiveIssueToWorkingState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
@@ -781,6 +807,13 @@ func firstConfiguredState(states []string) (string, bool) {
 	return "", false
 }
 
+func mergeReviewState(cfg domain.ServiceConfig) string {
+	if state, ok := firstConfiguredState(cfg.Repo.PublishStates); ok {
+		return state
+	}
+	return "Review"
+}
+
 func nextConfiguredState(states []string, current string) (string, bool) {
 	currentKey := config.StateKey(current)
 	for i, state := range states {
@@ -841,6 +874,43 @@ func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
 		return note
 	}
 	return summary + "\n\n" + note
+}
+
+func isHumanMergeFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "not mergeable") ||
+		strings.Contains(message, "merge commit cannot be cleanly created") ||
+		strings.Contains(message, "base branch was modified") ||
+		strings.Contains(message, "resolve the merge conflicts locally") ||
+		strings.Contains(message, "review and try the merge again")
+}
+
+func buildMergeFailureSummary(result repoops.Result, reviewState string, err error) string {
+	lines := []string{
+		fmt.Sprintf("Colin could not merge this PR automatically, so it moved the issue back to `%s`.", reviewState),
+	}
+	if result.PRNumber > 0 {
+		lines = append(lines, fmt.Sprintf("- PR: `#%d`", result.PRNumber))
+	}
+	if strings.TrimSpace(result.PRURL) != "" {
+		lines = append(lines, fmt.Sprintf("- PR URL: %s", result.PRURL))
+	}
+	if strings.TrimSpace(result.Branch) != "" {
+		lines = append(lines, fmt.Sprintf("- Branch: `%s`", result.Branch))
+	}
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("- Reason: %s", strings.TrimSpace(err.Error())))
+	}
+	if result.PRNumber > 0 && strings.TrimSpace(result.BaseRef) != "" {
+		lines = append(lines, fmt.Sprintf("- What to do: check out the PR branch, merge `%s`, resolve any conflicts, push the updated branch, then move the issue back to `Merge`.", result.BaseRef))
+		lines = append(lines, fmt.Sprintf("- Suggested command: `gh pr checkout %d && git fetch origin %s && git merge origin/%s`", result.PRNumber, result.BaseRef, result.BaseRef))
+	} else {
+		lines = append(lines, "- What to do: resolve the merge issue on the PR branch, push the updated branch, then move the issue back to `Merge`.")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func codexMetadata(issue domain.Issue, runType string, outcome string, summaryCommentID string) domain.ColinMetadata {
@@ -935,4 +1005,20 @@ func (r *Runner) persistActualBranchNameValueBestEffort(ctx context.Context, iss
 		return issue
 	}
 	return r.persistIssueMetadataBestEffort(ctx, issue, metadata)
+}
+
+func (r *Runner) moveIssueToState(ctx context.Context, issue domain.Issue, targetState string) (domain.Issue, error) {
+	targetState = strings.TrimSpace(targetState)
+	if targetState == "" || config.ContainsState([]string{issue.State}, targetState) {
+		return issue, nil
+	}
+	if r.tracker != nil {
+		if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
+			return issue, fmt.Errorf("update issue state to %s: %w", targetState, err)
+		}
+	}
+	issue.State = targetState
+	now := time.Now().UTC()
+	issue.UpdatedAt = &now
+	return issue, nil
 }

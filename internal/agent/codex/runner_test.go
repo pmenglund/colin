@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -364,6 +365,49 @@ func TestPersistActualBranchNameValueBestEffortPreservesExistingMetadata(t *test
 	}
 	if tracker.metadata.ActualBranchName != "colin-94" {
 		t.Fatalf("persisted ActualBranchName = %q, want %q", tracker.metadata.ActualBranchName, "colin-94")
+	}
+}
+
+func TestHandleMergeFailureReturnsIssueToReview(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	result := runner.handleMergeFailure(
+		context.Background(),
+		domain.Issue{ID: "issue-1", Identifier: "COLIN-112", State: "Merge"},
+		"/tmp/workspace",
+		repoops.Result{
+			Branch:   "colin-112",
+			BaseRef:  "main",
+			PRNumber: 11,
+			PRURL:    "https://example.test/pr/11",
+			PRState:  "OPEN",
+		},
+		errors.New("gh pr merge 11 --squash: exit status 1: X Pull request pmenglund/colin#11 is not mergeable: the merge commit cannot be cleanly created."),
+	)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("result.Status = %q, want %q", result.Status, "succeeded")
+	}
+	if result.Issue.State != "Review" {
+		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Review")
+	}
+	if tracker.updatedState != "Review" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	}
+	if !strings.Contains(result.Summary, "moved the issue back to `Review`") {
+		t.Fatalf("result.Summary = %q, want review handoff message", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "gh pr checkout 11 && git fetch origin main && git merge origin/main") {
+		t.Fatalf("result.Summary = %q, want conflict resolution command", result.Summary)
 	}
 }
 

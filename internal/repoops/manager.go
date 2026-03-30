@@ -146,7 +146,7 @@ func (m *Manager) Merge(ctx context.Context, issue domain.Issue, workspacePath s
 
 	args := []string{"pr", "merge", fmt.Sprintf("%d", result.PRNumber), "--" + m.cfg.Repo.MergeMethod}
 	if _, err := m.run(ctx, workspacePath, 2*time.Minute, "gh", args...); err != nil {
-		return Result{}, err
+		return result, err
 	}
 	result.Action = "merged"
 	result.PRState = "MERGED"
