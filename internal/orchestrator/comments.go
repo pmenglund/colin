@@ -191,10 +191,8 @@ func rootCommentBody(entry *runningEntry, event codex.Event) string {
 	lines := []string{
 		"Colin started work on this issue.",
 		"",
-		fmt.Sprintf("- Issue: `%s`", entry.identifier),
 		fmt.Sprintf("- Run type: `%s`", event.RunType),
 		fmt.Sprintf("- Attempt: `%d`", event.Attempt),
-		fmt.Sprintf("- State: `%s`", event.State),
 	}
 	if event.Workspace != "" {
 		lines = append(lines, fmt.Sprintf("- Workspace: `%s`", event.Workspace))

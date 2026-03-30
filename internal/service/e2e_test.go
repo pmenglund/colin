@@ -148,6 +148,12 @@ Work on {{ .issue.identifier }}.
 	if !strings.Contains(root.Body, "Session ID: `thread-1-turn-1`") {
 		t.Fatalf("root comment body = %q, want session id", root.Body)
 	}
+	if strings.Contains(root.Body, "Issue: `") {
+		t.Fatalf("root comment body = %q, want no redundant issue line", root.Body)
+	}
+	if strings.Contains(root.Body, "State: `") {
+		t.Fatalf("root comment body = %q, want no redundant state line", root.Body)
+	}
 	if linear.ReplyCount() == 0 {
 		t.Fatal("expected Linear progress replies")
 	}
