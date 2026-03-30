@@ -188,6 +188,10 @@ func (c *appServerClient) finalSummary() string {
 	return strings.TrimSpace(c.lastSummary)
 }
 
+func (c *appServerClient) clearFinalSummary() {
+	c.lastSummary = ""
+}
+
 func (c *appServerClient) lastOutput() string {
 	return strings.TrimSpace(c.lastTurnText)
 }
@@ -204,7 +208,7 @@ func shouldCaptureSummary(eventName, summary string) bool {
 	}
 	switch eventName {
 	case EventOtherMessage, EventNotification:
-		return true
+		return isExplicitOutcomeSummary(summary)
 	default:
 		return false
 	}
@@ -221,6 +225,11 @@ func shouldCaptureTurnText(eventName, summary string) bool {
 	default:
 		return false
 	}
+}
+
+func isExplicitOutcomeSummary(summary string) bool {
+	firstLine := strings.TrimSpace(strings.Split(strings.TrimSpace(summary), "\n")[0])
+	return firstLine == outcomeReadyForReview || firstLine == outcomeNeedsSpec
 }
 
 func (c *appServerClient) stop() {

@@ -16,6 +16,7 @@ type Issue struct {
 	BlockedBy            []BlockerRef
 	ColinMetadata        *ColinMetadata
 	ExecPlan             *ExecPlan
+	ExecPlanCount        int
 	ReviewCycle          *ReviewCycle
 	ReviewFeedback       []ReviewFeedback
 	ReviewThreads        []GitHubReviewThread

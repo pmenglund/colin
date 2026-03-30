@@ -20,6 +20,7 @@ import (
 var (
 	ErrNotGitRepository           = errors.New("not_git_repository")
 	ErrNoPullRequest              = errors.New("no_pull_request")
+	ErrNoReviewableChanges        = errors.New("no_reviewable_changes")
 	ErrDuplicatePullRequests      = errors.New("duplicate_pull_requests")
 	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
 )
@@ -94,6 +95,20 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		result.Commit = commit
 	}
 
+	pr, created, err := m.resolvePullRequest(ctx, issue, workspacePath, branch, false)
+	if err != nil {
+		return Result{}, err
+	}
+	if pr == nil {
+		reviewable, err := m.ReviewableArtifact(ctx, workspacePath)
+		if err != nil {
+			return Result{}, err
+		}
+		if !reviewable {
+			return Result{}, ErrNoReviewableChanges
+		}
+	}
+
 	if _, err := m.run(ctx, workspacePath, 2*time.Minute, "git", "push", "-u", m.cfg.Repo.RemoteName, branch); err != nil {
 		return Result{}, err
 	}
@@ -103,12 +118,14 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		result.Action = "committed_and_pushed"
 	}
 
-	pr, created, err := m.resolvePullRequest(ctx, issue, workspacePath, branch, true)
-	if err != nil {
-		return Result{}, err
-	}
 	if pr == nil {
-		return Result{}, ErrNoPullRequest
+		pr, created, err = m.resolvePullRequest(ctx, issue, workspacePath, branch, true)
+		if err != nil {
+			return Result{}, err
+		}
+		if pr == nil {
+			return Result{}, ErrNoPullRequest
+		}
 	}
 	if created {
 		if result.Action == "pushed" {
@@ -190,6 +207,18 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 // CurrentBranch returns the current checked-out git branch for the workspace.
 func (m *Manager) CurrentBranch(ctx context.Context, workspacePath string) (string, error) {
 	return m.currentBranch(ctx, workspacePath)
+}
+
+// ReviewableArtifact reports whether the workspace contains reviewable repository changes.
+func (m *Manager) ReviewableArtifact(ctx context.Context, workspacePath string) (bool, error) {
+	dirty, err := m.isDirty(ctx, workspacePath)
+	if err != nil {
+		return false, err
+	}
+	if dirty {
+		return true, nil
+	}
+	return m.branchAheadOfBase(ctx, workspacePath)
 }
 
 // ReplyAndResolveReviewThread posts a reply and resolves a review thread.
@@ -292,6 +321,43 @@ func (m *Manager) isDirty(ctx context.Context, workspacePath string) (bool, erro
 		return false, err
 	}
 	return strings.TrimSpace(out) != "", nil
+}
+
+func (m *Manager) branchAheadOfBase(ctx context.Context, workspacePath string) (bool, error) {
+	baseRef, err := m.baseComparisonRef(ctx, workspacePath)
+	if err != nil {
+		return false, err
+	}
+	out, err := m.run(ctx, workspacePath, 15*time.Second, "git", "rev-list", "--left-right", "--count", baseRef+"...HEAD")
+	if err != nil {
+		return false, err
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) != 2 {
+		return false, fmt.Errorf("unexpected git rev-list output: %q", strings.TrimSpace(out))
+	}
+	ahead, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return false, fmt.Errorf("parse git rev-list ahead count: %w", err)
+	}
+	return ahead > 0, nil
+}
+
+func (m *Manager) baseComparisonRef(ctx context.Context, workspacePath string) (string, error) {
+	candidates := []string{
+		strings.TrimSpace(m.cfg.Workspace.BaseRef),
+		strings.TrimSpace(m.cfg.Repo.RemoteName) + "/" + strings.TrimSpace(m.cfg.Workspace.BaseRef),
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, err := m.revParse(ctx, workspacePath, candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("resolve base ref %q", strings.TrimSpace(m.cfg.Workspace.BaseRef))
 }
 
 func (m *Manager) ensureIdentity(ctx context.Context, workspacePath string) error {

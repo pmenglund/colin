@@ -34,6 +34,7 @@ const (
 	metadataOutcomeReady  = "ready_for_review"
 	metadataOutcomeSpec   = "needs_spec"
 	metadataOutcomeMax    = "max_turns"
+	metadataOutcomePlan   = "exec_plan_conflict"
 	metadataOutcomeMerged = "merged"
 )
 
@@ -113,6 +114,9 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		workspace: ws.Path,
 		runType:   runType,
 	}
+	if runType == RunTypeCoding && hasDuplicateExecPlans(current) {
+		return r.handleDuplicateExecPlans(ctx, current, ws.Path)
+	}
 	if isPublishState(r.cfg, issue.State) {
 		emit(Event{
 			Event:     EventReviewPublishStarted,
@@ -123,6 +127,9 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		})
 		result, err := r.repo.Publish(ctx, issue, ws.Path)
 		if err != nil {
+			if errors.Is(err, repoops.ErrNoReviewableChanges) {
+				return r.handlePublishWithoutReviewableChanges(ctx, issue, ws.Path)
+			}
 			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 		}
 		r.logger.Info(
@@ -269,6 +276,9 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 
 	current, err = r.ensureExecPlan(ctx, client, ws.Path, current)
 	if err != nil {
+		if errors.Is(err, tracker.ErrDuplicateExecPlans) {
+			return r.handleDuplicateExecPlans(ctx, current, ws.Path)
+		}
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
 	}
 
@@ -380,15 +390,40 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			)
 			break
 		}
-		if strings.TrimSpace(client.finalSummary()) != "" {
+		if summary := strings.TrimSpace(client.finalSummary()); summary != "" {
+			handoffOutcome, _ := parseCodingSummaryOutcome(summary)
+			if handoffOutcome == outcomeNeedsSpec {
+				r.logger.Info(
+					"runner turn produced an explicit needs-spec outcome; finishing coding run",
+					"issue_id", current.ID,
+					"issue_identifier", current.Identifier,
+					"current_state", current.State,
+					"turn", turn,
+				)
+				break
+			}
+			reviewable, err := r.reviewableCodingArtifact(ctx, ws.Path)
+			if err != nil {
+				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+			}
+			if reviewable {
+				r.logger.Info(
+					"runner turn produced an explicit ready-for-review outcome with reviewable repository changes; finishing coding run",
+					"issue_id", current.ID,
+					"issue_identifier", current.Identifier,
+					"current_state", current.State,
+					"turn", turn,
+				)
+				break
+			}
+			client.clearFinalSummary()
 			r.logger.Info(
-				"runner turn produced a final summary; finishing coding run",
+				"runner turn produced a ready-for-review outcome without reviewable repository changes; continuing",
 				"issue_id", current.ID,
 				"issue_identifier", current.Identifier,
 				"current_state", current.State,
 				"turn", turn,
 			)
-			break
 		}
 		if turn < r.cfg.Agent.MaxTurns {
 			r.logger.Info(
@@ -522,6 +557,37 @@ func (r *Runner) handleMergeFailure(ctx context.Context, issue domain.Issue, wor
 	}
 }
 
+func (r *Runner) handlePublishWithoutReviewableChanges(ctx context.Context, issue domain.Issue, workspacePath string) Result {
+	targetState := workingActiveState(r.cfg)
+	updated, updateErr := r.moveIssueToState(ctx, issue, targetState)
+	if updateErr != nil {
+		return Result{Issue: issue, RunType: RunTypeReviewPublish, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
+	}
+
+	return Result{
+		Issue:         updated,
+		RunType:       RunTypeReviewPublish,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		Summary:       buildNoReviewableChangesSummary(targetState),
+	}
+}
+
+func (r *Runner) handleDuplicateExecPlans(ctx context.Context, issue domain.Issue, workspacePath string) Result {
+	updated, updateErr := r.moveIssueToState(ctx, issue, refineStateName)
+	if updateErr != nil {
+		return Result{Issue: issue, RunType: RunTypeCoding, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
+	}
+	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeCoding, metadataOutcomePlan, ""))
+	return Result{
+		Issue:         updated,
+		RunType:       RunTypeCoding,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		Summary:       buildDuplicateExecPlanSummary(updated),
+	}
+}
+
 func (r *Runner) moveActiveIssueToWorkingState(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
 	if !isActive(r.cfg, issue.State) {
 		return issue, nil
@@ -643,6 +709,9 @@ func mergeIssueContext(previous, refreshed domain.Issue) domain.Issue {
 	}
 	if refreshed.ExecPlan == nil {
 		refreshed.ExecPlan = previous.ExecPlan
+	}
+	if refreshed.ExecPlanCount == 0 && previous.ExecPlanCount > 0 {
+		refreshed.ExecPlanCount = previous.ExecPlanCount
 	}
 	if refreshed.PullRequest == nil {
 		refreshed.PullRequest = previous.PullRequest
@@ -837,6 +906,16 @@ func firstConfiguredState(states []string) (string, bool) {
 	return "", false
 }
 
+func lastConfiguredState(states []string) (string, bool) {
+	for i := len(states) - 1; i >= 0; i-- {
+		state := strings.TrimSpace(states[i])
+		if state != "" {
+			return state, true
+		}
+	}
+	return "", false
+}
+
 func mergeReviewState(cfg domain.ServiceConfig) string {
 	if state, ok := firstConfiguredState(cfg.Repo.PublishStates); ok {
 		return state
@@ -897,6 +976,13 @@ func codingHandoffState(handoffOutcome string, maxTurnsReached bool, publishStat
 	return targetState
 }
 
+func workingActiveState(cfg domain.ServiceConfig) string {
+	if state, ok := lastConfiguredState(cfg.Tracker.ActiveStates); ok {
+		return state
+	}
+	return "In Progress"
+}
+
 func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
 	note := fmt.Sprintf("Colin reached the maximum of `%d` turns while the issue remained in `%s`, so it is handing off for human refinement before more implementation work.", maxTurns, state)
 	summary = strings.TrimSpace(summary)
@@ -939,6 +1025,27 @@ func buildMergeFailureSummary(result repoops.Result, reviewState string, err err
 		lines = append(lines, fmt.Sprintf("- Suggested command: `gh pr checkout %d && git fetch origin %s && git merge origin/%s`", result.PRNumber, result.BaseRef, result.BaseRef))
 	} else {
 		lines = append(lines, "- What to do: resolve the merge issue on the PR branch, push the updated branch, then move the issue back to `Merge`.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildNoReviewableChangesSummary(targetState string) string {
+	lines := []string{
+		fmt.Sprintf("Colin did not find reviewable repository changes, so it moved the issue back to `%s` instead of opening a PR.", targetState),
+		"- What happened: the workspace has no uncommitted changes and the branch is not ahead of the configured base branch.",
+		"- Next step: keep working until there is reviewable code or explicitly hand the issue to `Refine`.",
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildDuplicateExecPlanSummary(issue domain.Issue) string {
+	lines := []string{
+		fmt.Sprintf("Colin found multiple `Colin ExecPlan` attachments, so it moved the issue to `%s` for human cleanup before continuing.", refineStateName),
+		"- What to fix: remove the duplicate ExecPlan attachments and leave exactly one canonical `Colin ExecPlan` on the issue.",
+		"- Next step: once the issue has exactly one ExecPlan attachment, move it back to an active coding state to continue from that plan.",
+	}
+	if issue.ExecPlanCount > 1 {
+		lines = append(lines, fmt.Sprintf("- Duplicate count: `%d`", issue.ExecPlanCount))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -998,8 +1105,18 @@ func reviewPublishDirective(issue domain.Issue) string {
 	return strings.TrimSpace(issue.ColinMetadata.ReviewPublishDirective)
 }
 
+func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath string) (bool, error) {
+	if r.repo == nil || strings.TrimSpace(r.cfg.Workspace.RepoURL) == "" {
+		return true, nil
+	}
+	return r.repo.ReviewableArtifact(ctx, workspacePath)
+}
+
 func (r *Runner) ensureExecPlan(ctx context.Context, client *appServerClient, workspacePath string, issue domain.Issue) (domain.Issue, error) {
-	if !r.cfg.Agent.CreateExecPlan || strings.TrimSpace(execPlanBody(issue.ExecPlan)) != "" {
+	if hasDuplicateExecPlans(issue) {
+		return issue, tracker.ErrDuplicateExecPlans
+	}
+	if !r.cfg.Agent.CreateExecPlan || hasCanonicalExecPlan(issue) {
 		return issue, nil
 	}
 
@@ -1094,6 +1211,17 @@ func execPlanBody(plan *domain.ExecPlan) string {
 	return strings.TrimSpace(plan.Body)
 }
 
+func hasCanonicalExecPlan(issue domain.Issue) bool {
+	if issue.ExecPlanCount == 1 {
+		return true
+	}
+	return strings.TrimSpace(execPlanBody(issue.ExecPlan)) != ""
+}
+
+func hasDuplicateExecPlans(issue domain.Issue) bool {
+	return issue.ExecPlanCount > 1
+}
+
 func injectExecPlanPrompt(prompt string, plan *domain.ExecPlan) string {
 	body := execPlanBody(plan)
 	if body == "" {
@@ -1121,6 +1249,7 @@ func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, m
 func (r *Runner) persistIssueExecPlan(ctx context.Context, issue domain.Issue, plan domain.ExecPlan) (domain.Issue, error) {
 	if r.tracker == nil {
 		issue.ExecPlan = &plan
+		issue.ExecPlanCount = 1
 		return issue, nil
 	}
 	persisted, err := r.tracker.UpsertIssueExecPlan(ctx, issue.ID, plan)
@@ -1128,6 +1257,7 @@ func (r *Runner) persistIssueExecPlan(ctx context.Context, issue domain.Issue, p
 		return issue, fmt.Errorf("upsert issue exec plan: %w", err)
 	}
 	issue.ExecPlan = &persisted
+	issue.ExecPlanCount = 1
 	return issue, nil
 }
 

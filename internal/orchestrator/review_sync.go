@@ -53,6 +53,10 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	if reviewContext.PullRequest.Number > 0 || strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
 		issue.PullRequest = &reviewContext.PullRequest
 	}
+	if !hasReviewSyncPullRequest(reviewContext.PullRequest) {
+		delete(o.reviewSync, issue.ID)
+		return issue, true
+	}
 	if len(reviewContext.Threads) > 0 {
 		issue.ReviewThreads = reviewContext.Threads
 		if state != nil && state.comment != nil && state.comment.RootCommentID != "" {
@@ -108,7 +112,23 @@ func needsReviewSync(issue domain.Issue) bool {
 	if issue.ReviewCycle == nil {
 		return false
 	}
-	return issue.BranchName != nil && strings.TrimSpace(*issue.BranchName) != ""
+	return hasIssueReviewSyncPullRequestSignal(issue)
+}
+
+func hasIssueReviewSyncPullRequestSignal(issue domain.Issue) bool {
+	if issue.ColinMetadata != nil {
+		if issue.ColinMetadata.PullRequestNumber > 0 {
+			return true
+		}
+		if strings.TrimSpace(issue.ColinMetadata.PullRequestURL) != "" {
+			return true
+		}
+	}
+	return len(issue.AttachedPullRequests) == 1
+}
+
+func hasReviewSyncPullRequest(pr domain.PullRequestRef) bool {
+	return pr.Number > 0 || strings.TrimSpace(pr.URL) != ""
 }
 
 func nextReviewSyncPoll(now, firstObserved time.Time, timedOut bool) time.Time {

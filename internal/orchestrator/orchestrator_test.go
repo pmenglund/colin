@@ -362,6 +362,58 @@ func TestHandleWorkerExitMarksReviewStateCompletedWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerExitReviewPublishToActiveStateDoesNotMarkCompleted(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", State: "Review"}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress"}},
+				Repo:    domain.RepoConfig{PublishStates: []string{"Review"}},
+			},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      issue,
+				identifier: issue.Identifier,
+				startedAt:  time.Now().Add(-2 * time.Second),
+				comment:    &commentThreadState{RunType: codex.RunTypeReviewPublish, RootCommentID: "root"},
+			},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   domain.Issue{ID: "1", Identifier: "ABC-1", State: "In Progress"},
+			RunType: codex.RunTypeReviewPublish,
+			Status:  "succeeded",
+			Summary: "Colin did not find reviewable repository changes, so it moved the issue back to `In Progress` instead of opening a PR.",
+		},
+	})
+
+	if got := orch.completed["1"]; got != "" {
+		t.Fatalf("completed state = %q, want empty", got)
+	}
+	if _, ok := orch.claimed["1"]; ok {
+		t.Fatal("expected claim to be released after active hand-back")
+	}
+	if _, ok := orch.retrying["1"]; ok {
+		t.Fatal("unexpected retry entry after active hand-back")
+	}
+	if len(tracker.commentReplies) == 0 {
+		t.Fatal("expected summary comment reply for active hand-back")
+	}
+}
+
 func TestHandleWorkerExitMergeBlockedBackToReviewPostsSummary(t *testing.T) {
 	t.Parallel()
 

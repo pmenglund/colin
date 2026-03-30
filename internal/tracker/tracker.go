@@ -2,9 +2,12 @@ package tracker
 
 import (
 	"context"
+	"errors"
 
 	"github.com/pmenglund/colin/internal/domain"
 )
+
+var ErrDuplicateExecPlans = errors.New("duplicate_exec_plans")
 
 // Client describes the tracker operations the orchestrator depends on.
 type Client interface {

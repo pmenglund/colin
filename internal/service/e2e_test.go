@@ -98,7 +98,7 @@ Work on {{ .issue.identifier }}.
 		if _, err := os.Stat(markerPath); err != nil {
 			return false
 		}
-		return linear.StateFetches() > 0
+		return linear.StateFetches() > 0 && linear.ReplyCount() > 0
 	})
 
 	time.Sleep(300 * time.Millisecond)
@@ -408,7 +408,7 @@ func runFakeCodex() error {
 				"params": map[string]any{
 					"threadId": threadID,
 					"item": map[string]any{
-						"text": "done",
+						"text": "COLIN_OUTCOME: READY_FOR_REVIEW\n\nImplemented the requested change.",
 					},
 				},
 			}); err != nil {

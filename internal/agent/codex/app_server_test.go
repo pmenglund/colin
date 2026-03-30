@@ -134,6 +134,32 @@ func TestNotificationMessageUsesTopLevelParams(t *testing.T) {
 	}
 }
 
+func TestIsExplicitOutcomeSummary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		summary string
+		want    bool
+	}{
+		{name: "ready for review", summary: outcomeReadyForReview + "\n\nImplemented the requested change.", want: true},
+		{name: "needs spec", summary: outcomeNeedsSpec + "\n\nThe spec should be improved before implementation.", want: true},
+		{name: "generic prose", summary: "Implemented the requested change.", want: false},
+		{name: "exec plan", summary: "# Fake ExecPlan\n\nPlan details.", want: false},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isExplicitOutcomeSummary(test.summary); got != test.want {
+				t.Fatalf("isExplicitOutcomeSummary() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }

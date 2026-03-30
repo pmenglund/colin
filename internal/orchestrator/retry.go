@@ -172,6 +172,18 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 			return
 		}
 		if event.result.RunType == codex.RunTypeReviewPublish || event.result.RunType == codex.RunTypeMerge {
+			if o.isActive(event.result.Issue.State) {
+				delete(o.claimed, event.issueID)
+				o.logger.Info(
+					"handoff automation returned the issue to active work",
+					"issue_id", event.issueID,
+					"issue_identifier", entry.identifier,
+					"status", event.result.Status,
+					"run_type", event.result.RunType,
+					"current_state", event.result.Issue.State,
+				)
+				return
+			}
 			o.completed[event.issueID] = event.result.Issue.State
 			delete(o.claimed, event.issueID)
 			o.logger.Info(

@@ -17,7 +17,7 @@ Colin runs as a long-lived process:
 1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
 2. It polls Linear for candidate issues in the configured project and tracked states.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
-4. It can create an ExecPlan attachment for the issue before coding starts, then forwards that plan into the implementation prompt.
+4. It creates one canonical ExecPlan attachment per issue before coding starts, then reuses that same plan in later coding rounds.
 5. It runs Codex for issues in coding states.
 6. It moves a successful coding run into `Review`, or into `Refine` when human clarification is still needed.
 7. It performs git and GitHub automation for issues in publish or merge states.
@@ -63,9 +63,10 @@ go run . /path/to/WORKFLOW.md
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
-- When `agent.create_exec_plan` is enabled, Colin also creates or reuses a dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
+- When `agent.create_exec_plan` is enabled, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
+- If an issue ever has multiple `Colin ExecPlan` attachments, Colin fails closed, moves the issue to `Refine`, and requires human cleanup instead of guessing which plan to use.
 - Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
-- Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
+- Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
 - If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
@@ -91,11 +92,14 @@ When an issue is in one of these states, Colin:
 
 When an issue moves from `Review` back to `Todo`, Colin reads the latest `Review -> Todo` cycle from the Linear timeline and injects human comments from that review window into the next prompt as review feedback. Comments starting with `[colin]` are treated as Colin-authored status updates and are excluded.
 
+Colin does not generate a second ExecPlan when an issue returns from `Review` to `Todo`. It reuses the existing canonical `Colin ExecPlan` attachment and continues working from that plan.
+
 Additional `Todo` rule:
 
 - Colin will not dispatch a `Todo` issue if any blocker is not in a terminal state.
 - Colin will not dispatch any issue carrying the `paused` label.
-- If the issue is returning from `Review`, Colin first polls the linked GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
+- If the issue is returning from `Review` and already has an associated PR, Colin first polls that GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
+- If the issue returns to `Todo` without any associated PR, Colin skips GitHub review sync and starts work immediately using the Linear review feedback already on the issue.
 - Once unresolved GitHub review threads are visible, Colin injects them into the next coding prompt alongside the human Linear review feedback from that same review cycle.
 
 ### Refine handoff state
@@ -106,6 +110,7 @@ Colin moves an issue to `Refine` when:
 
 - the coding run concludes the request is still too underspecified to implement safely
 - the coding run reaches its maximum turn count without producing reviewable code
+- the issue metadata is invalid, such as multiple `Colin ExecPlan` attachments on the same issue
 
 When Colin hands an issue to `Refine`, it posts a `[colin]` comment that explains what information is missing or why the run was capped.
 
@@ -130,6 +135,7 @@ When an issue is moved to `Review`, Colin does not run another coding turn. Inst
 - renders the PR body from `repo.pr_template` when one is configured, otherwise uses the built-in default template
 
 `Review` is PR-only. Colin should only leave an issue in `Review` when the branch and PR are the intended next artifact for human review.
+Colin only moves a coding run into `Review` after Codex explicitly emits `COLIN_OUTCOME: READY_FOR_REVIEW` and the issue workspace contains reviewable repository changes. A clean workspace on a branch that is not ahead of base is not reviewable and will not be handed off to `Review`.
 
 Human action is expected in `Review`:
 
@@ -193,7 +199,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - clone `git@github.com:pmenglund/colin.git`
 - default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
-- create an ExecPlan attachment before the first coding turn
+- create one canonical ExecPlan attachment before the first coding turn
 - use `codex app-server` for coding runs
 - serve the loopback web UI on `http://127.0.0.1:8888` unless `server.public_url` is set for an external address
 
@@ -214,5 +220,6 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - The issue-specific metadata page is separate from the main dashboard and is meant for reviewing one issue's latest Colin run, including the captured Codex output that Colin persisted to Linear metadata.
 - Colin automatically moves successful, reviewable coding runs into the first configured publish state, which is currently `Review`.
 - Colin moves clarification-only or max-turn no-PR handoffs into `Refine` instead of `Review`.
+- If `review_publish` finds no reviewable repository changes, Colin moves the issue back to the working active state instead of retrying PR creation or applying the `paused` label.
 - Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.
 - Colin can automatically move an issue out of `Merge` when the Linear team has a git `merge` automation target configured, which this repository currently does (`Merged`).

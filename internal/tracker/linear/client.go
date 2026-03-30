@@ -19,6 +19,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/tracker"
 )
 
 var (
@@ -402,6 +403,18 @@ mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
 
 // UpsertIssueExecPlan stores the current issue ExecPlan on the Linear issue via a dedicated attachment.
 func (c *Client) UpsertIssueExecPlan(ctx context.Context, issueID string, plan domain.ExecPlan) (domain.ExecPlan, error) {
+	existingPlans, err := c.fetchIssueExecPlans(ctx, issueID)
+	if err != nil {
+		return domain.ExecPlan{}, err
+	}
+	switch len(existingPlans) {
+	case 0:
+	case 1:
+		return existingPlans[0], nil
+	default:
+		return domain.ExecPlan{}, fmt.Errorf("%w: issue %s has %d Colin ExecPlan attachments", tracker.ErrDuplicateExecPlans, strings.TrimSpace(issueID), len(existingPlans))
+	}
+
 	const query = `
 mutation UpsertIssueExecPlan($input: AttachmentCreateInput!) {
   attachmentCreate(input: $input) {
@@ -861,7 +874,7 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 		}
 	}
 	issue.ColinMetadata = extractColinMetadata(node)
-	issue.ExecPlan = extractExecPlan(node)
+	issue.ExecPlan, issue.ExecPlanCount = extractExecPlan(node)
 	issue.AttachedPullRequests = extractAttachedPullRequests(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
@@ -1084,19 +1097,57 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	return nil
 }
 
-func extractExecPlan(node map[string]any) *domain.ExecPlan {
+func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
 	attachments, ok := nestedSlice(node, "attachments", "nodes")
 	if !ok {
-		return nil
+		return nil, 0
 	}
+	var plans []domain.ExecPlan
 	for _, attachment := range attachments {
 		plan, err := parseColinExecPlanAttachment(attachment)
 		if err != nil {
 			continue
 		}
-		return &plan
+		plans = append(plans, plan)
 	}
-	return nil
+	if len(plans) != 1 {
+		return nil, len(plans)
+	}
+	return &plans[0], 1
+}
+
+func (c *Client) fetchIssueExecPlans(ctx context.Context, issueID string) ([]domain.ExecPlan, error) {
+	const query = `
+query IssueExecPlans($id: String!) {
+  issue(id: $id) {
+    attachments(first: 50) {
+      nodes {
+        id
+        title
+        url
+        metadata
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"id": issueID})
+	if err != nil {
+		return nil, err
+	}
+	attachments, ok := nestedSlice(resp, "data", "issue", "attachments", "nodes")
+	if !ok {
+		return nil, ErrUnknownPayload
+	}
+	plans := make([]domain.ExecPlan, 0, len(attachments))
+	for _, attachment := range attachments {
+		plan, err := parseColinExecPlanAttachment(attachment)
+		if err != nil {
+			continue
+		}
+		plans = append(plans, plan)
+	}
+	return plans, nil
 }
 
 func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, error) {

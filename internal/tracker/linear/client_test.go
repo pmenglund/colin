@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/tracker"
 )
 
 func TestNewValidatesWorkflowStates(t *testing.T) {
@@ -564,6 +565,8 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	t.Parallel()
 
 	var (
+		queryCount  int
+		createCount int
 		gotIssueID  string
 		gotTitle    string
 		gotURL      string
@@ -578,24 +581,41 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("Decode() error = %v", err)
 		}
-		input, _ := request.Variables["input"].(map[string]any)
-		gotIssueID, _ = input["issueId"].(string)
-		gotTitle, _ = input["title"].(string)
-		gotURL, _ = input["url"].(string)
-		gotMetadata, _ = input["metadata"].(map[string]any)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"attachmentCreate": map[string]any{
-					"success": true,
-					"attachment": map[string]any{
-						"id":       "attachment-2",
-						"title":    gotTitle,
-						"url":      gotURL,
-						"metadata": gotMetadata,
+		switch {
+		case strings.Contains(request.Query, "query IssueExecPlans"):
+			queryCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{},
+						},
 					},
 				},
-			},
-		})
+			})
+		case strings.Contains(request.Query, "mutation UpsertIssueExecPlan"):
+			createCount++
+			input, _ := request.Variables["input"].(map[string]any)
+			gotIssueID, _ = input["issueId"].(string)
+			gotTitle, _ = input["title"].(string)
+			gotURL, _ = input["url"].(string)
+			gotMetadata, _ = input["metadata"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentCreate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       "attachment-2",
+							"title":    gotTitle,
+							"url":      gotURL,
+							"metadata": gotMetadata,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
 	}))
 	defer server.Close()
 
@@ -613,6 +633,12 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertIssueExecPlan() error = %v", err)
 	}
+	if queryCount != 1 {
+		t.Fatalf("queryCount = %d, want 1", queryCount)
+	}
+	if createCount != 1 {
+		t.Fatalf("createCount = %d, want 1", createCount)
+	}
 	if gotIssueID != "issue-1" {
 		t.Fatalf("issueId = %q, want %q", gotIssueID, "issue-1")
 	}
@@ -627,6 +653,71 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	}
 	if plan.AttachmentID != "attachment-2" {
 		t.Fatalf("plan.AttachmentID = %q, want %q", plan.AttachmentID, "attachment-2")
+	}
+}
+
+func TestUpsertIssueExecPlanRejectsDuplicates(t *testing.T) {
+	t.Parallel()
+
+	createCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "query IssueExecPlans"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":    "attachment-1",
+									"title": "Colin ExecPlan",
+									"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+									"metadata": map[string]any{
+										"body": "# Plan A",
+									},
+								},
+								{
+									"id":    "attachment-2",
+									"title": "Colin ExecPlan",
+									"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+									"metadata": map[string]any{
+										"body": "# Plan B",
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpsertIssueExecPlan"):
+			createCount++
+			t.Fatalf("unexpected attachmentCreate mutation when duplicate exec plans already exist")
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	_, err := client.UpsertIssueExecPlan(context.Background(), "issue-1", domain.ExecPlan{Body: "# Plan\n\nDetails."})
+	if !errors.Is(err, tracker.ErrDuplicateExecPlans) {
+		t.Fatalf("UpsertIssueExecPlan() error = %v, want ErrDuplicateExecPlans", err)
+	}
+	if createCount != 0 {
+		t.Fatalf("createCount = %d, want 0", createCount)
 	}
 }
 
@@ -1324,7 +1415,86 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 	if issues[0].ExecPlan == nil {
 		t.Fatal("issues[0].ExecPlan = nil, want plan")
 	}
+	if issues[0].ExecPlanCount != 1 {
+		t.Fatalf("ExecPlanCount = %d, want 1", issues[0].ExecPlanCount)
+	}
 	if issues[0].ExecPlan.Body != "# Plan\n\nDetails." {
 		t.Fatalf("ExecPlan.Body = %q, want plan body", issues[0].ExecPlan.Body)
+	}
+}
+
+func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-110",
+							"title":      "Repair exec plan metadata",
+							"state":      map[string]any{"name": "Todo"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":    "attachment-1",
+										"title": "Colin ExecPlan",
+										"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+										"metadata": map[string]any{
+											"body": "# Plan A",
+										},
+									},
+									{
+										"id":    "attachment-2",
+										"title": "Colin ExecPlan",
+										"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+										"metadata": map[string]any{
+											"body": "# Plan B",
+										},
+									},
+								},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"Todo"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if issues[0].ExecPlan != nil {
+		t.Fatalf("issues[0].ExecPlan = %#v, want nil when duplicates exist", issues[0].ExecPlan)
+	}
+	if issues[0].ExecPlanCount != 2 {
+		t.Fatalf("ExecPlanCount = %d, want 2", issues[0].ExecPlanCount)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
 	command := fmt.Sprintf(
 		"env COLIN_FAKE_CODEX=1 %q -test.run=TestHelperProcessFakeCodex --",
 		os.Args[0],
@@ -32,10 +34,16 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 			ActiveStates: []string{"Todo"},
 		},
 		Workspace: domain.WorkspaceConfig{
-			Root: filepath.Join(tempDir, "workspaces"),
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
 		},
 		Repo: domain.RepoConfig{
 			PublishStates: []string{"Review"},
+			RemoteName:    "origin",
+		},
+		Hooks: domain.HookConfig{
+			BeforeRun: "printf 'hello\\n' > feature.txt",
 		},
 		Agent: domain.AgentConfig{
 			MaxTurns: 1,
@@ -84,6 +92,78 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	}
 	if tracker.updatedState != "Review" {
 		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	}
+}
+
+func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 %q -test.run=TestHelperProcessFakeCodex --",
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo", "In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			RemoteName:    "origin",
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns: 1,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-95",
+			Title:      "Keep coding",
+			State:      "In Progress",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-95",
+		Title:      "Keep coding",
+		State:      "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Refine" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
+	}
+	if strings.Contains(result.Summary, "Implemented the requested change.") {
+		t.Fatalf("Summary = %q, want ready-for-review text cleared after no-change handoff", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Colin reached the maximum of `1` turns") {
+		t.Fatalf("Summary = %q, want max-turn handoff note", result.Summary)
 	}
 }
 
@@ -530,6 +610,91 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 	}
 }
 
+func TestRunnerReusesExistingExecPlanWithoutCreatingAnother(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:            "issue-1",
+			Identifier:    "COLIN-109",
+			Title:         "Reuse exec plans",
+			State:         "In Progress",
+			ExecPlanCount: 1,
+			ExecPlan: &domain.ExecPlan{
+				Body: "# Persisted plan\n\nExisting details.",
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:            "issue-1",
+		Identifier:    "COLIN-109",
+		Title:         "Reuse exec plans",
+		State:         "In Progress",
+		ExecPlanCount: 1,
+		ExecPlan: &domain.ExecPlan{
+			Body: "# Persisted plan\n\nExisting details.",
+		},
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if tracker.execPlan.Body != "" {
+		t.Fatalf("tracker exec plan = %q, want no new exec plan persisted", tracker.execPlan.Body)
+	}
+
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
+		t.Fatalf("prompts log unexpectedly created a second exec plan: %q", logText)
+	}
+	if !strings.Contains(logText, "Work on COLIN-109.\n\nExecPlan:\n\n# Persisted plan\n\nExisting details.") {
+		t.Fatalf("prompts log missing coding prompt with reused plan: %q", logText)
+	}
+}
+
 func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -677,6 +842,67 @@ func TestRunnerClearsExecPlanSummaryBeforeCodingTurn(t *testing.T) {
 	}
 	if !strings.Contains(result.Summary, "Colin reached the maximum of `1` turns") {
 		t.Fatalf("Summary = %q, want max-turn handoff note", result.Summary)
+	}
+}
+
+func TestRunnerMovesIssueToRefineWhenExecPlanAttachmentsAreDuplicated(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:            "issue-1",
+			Identifier:    "COLIN-110",
+			Title:         "Repair exec plan metadata",
+			State:         "In Progress",
+			ExecPlanCount: 2,
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:            "issue-1",
+		Identifier:    "COLIN-110",
+		Title:         "Repair exec plan metadata",
+		State:         "In Progress",
+		ExecPlanCount: 2,
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Refine" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
+	}
+	if tracker.updatedState != "Refine" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Refine")
+	}
+	if tracker.metadata.LastOutcome != metadataOutcomePlan {
+		t.Fatalf("metadata.LastOutcome = %q, want %q", tracker.metadata.LastOutcome, metadataOutcomePlan)
+	}
+	if !strings.Contains(result.Summary, "multiple `Colin ExecPlan` attachments") {
+		t.Fatalf("Summary = %q, want duplicate exec plan guidance", result.Summary)
 	}
 }
 
@@ -948,6 +1174,42 @@ func appendPromptLog(path string, prompt string) error {
 	}
 	_, err = fmt.Fprintln(file, "===END===")
 	return err
+}
+
+func createRunnerGitOrigin(t *testing.T, tempDir string) string {
+	t.Helper()
+
+	remotePath := filepath.Join(tempDir, "origin.git")
+	seedPath := filepath.Join(tempDir, "seed")
+
+	runRunnerCmd(t, "", "git", "init", "--bare", remotePath)
+	runRunnerCmd(t, "", "git", "init", seedPath)
+	runRunnerCmd(t, seedPath, "git", "config", "user.name", "Test User")
+	runRunnerCmd(t, seedPath, "git", "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seedPath, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runRunnerCmd(t, seedPath, "git", "add", "README.md")
+	runRunnerCmd(t, seedPath, "git", "commit", "-m", "seed")
+	runRunnerCmd(t, seedPath, "git", "branch", "-M", "symphony")
+	runRunnerCmd(t, seedPath, "git", "remote", "add", "origin", remotePath)
+	runRunnerCmd(t, seedPath, "git", "push", "-u", "origin", "symphony")
+
+	return remotePath
+}
+
+func runRunnerCmd(t *testing.T, cwd string, name string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", name, args, err, string(output))
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func readJSONMessage(reader *bufio.Reader) (map[string]any, error) {

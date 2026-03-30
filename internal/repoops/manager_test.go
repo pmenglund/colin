@@ -328,6 +328,27 @@ func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *test
 	}
 }
 
+func TestPublishFailsWhenBranchIsNotAheadOfBaseAndWorkspaceIsClean(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+
+	manager := NewManager(testConfig(), testLogger())
+	_, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Refuse empty review handoff",
+	}, workspacePath)
+	if err == nil {
+		t.Fatal("Publish() error = nil, want error")
+	}
+	if !errors.Is(err, ErrNoReviewableChanges) {
+		t.Fatalf("Publish() error = %v, want ErrNoReviewableChanges", err)
+	}
+
+	log := readFile(t, ghLogPath)
+	if strings.Contains(log, "pr create") {
+		t.Fatalf("gh log = %q, want no pr create", log)
+	}
+}
+
 func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
 	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"colin-93","baseRefName":"symphony"}]`)
