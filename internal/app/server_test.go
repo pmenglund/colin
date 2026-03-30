@@ -93,6 +93,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="paused-issues-review"`) {
 			t.Fatalf("missing paused issue indicator: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="refresh-status"`) {
+			t.Fatalf("missing refresh status indicator: %s", text)
+		}
+		if !strings.Contains(text, `data-refresh-status="live"`) {
+			t.Fatalf("missing live refresh status: %s", text)
+		}
 	})
 
 	t.Run("fragment", func(t *testing.T) {
@@ -113,6 +119,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(text, `id="dashboard-root"`) {
 			t.Fatalf("missing dashboard root: %s", text)
+		}
+		if !strings.Contains(text, `data-testid="refresh-status"`) {
+			t.Fatalf("missing refresh status indicator: %s", text)
 		}
 	})
 
