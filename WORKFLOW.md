@@ -38,6 +38,8 @@ agent:
   max_concurrent_agents: 4
   max_turns: 8
   max_retry_backoff_ms: 300000
+  # When enabled, Colin first decides whether an issue is small enough to one-shot
+  # or should get a persisted ExecPlan, then reuses that stored decision on later runs.
   create_exec_plan: true
 
 codex:
@@ -52,7 +54,8 @@ codex:
 
 server:
   port: 8888
-  # Optional when Colin is reachable through a reverse proxy or non-loopback host.
+  # Optional when Colin is reachable through a reverse proxy or another public host.
+  # When unset, Colin will use an active Tailscale Funnel for this port if one exists.
   # public_url: https://colin.example.com
 ---
 

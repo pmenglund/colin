@@ -6,7 +6,7 @@ This file captures the stable, repo-specific architecture context for Colin.
 
 Colin is a long-running Go service that watches a Linear project, prepares a per-issue workspace, runs Codex for active issues, moves successful coding runs into the publish handoff state, and performs publish and merge automation from there.
 
-An embedded loopback HTTP dashboard exposes the orchestrator snapshot for live operator inspection, but it does not participate in orchestration correctness.
+An embedded loopback HTTP server exposes the orchestrator snapshot for live operator inspection, a Tailscale Funnel setup/readiness flow, and stable reserved webhook paths. It still does not participate in orchestration correctness.
 
 The runtime contract lives in `WORKFLOW.md`:
 
@@ -36,8 +36,9 @@ Today, the checked-in workflow uses:
 2. Poll Linear for candidate issues in the configured project and tracked states.
 3. Reconcile running issues and queued retries.
 4. Create or reuse a workspace for each dispatched issue.
-5. Run Codex for active issues, or repo automation for handoff states.
-6. Post high-level progress back to Linear as a comment thread.
+5. For active issues, optionally decide once whether the work is a one-shot change or needs a stored ExecPlan, then run Codex with that persisted decision.
+6. Run repo automation for handoff states.
+7. Post high-level progress back to Linear as a comment thread.
 
 The orchestrator owns claims, running sessions, retries, and live telemetry.
 
@@ -52,7 +53,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/workspace/` - per-issue workspace lifecycle and hooks
 - `internal/agent/codex/` - Codex app-server integration and event normalization
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
-- `internal/app/` - embedded HTTP dashboard and JSON state API
+- `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and reserved webhook routes
 - `internal/ui/` - gomponents-based HTML for the dashboard
 - `internal/repoops/` - publish and merge automation via git and GitHub CLI
 

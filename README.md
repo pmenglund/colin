@@ -17,7 +17,7 @@ Colin runs as a long-lived process:
 1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
 2. It polls Linear for candidate issues in the configured project and tracked states.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
-4. It creates one canonical ExecPlan attachment per issue before coding starts, then reuses that same plan in later coding rounds.
+4. When ExecPlan support is enabled, it decides whether each issue should be handled as a one-shot change or should get a stored ExecPlan, persists that decision on the issue, and only creates a plan for the second case.
 5. It runs Codex for issues in coding states.
 6. It moves a successful coding run into `Review`, or into `Refine` when human clarification is still needed.
 7. It performs git and GitHub automation for issues in publish or merge states.
@@ -29,7 +29,7 @@ By default Colin is started with:
 go run .
 ```
 
-By default Colin prints a single startup line with the local dashboard URL, for example `Colin is running. Web UI: http://127.0.0.1:8888`.
+By default Colin prints a single startup line with both the local dashboard URL and the local Funnel setup page, for example `Colin is running. Web UI: http://127.0.0.1:8888 Setup: http://127.0.0.1:8888/setup/funnel`.
 
 To keep the previous structured log stream on the terminal, pass `--verbose`:
 
@@ -46,6 +46,14 @@ go run . --port 9999
 ```
 
 If Colin is exposed through a reverse proxy or any non-loopback address, set `server.public_url` in `WORKFLOW.md` so the `Colin metadata` attachment in Linear points at the externally reachable web UI address instead of the local loopback bind.
+
+Before configuring incoming Linear or GitHub webhooks, use Colin's Funnel readiness flow to make sure the service is publicly reachable:
+
+```bash
+go run . setup funnel
+```
+
+That command checks Tailscale, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
 
 You can also point it at a specific workflow file:
 
@@ -65,7 +73,8 @@ go run . /path/to/WORKFLOW.md
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
-- When `agent.create_exec_plan` is enabled, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
+- When `agent.create_exec_plan` is enabled, Colin first records whether the issue should be handled as `one_shot` or `exec_plan` in the `Colin metadata` attachment.
+- When that stored decision is `exec_plan`, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
 - If an issue ever has multiple `Colin ExecPlan` attachments, Colin fails closed, moves the issue to `Refine`, and requires human cleanup instead of guessing which plan to use.
 - Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
@@ -94,7 +103,7 @@ When an issue is in one of these states, Colin:
 
 When an issue moves from `Review` back to `Todo`, Colin reads the latest `Review -> Todo` cycle from the Linear timeline and injects human comments from that review window into the next prompt as review feedback. Comments starting with `[colin]` are treated as Colin-authored status updates and are excluded.
 
-Colin does not generate a second ExecPlan when an issue returns from `Review` to `Todo`. It reuses the existing canonical `Colin ExecPlan` attachment and continues working from that plan.
+Colin does not recompute the planning strategy when an issue returns from `Review` to `Todo`. It reuses the stored `exec_plan_decision`, so one-shot issues continue directly into coding and plan-backed issues continue from the existing canonical `Colin ExecPlan` attachment.
 
 Additional `Todo` rule:
 
@@ -201,7 +210,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - clone `git@github.com:pmenglund/colin.git`
 - default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
-- create one canonical ExecPlan attachment before the first coding turn
+- decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
 - serve the loopback web UI on `http://127.0.0.1:8888` unless `server.public_url` is set for an external address
 - keep the last `1000` internal log lines in memory by default, configurable with `server.log_buffer_lines`
@@ -218,10 +227,10 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
-- When `server.public_url` is unset, Colin uses the loopback UI address for Linear metadata links. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
+- When `server.public_url` is unset, Colin auto-detects an active Tailscale Funnel for the Colin port and uses that public URL for metadata links and setup guidance. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
 - `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
-- The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.
+- The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. The embedded browser refresh keeps the task fragment current without reloading the full page shell, and if a refresh fails the toolbar marks the dashboard as stale so operators know they are looking at the last successful snapshot.
 - The issue-specific metadata page is separate from the main dashboard and is meant for reviewing one issue's latest Colin run, including the captured Codex output that Colin persisted to Linear metadata.
 - Poll-loop logs such as tick start and rate-limit deferrals now log at `debug` level so they remain available for diagnosis without overwhelming the normal info-level view.
 - Colin automatically moves successful, reviewable coding runs into the first configured publish state, which is currently `Review`.
@@ -229,3 +238,47 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - If `review_publish` finds no reviewable repository changes, Colin moves the issue back to the working active state instead of retrying PR creation or applying the `paused` label.
 - Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.
 - Colin can automatically move an issue out of `Merge` when the Linear team has a git `merge` automation target configured, which this repository currently does (`Merged`).
+
+## Tailscale Funnel Webhook Readiness
+
+Colin now includes a dedicated readiness flow for the public ingress you need before configuring incoming webhooks.
+
+Use either:
+
+```bash
+go run . setup funnel
+```
+
+or the browser page at `/setup/funnel` once Colin is running.
+
+The readiness flow checks:
+
+- `tailscale` is installed and the backend is running
+- MagicDNS is enabled
+- a root-mounted Tailscale Funnel is proxying Colin's local port
+- Colin responds locally at `/webhooks/readyz`
+- Colin responds publicly at `/webhooks/readyz`
+
+The recommended command is:
+
+```bash
+tailscale funnel --bg --https=443 8888
+```
+
+If port `443` is already occupied by another Serve or Funnel configuration, Colin suggests `8443` or `10000` instead.
+
+Tailscale Funnel requirements come from Tailscale itself and currently include:
+
+- MagicDNS enabled
+- HTTPS certificates enabled for the tailnet
+- a `funnel` node attribute in the tailnet policy
+- on macOS, a Tailscale client variant that supports Funnel port sharing
+
+When Funnel is active and `server.public_url` is unset, Colin derives its public base URL from the active Funnel automatically. If `server.public_url` is set, Colin uses that value instead and still shows Funnel diagnostics on the setup page.
+
+The setup page and CLI both show the final URLs you will paste into provider webhook settings later:
+
+- GitHub: `<public-base-url>/webhooks/github`
+- Linear: `<public-base-url>/webhooks/linear`
+
+Those webhook endpoints are reserved now so the URLs are stable, but they intentionally return `501 Not Implemented` until webhook handling itself is added. The readiness endpoint is live today at `/webhooks/readyz`.

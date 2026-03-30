@@ -27,6 +27,12 @@ func TestAnnounceStartupPrintsDashboardURL(t *testing.T) {
 			return ""
 		}
 		return *current
+	}, func() string {
+		current := url.Load()
+		if current == nil {
+			return ""
+		}
+		return *current + "/setup/funnel"
 	}, runErrCh)
 	if exited {
 		t.Fatal("announceStartup() reported service exit before startup announcement")
@@ -36,7 +42,7 @@ func TestAnnounceStartupPrintsDashboardURL(t *testing.T) {
 	}
 
 	got := stdout.String()
-	want := "Colin is running. Web UI: http://127.0.0.1:9999\n"
+	want := "Colin is running. Web UI: http://127.0.0.1:9999 Setup: http://127.0.0.1:9999/setup/funnel\n"
 	if got != want {
 		t.Fatalf("startup output = %q, want %q", got, want)
 	}
@@ -50,7 +56,7 @@ func TestAnnounceStartupReturnsRunErrorBeforeDashboardReady(t *testing.T) {
 	wantErr := errors.New("boom")
 	runErrCh <- wantErr
 
-	exited, err := announceStartup(&stdout, true, func() string { return "" }, runErrCh)
+	exited, err := announceStartup(&stdout, true, func() string { return "" }, func() string { return "" }, runErrCh)
 	if !exited {
 		t.Fatal("announceStartup() reported startup announcement instead of service exit")
 	}
@@ -68,7 +74,7 @@ func TestAnnounceStartupWithoutDashboardPrintsRunningMessage(t *testing.T) {
 	var stdout bytes.Buffer
 	runErrCh := make(chan error)
 
-	exited, err := announceStartup(&stdout, false, func() string { return "" }, runErrCh)
+	exited, err := announceStartup(&stdout, false, func() string { return "" }, func() string { return "" }, runErrCh)
 	if exited {
 		t.Fatal("announceStartup() reported service exit for dashboard-disabled service")
 	}

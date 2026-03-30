@@ -78,10 +78,31 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Title:      "Add dashboard",
 			State:      "In Progress",
 			ColinMetadata: &domain.ColinMetadata{
-				LastRunType: "coding",
-				LastOutcome: "ready_for_review",
-				CodexOutput: nil,
-				UpdatedAt:   ptr(time.Date(2026, 3, 28, 12, 34, 55, 0, time.UTC)),
+				ExecPlanDecision: domain.ExecPlanDecisionOneShot,
+				LastRunType:      "coding",
+				LastOutcome:      "ready_for_review",
+				CodexOutput:      nil,
+				UpdatedAt:        ptr(time.Date(2026, 3, 28, 12, 34, 55, 0, time.UTC)),
+			},
+		}, nil
+	}, func(context.Context) (domain.FunnelSetupStatus, error) {
+		now := time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC)
+		return domain.FunnelSetupStatus{
+			GeneratedAt:      now,
+			Ready:            true,
+			LocalBaseURL:     "http://127.0.0.1:8888",
+			PublicBaseURL:    "https://colin.tail.example.ts.net",
+			SuggestedCommand: "tailscale funnel --bg --https=443 8888",
+			LinearWebhookURL: "https://colin.tail.example.ts.net/webhooks/linear",
+			GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
+			Checks: []domain.SetupCheck{
+				{
+					ID:        "tailscale_cli",
+					Label:     "Tailscale CLI is installed",
+					Status:    "ok",
+					Detail:    "Using `/usr/local/bin/tailscale`.",
+					CheckedAt: now,
+				},
 			},
 		}, nil
 	}, func(_ context.Context, minLevel *slog.Level) (domain.BufferedLogSnapshot, error) {
@@ -128,6 +149,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="paused-issues-review"`) {
 			t.Fatalf("missing paused issue indicator: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="refresh-status"`) {
+			t.Fatalf("missing refresh status indicator: %s", text)
+		}
+		if !strings.Contains(text, `data-refresh-status="live"`) {
+			t.Fatalf("missing live refresh status: %s", text)
+		}
 	})
 
 	t.Run("fragment", func(t *testing.T) {
@@ -148,6 +175,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(text, `id="dashboard-root"`) {
 			t.Fatalf("missing dashboard root: %s", text)
+		}
+		if !strings.Contains(text, `data-testid="refresh-status"`) {
+			t.Fatalf("missing refresh status indicator: %s", text)
 		}
 	})
 
@@ -236,6 +266,24 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("setup api", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/api/v1/setup/funnel")
+		if err != nil {
+			t.Fatalf("GET /api/v1/setup/funnel error = %v", err)
+		}
+		defer resp.Body.Close()
+		var status domain.FunnelSetupStatus
+		if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !status.Ready {
+			t.Fatal("Ready = false, want true")
+		}
+		if status.GitHubWebhookURL != "https://colin.tail.example.ts.net/webhooks/github" {
+			t.Fatalf("GitHubWebhookURL = %q", status.GitHubWebhookURL)
+		}
+	})
+
 	t.Run("assets", func(t *testing.T) {
 		for _, path := range []string{"/assets/app.css", "/assets/htmx.min.js"} {
 			resp, err := http.Get(server.URL + path)
@@ -267,6 +315,8 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		for _, want := range []string{
 			`data-testid="issue-metadata-panel"`,
 			`COLIN-93 - Add dashboard`,
+			`ExecPlan decision`,
+			`one_shot`,
 			`Last outcome`,
 			`ready_for_review`,
 			`refresh complete`,
@@ -276,12 +326,63 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("funnel setup page", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/setup/funnel")
+		if err != nil {
+			t.Fatalf("GET /setup/funnel error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		text := string(body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		for _, want := range []string{
+			`data-testid="funnel-urls"`,
+			`Ready for webhooks`,
+			`https://colin.tail.example.ts.net/webhooks/github`,
+			`tailscale funnel --bg --https=443 8888`,
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("setup page missing %q: %s", want, text)
+			}
+		}
+	})
+
+	t.Run("webhook readyz", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/webhooks/readyz")
+		if err != nil {
+			t.Fatalf("GET /webhooks/readyz error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		if !strings.Contains(string(body), `"status":"ok"`) {
+			t.Fatalf("readyz body = %s", string(body))
+		}
+	})
+
+	t.Run("reserved webhook endpoints", func(t *testing.T) {
+		for _, path := range []string{"/webhooks/linear", "/webhooks/github"} {
+			resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatalf("POST %s error = %v", path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusNotImplemented {
+				t.Fatalf("%s status = %d, want 501", path, resp.StatusCode)
+			}
+		}
+	})
 }
 
 func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}

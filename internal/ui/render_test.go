@@ -72,6 +72,11 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	for _, want := range []string{
 		`data-testid="dashboard-root"`,
 		`data-testid="refresh-button"`,
+		`data-testid="refresh-status"`,
+		`data-refresh-status="live"`,
+		`data-generated-at="2026-03-28T12:00:00Z"`,
+		`title="Last successful update at 2026-03-28T12:00:00Z"`,
+		`Live data`,
 		`data-refresh-toggle="true"`,
 		`❚❚`,
 		`<h1>Colin</h1>`,
@@ -83,6 +88,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-testid="worker-output-COLIN-93"`,
 		`hx-get="/"`,
 		`/api/v1/state`,
+		`/setup/funnel`,
 		`COLIN-93`,
 		`Add live dashboard`,
 		`Linear issues`,
@@ -212,6 +218,12 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	if !strings.Contains(html, `id="dashboard-root"`) {
 		t.Fatalf("fragment missing dashboard root:\n%s", html)
 	}
+	if !strings.Contains(html, `data-testid="refresh-status"`) {
+		t.Fatalf("fragment missing refresh status badge:\n%s", html)
+	}
+	if !strings.Contains(html, `data-refresh-status="live"`) {
+		t.Fatalf("fragment missing live refresh status:\n%s", html)
+	}
 }
 
 func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
@@ -226,6 +238,7 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		State:      "Review",
 		URL:        &issueURL,
 		ColinMetadata: &domain.ColinMetadata{
+			ExecPlanDecision:     domain.ExecPlanDecisionOneShot,
 			LastRunType:          "coding",
 			LastOutcome:          "ready_for_review",
 			LastSummaryCommentID: "comment-12",
@@ -240,11 +253,50 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`data-testid="issue-metadata-panel"`,
 		`data-testid="issue-metadata-output"`,
 		`COLIN-111 - Update metadata link`,
+		`ExecPlan decision`,
+		`one_shot`,
 		`Last run type`,
 		`ready_for_review`,
 		`comment-12`,
 		`href="https://linear.app/example/issue/COLIN-111"`,
 		`Updated the metadata link.`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
+	html := renderNode(t, FunnelSetupPage(domain.FunnelSetupStatus{
+		GeneratedAt:      now,
+		Ready:            true,
+		LocalBaseURL:     "http://127.0.0.1:8888",
+		PublicBaseURL:    "https://colin.tail.example.ts.net",
+		LinearWebhookURL: "https://colin.tail.example.ts.net/webhooks/linear",
+		GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
+		SuggestedCommand: "tailscale funnel --bg --https=443 8888",
+		Checks: []domain.SetupCheck{
+			{
+				ID:        "tailscale_cli",
+				Label:     "Tailscale CLI is installed",
+				Status:    "ok",
+				Detail:    "Using `/usr/local/bin/tailscale`.",
+				CheckedAt: now,
+			},
+		},
+	}, now))
+
+	for _, want := range []string{
+		`data-testid="funnel-urls"`,
+		`data-testid="funnel-checks"`,
+		`Ready for webhooks`,
+		`https://colin.tail.example.ts.net/webhooks/github`,
+		`tailscale funnel --bg --https=443 8888`,
+		`data-testid="funnel-check-tailscale_cli"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)

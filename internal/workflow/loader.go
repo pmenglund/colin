@@ -240,6 +240,7 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 	return map[string]any{
 		"attachment_id":            value.AttachmentID,
 		"actual_branch_name":       value.ActualBranchName,
+		"exec_plan_decision":       value.ExecPlanDecision,
 		"review_publish_directive": value.ReviewPublishDirective,
 		"last_run_type":            value.LastRunType,
 		"last_outcome":             value.LastOutcome,
