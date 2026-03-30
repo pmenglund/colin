@@ -12,6 +12,7 @@ The runtime contract lives in `WORKFLOW.md`:
 
 - YAML front matter defines tracker, polling, workspace, repo, hook, and Codex settings.
 - The Markdown body is rendered as the prompt for coding runs.
+- Colin ensures a Linear `paused` label exists at startup and treats that label as a global dispatch gate.
 
 ## State Model
 
@@ -47,10 +48,10 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/workflow/` - `WORKFLOW.md` loader and prompt rendering
 - `internal/config/` - typed runtime config and validation
 - `internal/tracker/` - tracker interface
-- `internal/tracker/linear/` - Linear GraphQL adapter for issue reads, state writes, and comment writes
+- `internal/tracker/linear/` - Linear GraphQL adapter for issue reads, state writes, comment writes, and `paused` label management
 - `internal/workspace/` - per-issue workspace lifecycle and hooks
 - `internal/agent/codex/` - Codex app-server integration and event normalization
-- `internal/orchestrator/` - dispatch, reconciliation, retries, and observability state
+- `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
 - `internal/app/` - embedded HTTP dashboard and JSON state API
 - `internal/ui/` - gomponents-based HTML for the dashboard
 - `internal/repoops/` - publish and merge automation via git and GitHub CLI

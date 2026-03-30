@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,11 @@ type trackerStub struct {
 	rateLimits         map[string]any
 	issueComments      []string
 	commentReplies     []string
+	metadata           domain.ColinMetadata
+	ensuredLabels      []string
+	addedLabels        []string
+	ensureLabelErr     error
+	addIssueLabelErr   error
 }
 
 func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
@@ -49,6 +55,16 @@ func (s *trackerStub) UpdateIssueState(context.Context, string, string) error {
 	return nil
 }
 
+func (s *trackerStub) EnsureIssueLabel(_ context.Context, labelName string) error {
+	s.ensuredLabels = append(s.ensuredLabels, labelName)
+	return s.ensureLabelErr
+}
+
+func (s *trackerStub) AddIssueLabel(_ context.Context, issueID string, labelName string) error {
+	s.addedLabels = append(s.addedLabels, issueID+":"+labelName)
+	return s.addIssueLabelErr
+}
+
 func (s *trackerStub) ResolveGitAutomationState(context.Context, string, string, string) (string, bool, error) {
 	return "", false, nil
 }
@@ -64,6 +80,7 @@ func (s *trackerStub) CreateCommentReply(_ context.Context, _ string, _ string, 
 }
 
 func (s *trackerStub) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	s.metadata = metadata
 	return metadata, nil
 }
 
@@ -73,6 +90,33 @@ func (s *trackerStub) UpsertIssueExecPlan(_ context.Context, _ string, plan doma
 
 func (s *trackerStub) CurrentRateLimits() map[string]any {
 	return s.rateLimits
+}
+
+type runnerStub struct {
+	invoked chan struct{}
+	release chan struct{}
+	attempt *int
+	issue   domain.Issue
+	result  codex.Result
+}
+
+func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ func(codex.Event)) codex.Result {
+	s.issue = issue
+	if attempt != nil {
+		value := *attempt
+		s.attempt = &value
+	}
+	if s.invoked != nil {
+		close(s.invoked)
+	}
+	if s.release != nil {
+		<-s.release
+	}
+	result := s.result
+	if strings.TrimSpace(result.Issue.ID) == "" {
+		result.Issue = issue
+	}
+	return result
 }
 
 func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
@@ -117,6 +161,31 @@ func TestShouldDispatchRejectsRefine(t *testing.T) {
 		Identifier: "ABC-1",
 		Title:      "Needs more detail",
 		State:      "Refine",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false")
+	}
+}
+
+func TestShouldDispatchRejectsPausedLabel(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo"}},
+		}},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Paused",
+		State:      "Todo",
+		Labels:     []string{domain.PausedIssueLabel},
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
 	}
@@ -359,6 +428,7 @@ func TestVisibleRetryPostsScheduledAndFiredComments(t *testing.T) {
 	tracker := &trackerStub{
 		candidateIssues: []domain.Issue{issue},
 	}
+	runner := &runnerStub{}
 	orch := &Orchestrator{
 		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		runtime: Runtime{
@@ -367,11 +437,13 @@ func TestVisibleRetryPostsScheduledAndFiredComments(t *testing.T) {
 				Agent: domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute, MaxConcurrentAgents: 1},
 			},
 			Tracker: tracker,
+			Runner:  runner,
 		},
 		running:   map[string]*runningEntry{},
 		claimed:   map[string]struct{}{},
 		retrying:  map[string]*retryState{},
 		completed: map[string]string{},
+		eventCh:   make(chan any, 1),
 	}
 
 	orch.scheduleRetry("1", issue.Identifier, 1, "worker stalled", time.Second, &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"}, true)
@@ -453,6 +525,63 @@ func TestHiddenRetryRemainsHiddenWhenDeferredByLinearBudget(t *testing.T) {
 	}
 }
 
+func TestHandleRetryDispatchesClaimedRetryIssue(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Retry me", State: "Review"}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+	}
+	runner := &runnerStub{
+		invoked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+			},
+			Tracker: tracker,
+			Runner:  runner,
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 1),
+	}
+
+	orch.retrying["1"] = &retryState{
+		entry: domain.RetryEntry{
+			IssueID:    "1",
+			Identifier: issue.Identifier,
+			Attempt:    1,
+			DueAt:      time.Now().UTC(),
+		},
+		timer:   time.NewTimer(time.Hour),
+		comment: &commentThreadState{RunType: codex.RunTypeReviewPublish},
+	}
+	defer orch.retrying["1"].timer.Stop()
+
+	orch.handleRetry(context.Background(), "1")
+
+	select {
+	case <-runner.invoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not invoked")
+	}
+	close(runner.release)
+
+	if runner.attempt == nil || *runner.attempt != 1 {
+		t.Fatalf("retry attempt = %v, want 1", runner.attempt)
+	}
+	if runner.issue.ID != "1" {
+		t.Fatalf("runner issue id = %q, want %q", runner.issue.ID, "1")
+	}
+}
+
 func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -524,6 +653,285 @@ func TestReconcileRunningKeepsPublishAutomationRunningInReview(t *testing.T) {
 	}
 	if entry.stopReason != "" {
 		t.Fatalf("stopReason = %q, want empty", entry.stopReason)
+	}
+}
+
+func TestHandleWorkerExitPausesAfterRepeatedIdenticalFailures(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Review", State: "Review"}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+			},
+			Tracker: tracker,
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	for i := 0; i < loopFailureThreshold; i++ {
+		current := issue
+		if i > 0 {
+			metadata := tracker.metadata
+			current.ColinMetadata = &metadata
+		}
+		delete(orch.retrying, "1")
+		orch.running["1"] = &runningEntry{
+			issue:      current,
+			identifier: current.Identifier,
+			runType:    codex.RunTypeReviewPublish,
+			startedAt:  time.Now().Add(-time.Second),
+			comment:    &commentThreadState{RunType: codex.RunTypeReviewPublish, RootCommentID: "root"},
+		}
+		orch.claimed["1"] = struct{}{}
+
+		orch.handleWorkerExit(context.Background(), workerExitedEvent{
+			issueID: "1",
+			result: codex.Result{
+				Issue:   current,
+				RunType: codex.RunTypeReviewPublish,
+				Status:  "failed",
+				Err:     context.DeadlineExceeded,
+			},
+		})
+	}
+
+	if got := tracker.metadata.LoopFailureCount; got != loopFailureThreshold {
+		t.Fatalf("LoopFailureCount = %d, want %d", got, loopFailureThreshold)
+	}
+	if tracker.metadata.PausedAt == nil {
+		t.Fatal("PausedAt = nil, want timestamp")
+	}
+	if tracker.metadata.PausedRunType != codex.RunTypeReviewPublish {
+		t.Fatalf("PausedRunType = %q, want %q", tracker.metadata.PausedRunType, codex.RunTypeReviewPublish)
+	}
+	if len(tracker.ensuredLabels) == 0 || tracker.ensuredLabels[len(tracker.ensuredLabels)-1] != domain.PausedIssueLabel {
+		t.Fatalf("ensuredLabels = %v, want paused", tracker.ensuredLabels)
+	}
+	if len(tracker.addedLabels) == 0 || tracker.addedLabels[len(tracker.addedLabels)-1] != "1:"+domain.PausedIssueLabel {
+		t.Fatalf("addedLabels = %v, want issue paused label", tracker.addedLabels)
+	}
+	if _, ok := orch.retrying["1"]; ok {
+		t.Fatal("unexpected retry after pause")
+	}
+	if _, ok := orch.claimed["1"]; ok {
+		t.Fatal("expected claim to be released after pause")
+	}
+	if got := tracker.commentReplies[len(tracker.commentReplies)-1]; !strings.Contains(got, "added the `paused` label") {
+		t.Fatalf("last comment = %q, want pause summary", got)
+	}
+}
+
+func TestHandleWorkerExitResetsFailureStreakOnDifferentError(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Retry me",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			LoopFailureFingerprint: buildLoopFailureFingerprint(codex.RunTypeReviewPublish, "Review", "first failure"),
+			LoopFailureCount:       2,
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config:  domain.ServiceConfig{Repo: domain.RepoConfig{PublishStates: []string{"Review"}}, Agent: domain.AgentConfig{MaxRetryBackoff: time.Minute}},
+			Tracker: tracker,
+			Runner:  nil,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      issue,
+				identifier: issue.Identifier,
+				runType:    codex.RunTypeReviewPublish,
+				startedAt:  time.Now().Add(-time.Second),
+				comment:    &commentThreadState{RunType: codex.RunTypeReviewPublish, RootCommentID: "root"},
+			},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   issue,
+			RunType: codex.RunTypeReviewPublish,
+			Status:  "failed",
+			Err:     os.ErrPermission,
+		},
+	})
+
+	if got := tracker.metadata.LoopFailureCount; got != 1 {
+		t.Fatalf("LoopFailureCount = %d, want 1", got)
+	}
+	if tracker.metadata.PausedAt != nil {
+		t.Fatal("PausedAt != nil, want nil")
+	}
+}
+
+func TestHandleWorkerExitClearsFailureStreakOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	metadata := domain.ColinMetadata{
+		LoopFailureFingerprint: "fp",
+		LoopFailureCount:       2,
+		PausedRunType:          codex.RunTypeCoding,
+		PausedState:            "In Progress",
+		PausedReason:           "boom",
+	}
+	now := time.Now().UTC()
+	metadata.PausedAt = &now
+	issue := domain.Issue{
+		ID:            "1",
+		Identifier:    "ABC-1",
+		Title:         "Success",
+		State:         "Review",
+		ColinMetadata: &metadata,
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config:  domain.ServiceConfig{Repo: domain.RepoConfig{PublishStates: []string{"Review"}}},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      issue,
+				identifier: issue.Identifier,
+				runType:    codex.RunTypeReviewPublish,
+				startedAt:  time.Now().Add(-time.Second),
+			},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   issue,
+			RunType: codex.RunTypeReviewPublish,
+			Status:  "succeeded",
+		},
+	})
+
+	if tracker.metadata.LoopFailureCount != 0 {
+		t.Fatalf("LoopFailureCount = %d, want 0", tracker.metadata.LoopFailureCount)
+	}
+	if tracker.metadata.LoopFailureFingerprint != "" {
+		t.Fatalf("LoopFailureFingerprint = %q, want empty", tracker.metadata.LoopFailureFingerprint)
+	}
+	if tracker.metadata.PausedAt != nil {
+		t.Fatal("PausedAt != nil, want nil")
+	}
+}
+
+func TestHandleWorkerExitKeepsRetryingWhenPauseLabelFails(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{addIssueLabelErr: os.ErrPermission}
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Review",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			LoopFailureFingerprint: buildLoopFailureFingerprint(codex.RunTypeReviewPublish, "Review", "permission denied"),
+			LoopFailureCount:       loopFailureThreshold - 1,
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config:  domain.ServiceConfig{Repo: domain.RepoConfig{PublishStates: []string{"Review"}}, Agent: domain.AgentConfig{MaxRetryBackoff: time.Minute}},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      issue,
+				identifier: issue.Identifier,
+				runType:    codex.RunTypeReviewPublish,
+				startedAt:  time.Now().Add(-time.Second),
+				comment:    &commentThreadState{RunType: codex.RunTypeReviewPublish, RootCommentID: "root"},
+			},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   issue,
+			RunType: codex.RunTypeReviewPublish,
+			Status:  "failed",
+			Err:     os.ErrPermission,
+		},
+	})
+
+	if _, ok := orch.retrying["1"]; !ok {
+		t.Fatal("expected retry when paused label application fails")
+	}
+	if tracker.metadata.PausedAt != nil {
+		t.Fatal("PausedAt != nil, want nil when label apply fails")
+	}
+}
+
+func TestClearPausedLoopMetadataIfUnpausedClearsStoredPauseState(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	now := time.Now().UTC()
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Unpaused",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			LoopFailureFingerprint: "fp",
+			LoopFailureCount:       3,
+			PausedAt:               &now,
+			PausedRunType:          codex.RunTypeReviewPublish,
+			PausedState:            "Review",
+			PausedReason:           "failed repeatedly",
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Tracker: tracker,
+		},
+	}
+
+	updated := orch.clearPausedLoopMetadataIfUnpaused(context.Background(), issue)
+
+	if updated.ColinMetadata == nil {
+		t.Fatal("updated.ColinMetadata = nil")
+	}
+	if updated.ColinMetadata.LoopFailureCount != 0 {
+		t.Fatalf("LoopFailureCount = %d, want 0", updated.ColinMetadata.LoopFailureCount)
+	}
+	if updated.ColinMetadata.PausedAt != nil {
+		t.Fatal("PausedAt != nil, want nil")
 	}
 }
 

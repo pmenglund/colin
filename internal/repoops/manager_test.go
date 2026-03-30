@@ -2,6 +2,7 @@ package repoops
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -266,6 +267,117 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 	}
 }
 
+func TestPublishReusesTrackedPullRequestFromMetadata(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"colin-93","baseRefName":"symphony"}]`)
+
+	manager := NewManager(testConfig(), testLogger())
+	result, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reuse tracked PR",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:  11,
+			PullRequestURL:     "https://github.com/pmenglund/colin/pull/11",
+			PullRequestState:   "OPEN",
+			PullRequestHeadRef: "colin-93",
+			PullRequestBaseRef: "symphony",
+		},
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if result.PRNumber != 11 {
+		t.Fatalf("result.PRNumber = %d, want 11", result.PRNumber)
+	}
+
+	log := readFile(t, ghLogPath)
+	if strings.Contains(log, "pr create") {
+		t.Fatalf("gh log = %q, want no pr create", log)
+	}
+	if !strings.Contains(log, "pr view 11") {
+		t.Fatalf("gh log = %q, want tracked pr view", log)
+	}
+}
+
+func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"pmenglund/colin-93","baseRefName":"symphony"}]`)
+
+	manager := NewManager(testConfig(), testLogger())
+	_, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reject branch drift",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:  11,
+			PullRequestURL:     "https://github.com/pmenglund/colin/pull/11",
+			PullRequestState:   "OPEN",
+			PullRequestHeadRef: "pmenglund/colin-93",
+			PullRequestBaseRef: "symphony",
+		},
+	}, workspacePath)
+	if err == nil {
+		t.Fatal("Publish() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "current branch") {
+		t.Fatalf("Publish() error = %v, want current branch mismatch", err)
+	}
+
+	log := readFile(t, ghLogPath)
+	if strings.Contains(log, "pr create") {
+		t.Fatalf("gh log = %q, want no pr create", log)
+	}
+}
+
+func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"colin-93","baseRefName":"symphony"}]`)
+
+	manager := NewManager(testConfig(), testLogger())
+	result, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Adopt attached PR",
+		AttachedPullRequests: []domain.PullRequestRef{
+			{Number: 11, URL: "https://github.com/pmenglund/colin/pull/11"},
+		},
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if result.PRNumber != 11 {
+		t.Fatalf("result.PRNumber = %d, want 11", result.PRNumber)
+	}
+
+	log := readFile(t, ghLogPath)
+	if strings.Contains(log, "pr create") {
+		t.Fatalf("gh log = %q, want no pr create", log)
+	}
+}
+
+func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+
+	manager := NewManager(testConfig(), testLogger())
+	_, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reject duplicate attached PRs",
+		AttachedPullRequests: []domain.PullRequestRef{
+			{Number: 11, URL: "https://github.com/pmenglund/colin/pull/11"},
+			{Number: 14, URL: "https://github.com/pmenglund/colin/pull/14"},
+		},
+	}, workspacePath)
+	if err == nil {
+		t.Fatal("Publish() error = nil, want error")
+	}
+	if !errors.Is(err, ErrDuplicatePullRequests) {
+		t.Fatalf("Publish() error = %v, want ErrDuplicatePullRequests", err)
+	}
+
+	log := readFile(t, ghLogPath)
+	if strings.Contains(log, "pr create") {
+		t.Fatalf("gh log = %q, want no pr create", log)
+	}
+}
+
 func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
 	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
 	manager := NewManager(testConfig(), testLogger())
@@ -322,6 +434,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	writeFile(t, ghReviewThreadsPath, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	writeFile(t, ghReviewThreadCommentsPath, `{"data":{"node":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`)
 	writeFile(t, ghReactionsPath, `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	writeFile(t, ghLogPath, "")
 	writeFile(t, filepath.Join(binPath, "gh"), fakeGHScript)
 	if err := os.Chmod(filepath.Join(binPath, "gh"), 0o755); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -397,18 +510,105 @@ set -eu
 echo "$*" >>"$COLIN_FAKE_GH_LOG"
 case "$1 $2" in
   "pr list")
-    cat "$COLIN_FAKE_GH_STATE"
+    head=""
+    base=""
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --head)
+          head="$2"
+          shift 2
+          ;;
+        --base)
+          base="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    python3 - "$COLIN_FAKE_GH_STATE" "$head" "$base" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    prs = json.load(fh)
+head = sys.argv[2]
+base = sys.argv[3]
+if head:
+    prs = [pr for pr in prs if pr.get("headRefName") == head]
+if base:
+    prs = [pr for pr in prs if pr.get("baseRefName") == base]
+json.dump(prs, sys.stdout)
+print()
+PY
+    ;;
+  "pr view")
+    python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    prs = json.load(fh)
+target = int(sys.argv[2])
+for pr in prs:
+    if int(pr.get("number", 0)) == target:
+        json.dump(pr, sys.stdout)
+        print()
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
     ;;
   "pr create")
-    printf '[{"number":1,"url":"https://example.test/pr/1","state":"OPEN"}]\n' >"$COLIN_FAKE_GH_STATE"
-    printf 'https://example.test/pr/1\n'
+    head=""
+    base=""
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --head)
+          head="$2"
+          shift 2
+          ;;
+        --base)
+          base="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    python3 - "$COLIN_FAKE_GH_STATE" "$head" "$base" <<'PY'
+import json, sys
+path, head, base = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, "r", encoding="utf-8") as fh:
+    prs = json.load(fh)
+number = max([int(pr.get("number", 0)) for pr in prs] or [0]) + 1
+pr = {
+    "number": number,
+    "url": f"https://example.test/pr/{number}",
+    "state": "OPEN",
+    "headRefName": head,
+    "baseRefName": base,
+}
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump([pr], fh)
+print(pr["url"])
+PY
     ;;
   "pr merge")
     if [ -n "${COLIN_FAKE_GH_MERGE_ERROR:-}" ]; then
       printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR" >&2
       exit 1
     fi
-    printf '[{"number":1,"url":"https://example.test/pr/1","state":"MERGED"}]\n' >"$COLIN_FAKE_GH_STATE"
+    python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
+import json, sys
+path, target = sys.argv[1], int(sys.argv[2])
+with open(path, "r", encoding="utf-8") as fh:
+    prs = json.load(fh)
+for pr in prs:
+    if int(pr.get("number", 0)) == target:
+        pr["state"] = "MERGED"
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(prs, fh)
+PY
     ;;
   "api graphql")
     case "$*" in

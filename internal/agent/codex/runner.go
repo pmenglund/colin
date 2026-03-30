@@ -150,16 +150,25 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			Action:    result.Action,
 		})
 		issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
-		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadata(issue, runType, metadataOutcomeReady, ""))
+		issue.PullRequest = &domain.PullRequestRef{
+			Number:  result.PRNumber,
+			URL:     result.PRURL,
+			State:   result.PRState,
+			HeadRef: result.PRHeadRef,
+			BaseRef: result.PRBaseRef,
+		}
+		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadataWithResult(issue, runType, metadataOutcomeReady, "", result))
 		return Result{
 			Issue:         issue,
 			RunType:       runType,
 			WorkspacePath: ws.Path,
 			Status:        "succeeded",
 			PR: &domain.PullRequestRef{
-				Number: result.PRNumber,
-				URL:    result.PRURL,
-				State:  result.PRState,
+				Number:  result.PRNumber,
+				URL:     result.PRURL,
+				State:   result.PRState,
+				HeadRef: result.PRHeadRef,
+				BaseRef: result.PRBaseRef,
 			},
 		}
 	}
@@ -223,16 +232,25 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		})
 		issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
 		issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
-		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadata(issue, runType, metadataOutcomeMerged, ""))
+		issue.PullRequest = &domain.PullRequestRef{
+			Number:  result.PRNumber,
+			URL:     result.PRURL,
+			State:   result.PRState,
+			HeadRef: result.PRHeadRef,
+			BaseRef: result.PRBaseRef,
+		}
+		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadataWithResult(issue, runType, metadataOutcomeMerged, "", result))
 		return Result{
 			Issue:         issue,
 			RunType:       runType,
 			WorkspacePath: ws.Path,
 			Status:        "succeeded",
 			PR: &domain.PullRequestRef{
-				Number: result.PRNumber,
-				URL:    result.PRURL,
-				State:  result.PRState,
+				Number:  result.PRNumber,
+				URL:     result.PRURL,
+				State:   result.PRState,
+				HeadRef: result.PRHeadRef,
+				BaseRef: result.PRBaseRef,
 			},
 		}
 	}
@@ -927,6 +945,16 @@ func buildMergeFailureSummary(result repoops.Result, reviewState string, err err
 
 func codexMetadata(issue domain.Issue, runType string, outcome string, summaryCommentID string) domain.ColinMetadata {
 	return codexMetadataWithDirective(issue, runType, outcome, summaryCommentID, reviewPublishDirective(issue))
+}
+
+func codexMetadataWithResult(issue domain.Issue, runType string, outcome string, summaryCommentID string, result repoops.Result) domain.ColinMetadata {
+	metadata := codexMetadata(issue, runType, outcome, summaryCommentID)
+	metadata.PullRequestNumber = result.PRNumber
+	metadata.PullRequestURL = strings.TrimSpace(result.PRURL)
+	metadata.PullRequestState = strings.TrimSpace(result.PRState)
+	metadata.PullRequestHeadRef = strings.TrimSpace(result.PRHeadRef)
+	metadata.PullRequestBaseRef = strings.TrimSpace(result.PRBaseRef)
+	return metadata
 }
 
 func codexMetadataWithDirective(issue domain.Issue, runType string, outcome string, summaryCommentID string, directive string) domain.ColinMetadata {

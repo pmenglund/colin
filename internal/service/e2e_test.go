@@ -494,11 +494,19 @@ type fakeLinearServer struct {
 	stateFetches     int
 	comments         []fakeLinearComment
 	metadata         map[string]any
+	labels           map[string]string
 	nextCommentID    int
+	nextLabelID      int
 }
 
 func newFakeLinearServer(markerPath string) *fakeLinearServer {
-	return &fakeLinearServer{markerPath: markerPath, current: "Todo", nextCommentID: 1}
+	return &fakeLinearServer{
+		markerPath:    markerPath,
+		current:       "Todo",
+		labels:        map[string]string{},
+		nextCommentID: 1,
+		nextLabelID:   1,
+	}
 }
 
 func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +526,55 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case strings.Contains(request.Query, "issueLabels"):
+		name, _ := request.Variables["name"].(string)
+		s.mu.Lock()
+		labelID := s.labels[strings.ToLower(strings.TrimSpace(name))]
+		s.mu.Unlock()
+		nodes := []map[string]any{}
+		if strings.TrimSpace(labelID) != "" {
+			nodes = append(nodes, map[string]any{
+				"id":   labelID,
+				"name": name,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issueLabels": map[string]any{
+					"nodes": nodes,
+				},
+			},
+		})
+	case strings.Contains(request.Query, "issueLabelCreate"):
+		input, _ := request.Variables["input"].(map[string]any)
+		name, _ := input["name"].(string)
+		s.mu.Lock()
+		labelID := fmt.Sprintf("label-%d", s.nextLabelID)
+		s.nextLabelID++
+		s.labels[strings.ToLower(strings.TrimSpace(name))] = labelID
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issueLabelCreate": map[string]any{
+					"success": true,
+					"issueLabel": map[string]any{
+						"id":   labelID,
+						"name": name,
+					},
+				},
+			},
+		})
+	case strings.Contains(request.Query, "issueAddLabel"):
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issueAddLabel": map[string]any{
+					"success": true,
+					"issue": map[string]any{
+						"id": "issue-1",
+					},
+				},
+			},
+		})
 	case strings.Contains(request.Query, "commentCreate"):
 		commentID := s.recordComment(request.Variables)
 		_ = json.NewEncoder(w).Encode(map[string]any{

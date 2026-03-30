@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,21 +18,25 @@ import (
 )
 
 var (
-	ErrNotGitRepository = errors.New("not_git_repository")
-	ErrNoPullRequest    = errors.New("no_pull_request")
+	ErrNotGitRepository           = errors.New("not_git_repository")
+	ErrNoPullRequest              = errors.New("no_pull_request")
+	ErrDuplicatePullRequests      = errors.New("duplicate_pull_requests")
+	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
 )
 
 const codexReviewBotLogin = "chatgpt-codex-connector[bot]"
 
 // Result captures the outcome of a publish or merge operation.
 type Result struct {
-	Branch   string
-	BaseRef  string
-	PRNumber int
-	PRURL    string
-	PRState  string
-	Commit   string
-	Action   string
+	Branch    string
+	BaseRef   string
+	PRNumber  int
+	PRURL     string
+	PRState   string
+	PRHeadRef string
+	PRBaseRef string
+	Commit    string
+	Action    string
 }
 
 // ReviewContext captures the PR, unresolved review threads, and Codex review signals for an issue branch.
@@ -98,35 +103,26 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		result.Action = "committed_and_pushed"
 	}
 
-	pr, err := m.findPullRequest(ctx, workspacePath, branch)
+	pr, created, err := m.resolvePullRequest(ctx, issue, workspacePath, branch, true)
 	if err != nil {
 		return Result{}, err
 	}
 	if pr == nil {
-		url, err := m.createPullRequest(ctx, workspacePath, issue, branch)
-		if err != nil {
-			return Result{}, err
-		}
-		pr, err = m.findPullRequest(ctx, workspacePath, branch)
-		if err != nil {
-			return Result{}, err
-		}
-		if pr == nil {
-			return Result{}, ErrNoPullRequest
-		}
-		pr.URL = url
+		return Result{}, ErrNoPullRequest
+	}
+	if created {
 		if result.Action == "pushed" {
 			result.Action = "pushed_and_opened_pr"
 		} else {
 			result.Action += "_and_opened_pr"
 		}
-	} else if result.Action == "" {
-		result.Action = "pr_already_open"
 	}
 
 	result.PRNumber = pr.Number
 	result.PRURL = pr.URL
 	result.PRState = pr.State
+	result.PRHeadRef = pr.HeadRefName
+	result.PRBaseRef = pr.BaseRefName
 	return result, nil
 }
 
@@ -155,17 +151,9 @@ func (m *Manager) Merge(ctx context.Context, issue domain.Issue, workspacePath s
 
 // ReviewContext returns the current PR and unresolved review threads for the issue branch.
 func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspacePath string) (ReviewContext, error) {
-	var pr *pullRequest
-	for _, branch := range m.reviewLookupBranches(ctx, issue, workspacePath) {
-		candidate, err := m.findPullRequest(ctx, workspacePath, branch)
-		if err != nil {
-			return ReviewContext{}, err
-		}
-		if candidate == nil {
-			continue
-		}
-		pr = candidate
-		break
+	pr, _, err := m.resolvePullRequest(ctx, issue, workspacePath, "", false)
+	if err != nil {
+		return ReviewContext{}, err
 	}
 	if pr == nil {
 		return ReviewContext{}, nil
@@ -186,9 +174,11 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 	}
 	return ReviewContext{
 		PullRequest: domain.PullRequestRef{
-			Number: pr.Number,
-			URL:    pr.URL,
-			State:  pr.State,
+			Number:  pr.Number,
+			URL:     pr.URL,
+			State:   pr.State,
+			HeadRef: pr.HeadRefName,
+			BaseRef: pr.BaseRefName,
 		},
 		Threads:                threads,
 		CodexReviewThreads:     codexThreads,
@@ -242,9 +232,11 @@ func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath
 }
 
 type pullRequest struct {
-	Number int    `json:"number"`
-	URL    string `json:"url"`
-	State  string `json:"state"`
+	Number      int    `json:"number"`
+	URL         string `json:"url"`
+	State       string `json:"state"`
+	HeadRefName string `json:"headRefName"`
+	BaseRefName string `json:"baseRefName"`
 }
 
 func (m *Manager) currentBranch(ctx context.Context, workspacePath string) (string, error) {
@@ -328,7 +320,7 @@ func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch str
 		"--head", branch,
 		"--base", m.cfg.Workspace.BaseRef,
 		"--state", "all",
-		"--json", "number,url,state",
+		"--json", "number,url,state,headRefName,baseRefName",
 	)
 	if err != nil {
 		return nil, err
@@ -341,6 +333,180 @@ func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch str
 		return nil, nil
 	}
 	return &prs[0], nil
+}
+
+func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*pullRequest, error) {
+	if number <= 0 {
+		return nil, nil
+	}
+	out, err := m.run(
+		ctx,
+		workspacePath,
+		30*time.Second,
+		"gh", "pr", "view",
+		fmt.Sprintf("%d", number),
+		"--json", "number,url,state,headRefName,baseRefName",
+	)
+	if err != nil {
+		return nil, err
+	}
+	var pr pullRequest
+	if err := json.Unmarshal([]byte(out), &pr); err != nil {
+		return nil, err
+	}
+	if pr.Number == 0 {
+		return nil, nil
+	}
+	return &pr, nil
+}
+
+func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, workspacePath, currentBranch string, allowCreate bool) (*pullRequest, bool, error) {
+	tracked, hasTracked := trackedPullRequest(issue)
+	if hasTracked {
+		pr, err := m.resolveTrackedPullRequest(ctx, workspacePath, tracked, currentBranch)
+		return pr, false, err
+	}
+
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	if err != nil {
+		return nil, false, err
+	}
+
+	attached := attachedPullRequestsForRepository(issue.AttachedPullRequests, owner, name)
+	switch len(attached) {
+	case 0:
+	case 1:
+		pr, err := m.findPullRequestByNumber(ctx, workspacePath, attached[0].Number)
+		if err != nil {
+			return nil, false, fmt.Errorf("resolve attached pull request #%d: %w", attached[0].Number, err)
+		}
+		if pr == nil {
+			return nil, false, fmt.Errorf("attached pull request #%d not found", attached[0].Number)
+		}
+		return pr, false, nil
+	default:
+		return nil, false, duplicatePullRequestsError(attached)
+	}
+
+	if currentBranch != "" {
+		pr, err := m.findPullRequest(ctx, workspacePath, currentBranch)
+		if err != nil {
+			return nil, false, err
+		}
+		if pr != nil {
+			return pr, false, nil
+		}
+	} else {
+		for _, branch := range m.reviewLookupBranches(ctx, issue, workspacePath) {
+			pr, err := m.findPullRequest(ctx, workspacePath, branch)
+			if err != nil {
+				return nil, false, err
+			}
+			if pr != nil {
+				return pr, false, nil
+			}
+		}
+	}
+
+	if !allowCreate || strings.TrimSpace(currentBranch) == "" {
+		return nil, false, nil
+	}
+
+	url, err := m.createPullRequest(ctx, workspacePath, issue, currentBranch)
+	if err != nil {
+		return nil, false, err
+	}
+	pr, err := m.findPullRequest(ctx, workspacePath, currentBranch)
+	if err != nil {
+		return nil, false, err
+	}
+	if pr == nil {
+		return nil, false, ErrNoPullRequest
+	}
+	pr.URL = url
+	return pr, true, nil
+}
+
+func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath string, tracked domain.PullRequestRef, currentBranch string) (*pullRequest, error) {
+	pr, err := m.findPullRequestByNumber(ctx, workspacePath, tracked.Number)
+	if err != nil {
+		return nil, fmt.Errorf("view tracked pull request #%d: %w", tracked.Number, err)
+	}
+	if pr == nil {
+		return nil, fmt.Errorf("tracked pull request #%d not found", tracked.Number)
+	}
+	if value := strings.TrimSpace(tracked.URL); value != "" && value != strings.TrimSpace(pr.URL) {
+		return nil, fmt.Errorf("%w: tracked pull request url %q does not match GitHub url %q", ErrTrackedPullRequestMismatch, value, pr.URL)
+	}
+	if value := strings.TrimSpace(tracked.HeadRef); value != "" && value != strings.TrimSpace(pr.HeadRefName) {
+		return nil, fmt.Errorf("%w: tracked pull request head %q does not match GitHub head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
+	}
+	if value := strings.TrimSpace(tracked.BaseRef); value != "" && value != strings.TrimSpace(pr.BaseRefName) {
+		return nil, fmt.Errorf("%w: tracked pull request base %q does not match GitHub base %q", ErrTrackedPullRequestMismatch, value, pr.BaseRefName)
+	}
+	if value := strings.TrimSpace(currentBranch); value != "" && strings.TrimSpace(pr.HeadRefName) != "" && value != strings.TrimSpace(pr.HeadRefName) {
+		return nil, fmt.Errorf("%w: current branch %q does not match tracked pull request head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
+	}
+	return pr, nil
+}
+
+func trackedPullRequest(issue domain.Issue) (domain.PullRequestRef, bool) {
+	if issue.ColinMetadata == nil || issue.ColinMetadata.PullRequestNumber <= 0 {
+		return domain.PullRequestRef{}, false
+	}
+	return domain.PullRequestRef{
+		Number:  issue.ColinMetadata.PullRequestNumber,
+		URL:     strings.TrimSpace(issue.ColinMetadata.PullRequestURL),
+		State:   strings.TrimSpace(issue.ColinMetadata.PullRequestState),
+		HeadRef: strings.TrimSpace(issue.ColinMetadata.PullRequestHeadRef),
+		BaseRef: strings.TrimSpace(issue.ColinMetadata.PullRequestBaseRef),
+	}, true
+}
+
+func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name string) []domain.PullRequestRef {
+	if strings.EqualFold(owner, "local") {
+		return prs
+	}
+
+	filtered := make([]domain.PullRequestRef, 0, len(prs))
+	for _, pr := range prs {
+		prOwner, prName, number, ok := parseGitHubPullRequestURL(pr.URL)
+		if !ok || pr.Number <= 0 || pr.Number != number {
+			continue
+		}
+		if !strings.EqualFold(prOwner, owner) || !strings.EqualFold(prName, name) {
+			continue
+		}
+		filtered = append(filtered, pr)
+	}
+	return filtered
+}
+
+func parseGitHubPullRequestURL(rawURL string) (string, string, int, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", "", 0, false
+	}
+	if !strings.EqualFold(parsed.Host, "github.com") {
+		return "", "", 0, false
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || !strings.EqualFold(parts[2], "pull") {
+		return "", "", 0, false
+	}
+	number, err := strconv.Atoi(parts[3])
+	if err != nil || number <= 0 {
+		return "", "", 0, false
+	}
+	return parts[0], parts[1], number, true
+}
+
+func duplicatePullRequestsError(prs []domain.PullRequestRef) error {
+	refs := make([]string, 0, len(prs))
+	for _, pr := range prs {
+		refs = append(refs, fmt.Sprintf("#%d", pr.Number))
+	}
+	return fmt.Errorf("%w: multiple pull requests linked to this issue: %s", ErrDuplicatePullRequests, strings.Join(refs, ", "))
 }
 
 func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, issue domain.Issue, branch string) (string, error) {

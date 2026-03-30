@@ -133,6 +133,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	}
 
 	if event.result.Status == "blocked" {
+		event.result.Issue = o.clearLoopState(ctx, event.result.Issue)
 		if strings.TrimSpace(event.result.Summary) != "" {
 			commentID := o.postReply(ctx, entry, event.result.Summary)
 			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
@@ -150,6 +151,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	}
 
 	if event.result.Status == "succeeded" {
+		event.result.Issue = o.clearLoopState(ctx, event.result.Issue)
 		if shouldPostSummaryForSucceededRun(o, event.result) {
 			commentID := o.postReply(ctx, entry, event.result.Summary)
 			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
@@ -221,6 +223,25 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		State:      event.result.Issue.State,
 		Message:    errorString(event.result.Err),
 	})
+	issue, failure := buildLoopFailure(entry, event.result)
+	issue = o.recordLoopFailure(ctx, issue, failure)
+	event.result.Issue = issue
+	if issue.ColinMetadata != nil && issue.ColinMetadata.LoopFailureCount >= loopFailureThreshold {
+		if pausedIssue, paused := o.pauseIssueForLoop(ctx, issue, failure); paused {
+			commentID := o.postReply(ctx, entry, buildLoopPausedSummary(failure))
+			event.result.Issue = o.persistSummaryCommentMetadata(ctx, pausedIssue, commentID)
+			delete(o.claimed, event.issueID)
+			o.logger.Warn(
+				"automation paused after repeated identical failures",
+				"issue_id", event.issueID,
+				"issue_identifier", entry.identifier,
+				"run_type", failure.runType,
+				"state", failure.state,
+				"reason", failure.reason,
+			)
+			return
+		}
+	}
 	o.scheduleRetry(
 		event.issueID,
 		entry.identifier,
@@ -328,8 +349,9 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		delete(o.claimed, issueID)
 		return
 	}
+	prepared = o.clearPausedLoopMetadataIfUnpaused(ctx, prepared)
+	delete(o.claimed, issueID)
 	if !o.shouldDispatch(prepared) {
-		delete(o.claimed, issueID)
 		return
 	}
 	o.logger.Info("retry dispatching issue", "issue_id", issueID, "issue_identifier", issue.Identifier, "attempt", state.entry.Attempt)

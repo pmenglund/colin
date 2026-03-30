@@ -58,12 +58,15 @@ go run . /path/to/WORKFLOW.md
 - `WORKFLOW.md` also carries the Codex prompt template and can optionally define `repo.pr_template` for the PR body Colin opens in GitHub. If that field is omitted, Colin uses its built-in default PR template.
 - Each issue gets its own workspace directory. Colin preserves that workspace across retries and continuation runs.
 - Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
+- On startup, Colin ensures the Linear issue label `paused` exists and never dispatches issues carrying that label.
 - During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
 - When `agent.create_exec_plan` is enabled, Colin also creates or reuses a dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
+- Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round, and reports review-sync status back to Linear while it waits.
+- If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
 
@@ -91,6 +94,7 @@ When an issue moves from `Review` back to `Todo`, Colin reads the latest `Review
 Additional `Todo` rule:
 
 - Colin will not dispatch a `Todo` issue if any blocker is not in a terminal state.
+- Colin will not dispatch any issue carrying the `paused` label.
 - If the issue is returning from `Review`, Colin first polls the linked GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
 - Once unresolved GitHub review threads are visible, Colin injects them into the next coding prompt alongside the human Linear review feedback from that same review cycle.
 
@@ -199,6 +203,11 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Pass `--verbose` to restore the structured service log stream for startup, dispatches, retries, Codex session progress, and handoff automation.
 - Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
 - Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
+- Colin creates the Linear issue label `paused` at startup if it does not already exist.
+- The `paused` label is a hard stop for Colin. Remove it when you want Colin to resume work on that issue.
+- Colin automatically applies `paused` after 3 consecutive identical failures for the same run type and issue state, including repeated `review_publish` failures such as PR creation loops.
+- Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
+- If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
 - When `server.public_url` is unset, Colin uses the loopback UI address for Linear metadata links. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
 - The dashboard shows current running issues, queued retries, token totals, and the latest rate-limit snapshot. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.

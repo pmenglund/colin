@@ -161,6 +161,17 @@ func TestUpsertIssueMetadata(t *testing.T) {
 		LastRunType:            "coding",
 		LastOutcome:            "needs_spec",
 		LastSummaryCommentID:   "comment-1",
+		PullRequestNumber:      11,
+		PullRequestURL:         "https://github.com/pmenglund/colin/pull/11",
+		PullRequestState:       "OPEN",
+		PullRequestHeadRef:     "pmenglund/colin-94",
+		PullRequestBaseRef:     "main",
+		LoopFailureFingerprint: "review_publish\nReview\nno commits",
+		LoopFailureCount:       2,
+		PausedAt:               &now,
+		PausedRunType:          "review_publish",
+		PausedState:            "Review",
+		PausedReason:           "no commits between main and branch",
 		UpdatedAt:              &now,
 	})
 	if err != nil {
@@ -178,6 +189,33 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotMetadata["review_publish_directive"] != "skip" {
 		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
 	}
+	if gotMetadata["pull_request_number"] != float64(11) && gotMetadata["pull_request_number"] != 11 {
+		t.Fatalf("pull_request_number = %v, want 11", gotMetadata["pull_request_number"])
+	}
+	if gotMetadata["pull_request_url"] != "https://github.com/pmenglund/colin/pull/11" {
+		t.Fatalf("pull_request_url = %v, want GitHub PR URL", gotMetadata["pull_request_url"])
+	}
+	if gotMetadata["pull_request_head_ref"] != "pmenglund/colin-94" {
+		t.Fatalf("pull_request_head_ref = %v, want pmenglund/colin-94", gotMetadata["pull_request_head_ref"])
+	}
+	if gotMetadata["pull_request_base_ref"] != "main" {
+		t.Fatalf("pull_request_base_ref = %v, want main", gotMetadata["pull_request_base_ref"])
+	}
+	if gotMetadata["loop_failure_fingerprint"] != "review_publish\nReview\nno commits" {
+		t.Fatalf("loop_failure_fingerprint = %v", gotMetadata["loop_failure_fingerprint"])
+	}
+	if gotMetadata["loop_failure_count"] != float64(2) && gotMetadata["loop_failure_count"] != 2 {
+		t.Fatalf("loop_failure_count = %v", gotMetadata["loop_failure_count"])
+	}
+	if gotMetadata["paused_run_type"] != "review_publish" {
+		t.Fatalf("paused_run_type = %v", gotMetadata["paused_run_type"])
+	}
+	if gotMetadata["paused_state"] != "Review" {
+		t.Fatalf("paused_state = %v", gotMetadata["paused_state"])
+	}
+	if gotMetadata["paused_reason"] != "no commits between main and branch" {
+		t.Fatalf("paused_reason = %v", gotMetadata["paused_reason"])
+	}
 	if gotMetadata["actual_branch_name"] != "colin-94" {
 		t.Fatalf("actual_branch_name = %v, want colin-94", gotMetadata["actual_branch_name"])
 	}
@@ -186,6 +224,144 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.ActualBranchName != "colin-94" {
 		t.Fatalf("metadata.ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
+	}
+	if metadata.PullRequestNumber != 11 {
+		t.Fatalf("metadata.PullRequestNumber = %d, want 11", metadata.PullRequestNumber)
+	}
+	if metadata.PullRequestHeadRef != "pmenglund/colin-94" {
+		t.Fatalf("metadata.PullRequestHeadRef = %q, want %q", metadata.PullRequestHeadRef, "pmenglund/colin-94")
+	}
+	if metadata.LoopFailureCount != 2 {
+		t.Fatalf("metadata.LoopFailureCount = %d, want 2", metadata.LoopFailureCount)
+	}
+}
+
+func TestEnsureIssueLabelCreatesMissingLabel(t *testing.T) {
+	t.Parallel()
+
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		queries = append(queries, request.Query)
+
+		switch {
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": []map[string]any{},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation CreateIssueLabel"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabelCreate": map[string]any{
+						"success": true,
+						"issueLabel": map[string]any{
+							"id":   "label-1",
+							"name": "paused",
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
+	}
+
+	if err := client.EnsureIssueLabel(context.Background(), domain.PausedIssueLabel); err != nil {
+		t.Fatalf("EnsureIssueLabel() error = %v", err)
+	}
+	if got := client.labelIDs[domain.PausedIssueLabel]; got != "label-1" {
+		t.Fatalf("cached label id = %q, want %q", got, "label-1")
+	}
+	if len(queries) != 2 {
+		t.Fatalf("query count = %d, want 2", len(queries))
+	}
+}
+
+func TestAddIssueLabelUsesExistingLabelID(t *testing.T) {
+	t.Parallel()
+
+	var gotIssueID string
+	var gotLabelID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":   "label-1",
+								"name": "paused",
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation AddIssueLabel"):
+			gotIssueID, _ = request.Variables["id"].(string)
+			gotLabelID, _ = request.Variables["labelId"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueAddLabel": map[string]any{
+						"success": true,
+						"issue": map[string]any{
+							"id": gotIssueID,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
+	}
+
+	if err := client.AddIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
+		t.Fatalf("AddIssueLabel() error = %v", err)
+	}
+	if gotIssueID != "issue-1" {
+		t.Fatalf("gotIssueID = %q, want %q", gotIssueID, "issue-1")
+	}
+	if gotLabelID != "label-1" {
+		t.Fatalf("gotLabelID = %q, want %q", gotLabelID, "label-1")
+	}
+	if got := client.labelIDs[domain.PausedIssueLabel]; got != "label-1" {
+		t.Fatalf("cached label id = %q, want %q", got, "label-1")
 	}
 }
 
@@ -733,6 +909,12 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 											"last_run_type":            "coding",
 											"last_outcome":             "needs_spec",
 											"last_summary_comment_id":  "comment-2",
+											"loop_failure_fingerprint": "review_publish\nReview\nno commits",
+											"loop_failure_count":       3,
+											"paused_at":                base.Add(3 * time.Minute).Format(time.RFC3339),
+											"paused_run_type":          "review_publish",
+											"paused_state":             "Review",
+											"paused_reason":            "no commits between main and branch",
 											"updated_at":               base.Add(2 * time.Minute).Format(time.RFC3339),
 											"codex_output": []map[string]any{
 												{
@@ -801,6 +983,84 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.ActualBranchName != "colin-94" {
 		t.Fatalf("ActualBranchName = %q, want %q", issues[0].ColinMetadata.ActualBranchName, "colin-94")
+	}
+	if issues[0].ColinMetadata.LoopFailureCount != 3 {
+		t.Fatalf("LoopFailureCount = %d, want 3", issues[0].ColinMetadata.LoopFailureCount)
+	}
+	if issues[0].ColinMetadata.PausedRunType != "review_publish" {
+		t.Fatalf("PausedRunType = %q, want review_publish", issues[0].ColinMetadata.PausedRunType)
+	}
+}
+
+func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-112",
+							"title":      "Prevent duplicate PRs",
+							"state":      map[string]any{"name": "Review"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":    "attachment-1",
+										"title": "PR 11",
+										"url":   "https://github.com/pmenglund/colin/pull/11",
+									},
+									{
+										"id":    "attachment-2",
+										"title": "PR 14",
+										"url":   "https://github.com/pmenglund/colin/pull/14",
+									},
+									{
+										"id":    "attachment-3",
+										"title": "Metadata",
+										"url":   "https://colin.example.test/root/linear/issues/issue-1/metadata",
+									},
+								},
+							},
+							"comments": map[string]any{"nodes": []map[string]any{}},
+							"history":  map[string]any{"nodes": []map[string]any{}},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"Review"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if len(issues[0].AttachedPullRequests) != 2 {
+		t.Fatalf("AttachedPullRequests length = %d, want 2", len(issues[0].AttachedPullRequests))
+	}
+	if issues[0].AttachedPullRequests[0].Number != 11 {
+		t.Fatalf("AttachedPullRequests[0].Number = %d, want 11", issues[0].AttachedPullRequests[0].Number)
+	}
+	if issues[0].AttachedPullRequests[1].Number != 14 {
+		t.Fatalf("AttachedPullRequests[1].Number = %d, want 14", issues[0].AttachedPullRequests[1].Number)
 	}
 }
 

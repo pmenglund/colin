@@ -18,6 +18,9 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	if o.isTerminal(issue.State) || !o.isDispatchable(issue.State) {
 		return false
 	}
+	if hasIssueLabel(issue, domain.PausedIssueLabel) {
+		return false
+	}
 	if _, ok := o.running[issue.ID]; ok {
 		return false
 	}

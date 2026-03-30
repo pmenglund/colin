@@ -368,6 +368,41 @@ func TestPersistActualBranchNameValueBestEffortPreservesExistingMetadata(t *test
 	}
 }
 
+func TestCodexMetadataWithResultStoresPullRequestIdentity(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{
+		ColinMetadata: &domain.ColinMetadata{
+			ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+			LastSummaryCommentID:   "comment-1",
+		},
+	}
+
+	metadata := codexMetadataWithResult(issue, RunTypeReviewPublish, metadataOutcomeReady, "", repoops.Result{
+		PRNumber:  14,
+		PRURL:     "https://github.com/pmenglund/colin/pull/14",
+		PRState:   "OPEN",
+		PRHeadRef: "pmenglund/colin-112",
+		PRBaseRef: "main",
+	})
+
+	if metadata.PullRequestNumber != 14 {
+		t.Fatalf("PullRequestNumber = %d, want 14", metadata.PullRequestNumber)
+	}
+	if metadata.PullRequestURL != "https://github.com/pmenglund/colin/pull/14" {
+		t.Fatalf("PullRequestURL = %q, want GitHub PR URL", metadata.PullRequestURL)
+	}
+	if metadata.PullRequestHeadRef != "pmenglund/colin-112" {
+		t.Fatalf("PullRequestHeadRef = %q, want %q", metadata.PullRequestHeadRef, "pmenglund/colin-112")
+	}
+	if metadata.PullRequestBaseRef != "main" {
+		t.Fatalf("PullRequestBaseRef = %q, want main", metadata.PullRequestBaseRef)
+	}
+	if metadata.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
+		t.Fatalf("ReviewPublishDirective = %q, want %q", metadata.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
+	}
+}
+
 func TestHandleMergeFailureReturnsIssueToReview(t *testing.T) {
 	t.Parallel()
 
@@ -689,6 +724,14 @@ func (s *stubTracker) UpdateIssueState(_ context.Context, issueID string, stateN
 	s.updatedIssueID = issueID
 	s.updatedState = stateName
 	s.updatedStates = append(s.updatedStates, stateName)
+	return nil
+}
+
+func (s *stubTracker) EnsureIssueLabel(context.Context, string) error {
+	return nil
+}
+
+func (s *stubTracker) AddIssueLabel(context.Context, string, string) error {
 	return nil
 }
 

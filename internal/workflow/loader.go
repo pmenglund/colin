@@ -225,9 +225,11 @@ func pullRequestToMap(value *domain.PullRequestRef) any {
 		return nil
 	}
 	return map[string]any{
-		"number": value.Number,
-		"url":    value.URL,
-		"state":  value.State,
+		"number":   value.Number,
+		"url":      value.URL,
+		"state":    value.State,
+		"head_ref": value.HeadRef,
+		"base_ref": value.BaseRef,
 	}
 }
 
@@ -242,6 +244,11 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"last_run_type":            value.LastRunType,
 		"last_outcome":             value.LastOutcome,
 		"last_summary_comment_id":  value.LastSummaryCommentID,
+		"pull_request_number":      value.PullRequestNumber,
+		"pull_request_url":         value.PullRequestURL,
+		"pull_request_state":       value.PullRequestState,
+		"pull_request_head_ref":    value.PullRequestHeadRef,
+		"pull_request_base_ref":    value.PullRequestBaseRef,
 		"updated_at":               derefTime(value.UpdatedAt),
 	}
 }

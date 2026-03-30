@@ -65,6 +65,9 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.startHTTPServer(ctx); err != nil {
 		return err
 	}
+	if err := s.ensurePausedLabel(ctx); err != nil {
+		return err
+	}
 	if err := s.orch.StartupTerminalCleanup(ctx); err != nil {
 		s.logger.Warn("startup cleanup skipped", "error", err)
 	}
@@ -246,6 +249,17 @@ func (s *Service) setRuntime(runtime orchestrator.Runtime) {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func (s *Service) ensurePausedLabel(ctx context.Context) error {
+	runtime := s.currentRuntime()
+	if runtime.Tracker == nil {
+		return nil
+	}
+	if err := runtime.Tracker.EnsureIssueLabel(ctx, domain.PausedIssueLabel); err != nil {
+		return fmt.Errorf("ensure %s label: %w", domain.PausedIssueLabel, err)
+	}
+	return nil
 }
 
 // NewDefaultLogger returns the repo-default structured logger.

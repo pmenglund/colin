@@ -48,6 +48,8 @@ type Client struct {
 	publicURL string
 	rateMu    sync.RWMutex
 	rateInfo  map[string]any
+	labelMu   sync.RWMutex
+	labelIDs  map[string]string
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -61,6 +63,7 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		project:   cfg.Tracker.ProjectSlug,
 		active:    slices.Clone(config.CandidateStates(cfg)),
 		publicURL: metadataBaseURL(cfg.Server),
+		labelIDs:  map[string]string{},
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -214,6 +217,43 @@ mutation UpdateIssueState($id: String!, $stateId: String!) {
 		return err
 	}
 	success, _ := nestedBool(resp, "data", "issueUpdate", "success")
+	if !success {
+		return ErrUnknownPayload
+	}
+	return nil
+}
+
+// EnsureIssueLabel makes sure the named Linear issue label exists.
+func (c *Client) EnsureIssueLabel(ctx context.Context, labelName string) error {
+	_, err := c.ensureIssueLabelID(ctx, labelName)
+	return err
+}
+
+// AddIssueLabel applies the named Linear issue label to the supplied issue.
+func (c *Client) AddIssueLabel(ctx context.Context, issueID string, labelName string) error {
+	labelID, err := c.ensureIssueLabelID(ctx, labelName)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+mutation AddIssueLabel($id: String!, $labelId: String!) {
+  issueAddLabel(id: $id, labelId: $labelId) {
+    success
+    issue {
+      id
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"id":      issueID,
+		"labelId": labelID,
+	})
+	if err != nil {
+		return err
+	}
+	success, _ := nestedBool(resp, "data", "issueAddLabel", "success")
 	if !success {
 		return ErrUnknownPayload
 	}
@@ -669,6 +709,7 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 	}
 	issue.ColinMetadata = extractColinMetadata(node)
 	issue.ExecPlan = extractExecPlan(node)
+	issue.AttachedPullRequests = extractAttachedPullRequests(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -920,6 +961,25 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadata.LastRunType, _ = stringValue(metadataMap["last_run_type"])
 	metadata.LastOutcome, _ = stringValue(metadataMap["last_outcome"])
 	metadata.LastSummaryCommentID, _ = stringValue(metadataMap["last_summary_comment_id"])
+	if value, ok := intValue(metadataMap["pull_request_number"]); ok {
+		metadata.PullRequestNumber = value
+	}
+	metadata.PullRequestURL, _ = stringValue(metadataMap["pull_request_url"])
+	metadata.PullRequestState, _ = stringValue(metadataMap["pull_request_state"])
+	metadata.PullRequestHeadRef, _ = stringValue(metadataMap["pull_request_head_ref"])
+	metadata.PullRequestBaseRef, _ = stringValue(metadataMap["pull_request_base_ref"])
+	metadata.LoopFailureFingerprint, _ = stringValue(metadataMap["loop_failure_fingerprint"])
+	if value, ok := intValue(metadataMap["loop_failure_count"]); ok {
+		metadata.LoopFailureCount = value
+	}
+	metadata.PausedRunType, _ = stringValue(metadataMap["paused_run_type"])
+	metadata.PausedState, _ = stringValue(metadataMap["paused_state"])
+	metadata.PausedReason, _ = stringValue(metadataMap["paused_reason"])
+	if value, _ := stringValue(metadataMap["paused_at"]); strings.TrimSpace(value) != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			metadata.PausedAt = &parsed
+		}
+	}
 	if value, _ := stringValue(metadataMap["updated_at"]); strings.TrimSpace(value) != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 			metadata.UpdatedAt = &parsed
@@ -979,6 +1039,19 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		"last_run_type":            strings.TrimSpace(metadata.LastRunType),
 		"last_outcome":             strings.TrimSpace(metadata.LastOutcome),
 		"last_summary_comment_id":  strings.TrimSpace(metadata.LastSummaryCommentID),
+		"pull_request_number":      metadata.PullRequestNumber,
+		"pull_request_url":         strings.TrimSpace(metadata.PullRequestURL),
+		"pull_request_state":       strings.TrimSpace(metadata.PullRequestState),
+		"pull_request_head_ref":    strings.TrimSpace(metadata.PullRequestHeadRef),
+		"pull_request_base_ref":    strings.TrimSpace(metadata.PullRequestBaseRef),
+		"loop_failure_fingerprint": strings.TrimSpace(metadata.LoopFailureFingerprint),
+		"loop_failure_count":       metadata.LoopFailureCount,
+		"paused_run_type":          strings.TrimSpace(metadata.PausedRunType),
+		"paused_state":             strings.TrimSpace(metadata.PausedState),
+		"paused_reason":            strings.TrimSpace(metadata.PausedReason),
+	}
+	if metadata.PausedAt != nil {
+		value["paused_at"] = metadata.PausedAt.UTC().Format(time.RFC3339)
 	}
 	if metadata.UpdatedAt != nil {
 		value["updated_at"] = metadata.UpdatedAt.UTC().Format(time.RFC3339)
@@ -1024,6 +1097,53 @@ func isColinMetadataURL(value string) bool {
 	return ok
 }
 
+func extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
+	attachments, ok := nestedSlice(node, "attachments", "nodes")
+	if !ok {
+		return nil
+	}
+
+	seen := make(map[int]struct{}, len(attachments))
+	prs := make([]domain.PullRequestRef, 0, len(attachments))
+	for _, attachment := range attachments {
+		urlValue, _ := stringValue(attachment["url"])
+		pr, ok := parseGitHubPullRequestAttachment(urlValue)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[pr.Number]; exists {
+			continue
+		}
+		seen[pr.Number] = struct{}{}
+		prs = append(prs, pr)
+	}
+	return prs
+}
+
+func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return domain.PullRequestRef{}, false
+	}
+	if !strings.EqualFold(parsed.Host, "github.com") {
+		return domain.PullRequestRef{}, false
+	}
+
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || !strings.EqualFold(parts[2], "pull") {
+		return domain.PullRequestRef{}, false
+	}
+	number, err := strconv.Atoi(parts[3])
+	if err != nil || number <= 0 {
+		return domain.PullRequestRef{}, false
+	}
+
+	return domain.PullRequestRef{
+		Number: number,
+		URL:    strings.TrimSpace(rawURL),
+	}, true
+}
+
 func metadataBaseURL(cfg domain.ServerConfig) string {
 	if value := strings.TrimSpace(cfg.PublicURL); value != "" {
 		return value
@@ -1041,6 +1161,100 @@ func colinExecPlanAttachmentURL(issueID string) string {
 func isColinExecPlanURL(value string) bool {
 	value = strings.TrimSpace(value)
 	return strings.HasPrefix(value, colinMetadataURLPrefix) && strings.HasSuffix(value, colinExecPlanURLSuffix)
+}
+
+func (c *Client) ensureIssueLabelID(ctx context.Context, labelName string) (string, error) {
+	name := strings.TrimSpace(labelName)
+	if name == "" {
+		return "", errors.New("missing issue label name")
+	}
+	cacheKey := strings.ToLower(name)
+
+	c.labelMu.RLock()
+	if labelID := strings.TrimSpace(c.labelIDs[cacheKey]); labelID != "" {
+		c.labelMu.RUnlock()
+		return labelID, nil
+	}
+	c.labelMu.RUnlock()
+
+	labelID, err := c.findIssueLabelID(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(labelID) == "" {
+		labelID, err = c.createIssueLabel(ctx, name)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	c.labelMu.Lock()
+	c.labelIDs[cacheKey] = labelID
+	c.labelMu.Unlock()
+	return labelID, nil
+}
+
+func (c *Client) findIssueLabelID(ctx context.Context, labelName string) (string, error) {
+	const query = `
+query IssueLabelsByName($name: String!) {
+  issueLabels(first: 10, filter: { name: { eq: $name } }) {
+    nodes {
+      id
+      name
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"name": labelName})
+	if err != nil {
+		return "", err
+	}
+	nodes, ok := nestedSlice(resp, "data", "issueLabels", "nodes")
+	if !ok {
+		return "", ErrUnknownPayload
+	}
+	for _, node := range nodes {
+		name, _ := stringValue(node["name"])
+		if !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(labelName)) {
+			continue
+		}
+		labelID, _ := stringValue(node["id"])
+		if strings.TrimSpace(labelID) != "" {
+			return labelID, nil
+		}
+	}
+	return "", nil
+}
+
+func (c *Client) createIssueLabel(ctx context.Context, labelName string) (string, error) {
+	const query = `
+mutation CreateIssueLabel($input: IssueLabelCreateInput!) {
+  issueLabelCreate(input: $input) {
+    success
+    issueLabel {
+      id
+      name
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"input": map[string]any{
+			"name": labelName,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	success, _ := nestedBool(resp, "data", "issueLabelCreate", "success")
+	if !success {
+		return "", ErrUnknownPayload
+	}
+	labelID, _ := nestedString(resp, "data", "issueLabelCreate", "issueLabel", "id")
+	if strings.TrimSpace(labelID) == "" {
+		return "", ErrUnknownPayload
+	}
+	return labelID, nil
 }
 
 func derefStringValue(value *string) string {

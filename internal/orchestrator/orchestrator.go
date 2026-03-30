@@ -119,6 +119,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if !ready {
 			continue
 		}
+		issue = o.clearPausedLoopMetadataIfUnpaused(ctx, issue)
 		if !o.shouldDispatch(issue) {
 			continue
 		}

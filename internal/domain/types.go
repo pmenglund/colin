@@ -4,29 +4,31 @@ import "time"
 
 // Issue is the normalized tracker record consumed by orchestration, prompting, and logging.
 type Issue struct {
-	ID             string
-	Identifier     string
-	Title          string
-	Description    *string
-	Priority       *int
-	State          string
-	BranchName     *string
-	URL            *string
-	Labels         []string
-	BlockedBy      []BlockerRef
-	ColinMetadata  *ColinMetadata
-	ExecPlan       *ExecPlan
-	ReviewCycle    *ReviewCycle
-	ReviewFeedback []ReviewFeedback
-	ReviewThreads  []GitHubReviewThread
-	PullRequest    *PullRequestRef
-	CreatedAt      *time.Time
-	UpdatedAt      *time.Time
+	ID                   string
+	Identifier           string
+	Title                string
+	Description          *string
+	Priority             *int
+	State                string
+	BranchName           *string
+	URL                  *string
+	Labels               []string
+	BlockedBy            []BlockerRef
+	ColinMetadata        *ColinMetadata
+	ExecPlan             *ExecPlan
+	ReviewCycle          *ReviewCycle
+	ReviewFeedback       []ReviewFeedback
+	ReviewThreads        []GitHubReviewThread
+	AttachedPullRequests []PullRequestRef
+	PullRequest          *PullRequestRef
+	CreatedAt            *time.Time
+	UpdatedAt            *time.Time
 }
 
 const (
 	ReviewPublishDirectivePublish = "publish"
 	ReviewPublishDirectiveSkip    = "skip"
+	PausedIssueLabel              = "paused"
 )
 
 // ColinMetadata is persisted on the Linear issue to track Colin-specific workflow state.
@@ -37,6 +39,17 @@ type ColinMetadata struct {
 	LastRunType            string
 	LastOutcome            string
 	LastSummaryCommentID   string
+	PullRequestNumber      int
+	PullRequestURL         string
+	PullRequestState       string
+	PullRequestHeadRef     string
+	PullRequestBaseRef     string
+	LoopFailureFingerprint string
+	LoopFailureCount       int
+	PausedAt               *time.Time
+	PausedRunType          string
+	PausedState            string
+	PausedReason           string
 	UpdatedAt              *time.Time
 	CodexOutput            []OutputLog
 }
@@ -70,9 +83,11 @@ type ReviewCycle struct {
 
 // PullRequestRef is the minimal PR metadata Colin uses in prompts and comments.
 type PullRequestRef struct {
-	Number int
-	URL    string
-	State  string
+	Number  int
+	URL     string
+	State   string
+	HeadRef string
+	BaseRef string
 }
 
 // GitHubReviewThread is one unresolved GitHub PR review thread.

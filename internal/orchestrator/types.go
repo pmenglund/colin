@@ -20,7 +20,12 @@ type Runtime struct {
 	Tracker   tracker.Client
 	Repo      *repoops.Manager
 	Workspace *workspace.Manager
-	Runner    *codex.Runner
+	Runner    Runner
+}
+
+// Runner describes the automation runner used by the orchestrator.
+type Runner interface {
+	Run(ctx context.Context, issue domain.Issue, attempt *int, onEvent func(codex.Event)) codex.Result
 }
 
 // Orchestrator owns all mutable scheduling state for issue dispatch, reconciliation, and retries.
