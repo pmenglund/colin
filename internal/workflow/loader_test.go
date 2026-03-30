@@ -82,3 +82,21 @@ func TestRenderTemplateIncludesArbitraryPayload(t *testing.T) {
 		t.Fatalf("rendered = %q, want %q", rendered, want)
 	}
 }
+
+func TestRenderPromptIncludesExecPlan(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{PromptTemplate: `{{.issue.exec_plan.body}}`}
+	prompt, err := RenderPrompt(def, domain.Issue{
+		Identifier: "ABC-123",
+		ExecPlan: &domain.ExecPlan{
+			Body: "Plan body",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RenderPrompt() error = %v", err)
+	}
+	if prompt != "Plan body" {
+		t.Fatalf("prompt = %q, want %q", prompt, "Plan body")
+	}
+}

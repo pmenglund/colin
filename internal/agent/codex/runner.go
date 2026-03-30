@@ -10,6 +10,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/execplan"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/tracker"
 	"github.com/pmenglund/colin/internal/workflow"
@@ -248,11 +249,19 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	)
 	defer client.stop()
 
+	current, err = r.ensureExecPlan(ctx, client, ws.Path, current)
+	if err != nil {
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+	}
+
 	maxTurnsReached := false
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
 		if err != nil {
 			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+		}
+		if turn == 1 && r.cfg.Agent.CreateExecPlan {
+			prompt = injectExecPlanPrompt(prompt, current.ExecPlan)
 		}
 		if turn > 1 {
 			prompt = fmt.Sprintf(
@@ -614,6 +623,9 @@ func mergeIssueContext(previous, refreshed domain.Issue) domain.Issue {
 	if refreshed.ColinMetadata == nil {
 		refreshed.ColinMetadata = previous.ColinMetadata
 	}
+	if refreshed.ExecPlan == nil {
+		refreshed.ExecPlan = previous.ExecPlan
+	}
 	if refreshed.PullRequest == nil {
 		refreshed.PullRequest = previous.PullRequest
 	}
@@ -958,6 +970,113 @@ func reviewPublishDirective(issue domain.Issue) string {
 	return strings.TrimSpace(issue.ColinMetadata.ReviewPublishDirective)
 }
 
+func (r *Runner) ensureExecPlan(ctx context.Context, client *appServerClient, workspacePath string, issue domain.Issue) (domain.Issue, error) {
+	if !r.cfg.Agent.CreateExecPlan || strings.TrimSpace(execPlanBody(issue.ExecPlan)) != "" {
+		return issue, nil
+	}
+
+	prompt := buildExecPlanPrompt(issue)
+	r.logger.Info(
+		"generating issue exec plan",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+	)
+	if err := client.runTurn(ctx, workspacePath, issue, prompt); err != nil {
+		return issue, fmt.Errorf("generate exec plan: %w", err)
+	}
+
+	body := normalizeExecPlanBody(client.lastOutput())
+	if body == "" {
+		return issue, errors.New("generate exec plan: empty response")
+	}
+
+	now := time.Now().UTC()
+	return r.persistIssueExecPlan(ctx, issue, domain.ExecPlan{
+		Body:      body,
+		UpdatedAt: &now,
+	})
+}
+
+func buildExecPlanPrompt(issue domain.Issue) string {
+	var b strings.Builder
+	b.WriteString("Create an ExecPlan for the Linear issue below.\n\n")
+	b.WriteString("Do not modify repository files or implement the change yet.\n")
+	b.WriteString("Return only the final ExecPlan markdown document as file contents, without surrounding commentary and without wrapping it in an outer triple-backtick fence.\n\n")
+	b.WriteString("Issue context:\n")
+	b.WriteString(fmt.Sprintf("- Identifier: %s\n", issue.Identifier))
+	b.WriteString(fmt.Sprintf("- Title: %s\n", issue.Title))
+	b.WriteString(fmt.Sprintf("- State: %s\n", issue.State))
+	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
+		b.WriteString(fmt.Sprintf("- URL: %s\n", strings.TrimSpace(*issue.URL)))
+	}
+	if len(issue.Labels) > 0 {
+		b.WriteString("- Labels:\n")
+		for _, label := range issue.Labels {
+			b.WriteString(fmt.Sprintf("  - %s\n", label))
+		}
+	}
+	if issue.Description != nil && strings.TrimSpace(*issue.Description) != "" {
+		b.WriteString("\nIssue description:\n\n")
+		b.WriteString(strings.TrimSpace(*issue.Description))
+		b.WriteString("\n")
+	}
+	if len(issue.ReviewFeedback) > 0 {
+		b.WriteString("\nReview feedback:\n")
+		for _, item := range issue.ReviewFeedback {
+			b.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(item.Body)))
+		}
+	}
+	if len(issue.ReviewThreads) > 0 {
+		b.WriteString("\nGitHub review threads:\n")
+		for _, thread := range issue.ReviewThreads {
+			lineText := ""
+			if thread.Line != nil {
+				lineText = fmt.Sprintf(":%d", *thread.Line)
+			}
+			b.WriteString(fmt.Sprintf("- %s%s by %s: %s\n", thread.Path, lineText, thread.Author, strings.TrimSpace(thread.Body)))
+		}
+	}
+	b.WriteString("\nExecPlan authoring guide:\n\n")
+	b.WriteString(execplan.Template())
+	return strings.TrimSpace(b.String())
+}
+
+func normalizeExecPlanBody(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	lines := strings.Split(value, "\n")
+	if len(lines) >= 2 {
+		first := strings.TrimSpace(lines[0])
+		last := strings.TrimSpace(lines[len(lines)-1])
+		if strings.HasPrefix(first, "```") && last == "```" {
+			value = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func execPlanBody(plan *domain.ExecPlan) string {
+	if plan == nil {
+		return ""
+	}
+	return strings.TrimSpace(plan.Body)
+}
+
+func injectExecPlanPrompt(prompt string, plan *domain.ExecPlan) string {
+	body := execPlanBody(plan)
+	if body == "" {
+		return prompt
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return "ExecPlan:\n\n" + body
+	}
+	return strings.TrimSpace(prompt) + "\n\nExecPlan:\n\n" + body
+}
+
 func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, metadata domain.ColinMetadata) (domain.Issue, error) {
 	if r.tracker == nil {
 		issue.ColinMetadata = &metadata
@@ -968,6 +1087,19 @@ func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, m
 		return issue, fmt.Errorf("upsert issue metadata: %w", err)
 	}
 	issue.ColinMetadata = &persisted
+	return issue, nil
+}
+
+func (r *Runner) persistIssueExecPlan(ctx context.Context, issue domain.Issue, plan domain.ExecPlan) (domain.Issue, error) {
+	if r.tracker == nil {
+		issue.ExecPlan = &plan
+		return issue, nil
+	}
+	persisted, err := r.tracker.UpsertIssueExecPlan(ctx, issue.ID, plan)
+	if err != nil {
+		return issue, fmt.Errorf("upsert issue exec plan: %w", err)
+	}
+	issue.ExecPlan = &persisted
 	return issue, nil
 }
 

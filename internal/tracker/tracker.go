@@ -17,5 +17,6 @@ type Client interface {
 	CreateIssueComment(ctx context.Context, issueID string, body string) (string, error)
 	CreateCommentReply(ctx context.Context, issueID string, parentCommentID string, body string) (string, error)
 	UpsertIssueMetadata(ctx context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error)
+	UpsertIssueExecPlan(ctx context.Context, issueID string, plan domain.ExecPlan) (domain.ExecPlan, error)
 	CurrentRateLimits() map[string]any
 }

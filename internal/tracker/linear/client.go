@@ -32,6 +32,10 @@ var (
 
 const (
 	colinMetadataAttachmentTitle = "Colin metadata"
+	colinMetadataURLPrefix       = "https://colin.invalid/linear/issues/"
+	colinMetadataURLSuffix       = "/metadata"
+	colinExecPlanAttachmentTitle = "Colin ExecPlan"
+	colinExecPlanURLSuffix       = "/exec-plan"
 )
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
@@ -350,6 +354,43 @@ mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
 	return parseColinMetadataAttachment(attachment)
 }
 
+// UpsertIssueExecPlan stores the current issue ExecPlan on the Linear issue via a dedicated attachment.
+func (c *Client) UpsertIssueExecPlan(ctx context.Context, issueID string, plan domain.ExecPlan) (domain.ExecPlan, error) {
+	const query = `
+mutation UpsertIssueExecPlan($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) {
+    success
+    attachment {
+      id
+      title
+      url
+      metadata
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"input": map[string]any{
+			"issueId":  issueID,
+			"title":    colinExecPlanAttachmentTitle,
+			"url":      colinExecPlanAttachmentURL(issueID),
+			"metadata": colinExecPlanValue(plan),
+		},
+	})
+	if err != nil {
+		return domain.ExecPlan{}, err
+	}
+	success, _ := nestedBool(resp, "data", "attachmentCreate", "success")
+	if !success {
+		return domain.ExecPlan{}, ErrUnknownPayload
+	}
+	attachment, ok := nestedMap(resp, "data", "attachmentCreate", "attachment")
+	if !ok {
+		return domain.ExecPlan{}, ErrUnknownPayload
+	}
+	return parseColinExecPlanAttachment(attachment)
+}
+
 // CurrentRateLimits returns the latest Linear request budget observed from HTTP response headers.
 func (c *Client) CurrentRateLimits() map[string]any {
 	c.rateMu.RLock()
@@ -627,6 +668,7 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 		}
 	}
 	issue.ColinMetadata = extractColinMetadata(node)
+	issue.ExecPlan = extractExecPlan(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -848,6 +890,21 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	return nil
 }
 
+func extractExecPlan(node map[string]any) *domain.ExecPlan {
+	attachments, ok := nestedSlice(node, "attachments", "nodes")
+	if !ok {
+		return nil
+	}
+	for _, attachment := range attachments {
+		plan, err := parseColinExecPlanAttachment(attachment)
+		if err != nil {
+			continue
+		}
+		return &plan
+	}
+	return nil
+}
+
 func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, error) {
 	title, _ := stringValue(node["title"])
 	url, _ := stringValue(node["url"])
@@ -896,6 +953,25 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	return metadata, nil
 }
 
+func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) {
+	title, _ := stringValue(node["title"])
+	url, _ := stringValue(node["url"])
+	if strings.TrimSpace(title) != colinExecPlanAttachmentTitle || !isColinExecPlanURL(url) {
+		return domain.ExecPlan{}, errors.New("not a Colin ExecPlan attachment")
+	}
+
+	metadataMap, _ := node["metadata"].(map[string]any)
+	plan := domain.ExecPlan{}
+	plan.AttachmentID, _ = stringValue(node["id"])
+	plan.Body, _ = stringValue(metadataMap["body"])
+	if value, _ := stringValue(metadataMap["updated_at"]); strings.TrimSpace(value) != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			plan.UpdatedAt = &parsed
+		}
+	}
+	return plan, nil
+}
+
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
 		"actual_branch_name":       strings.TrimSpace(metadata.ActualBranchName),
@@ -917,6 +993,16 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 			})
 		}
 		value["codex_output"] = output
+	}
+	return value
+}
+
+func colinExecPlanValue(plan domain.ExecPlan) map[string]any {
+	value := map[string]any{
+		"body": strings.TrimSpace(plan.Body),
+	}
+	if plan.UpdatedAt != nil {
+		value["updated_at"] = plan.UpdatedAt.UTC().Format(time.RFC3339)
 	}
 	return value
 }
@@ -946,6 +1032,15 @@ func metadataBaseURL(cfg domain.ServerConfig) string {
 		return fmt.Sprintf("http://127.0.0.1:%d", *cfg.Port)
 	}
 	return "http://127.0.0.1"
+}
+
+func colinExecPlanAttachmentURL(issueID string) string {
+	return colinMetadataURLPrefix + strings.TrimSpace(issueID) + colinExecPlanURLSuffix
+}
+
+func isColinExecPlanURL(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, colinMetadataURLPrefix) && strings.HasSuffix(value, colinExecPlanURLSuffix)
 }
 
 func derefStringValue(value *string) string {

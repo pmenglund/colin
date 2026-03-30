@@ -63,6 +63,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			MaxRetryBackoff:            5 * time.Minute,
 			MaxConcurrentAgentsByState: map[string]int{},
 			MaxTurns:                   20,
+			CreateExecPlan:             false,
 		},
 		Codex: domain.CodexConfig{
 			Command:        "codex app-server",
@@ -322,6 +323,9 @@ func applyAgentConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	}
 	if value, ok := readInt(raw, "max_turns"); ok && value > 0 {
 		cfg.Agent.MaxTurns = value
+	}
+	if value, ok := readBool(raw, "create_exec_plan"); ok {
+		cfg.Agent.CreateExecPlan = value
 	}
 	if rawMap, ok := raw["max_concurrent_agents_by_state"].(map[string]any); ok {
 		cfg.Agent.MaxConcurrentAgentsByState = map[string]int{}
