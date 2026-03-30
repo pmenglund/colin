@@ -45,7 +45,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		"poll_interval", o.runtime.Config.Polling.Interval.String(),
 		"max_concurrent_agents", o.runtime.Config.Agent.MaxConcurrentAgents,
 	)
-	tick := time.NewTimer(0)
+	o.handleTick(ctx)
+
+	tick := time.NewTimer(o.runtime.Config.Polling.Interval)
 	defer tick.Stop()
 	for {
 		select {

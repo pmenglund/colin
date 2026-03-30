@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/service"
@@ -21,45 +23,110 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "setup" {
-		return runSetup(args[1:], stdout, stderr)
-	}
+	cmd := newRootCmd(stdout, stderr)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs(args)
 
-	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	port := flags.Int("port", -1, "dashboard port override; default is 8888")
-	verbose := flags.Bool("verbose", false, "print structured service logs")
-	flags.Usage = func() {
-		fmt.Fprintln(stderr, "usage: colin [--port PORT] [--verbose] [path-to-WORKFLOW.md]")
-		fmt.Fprintln(stderr, "       colin setup funnel [--json] [path-to-WORKFLOW.md]")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
+	if err := cmd.Execute(); err != nil {
+		var exitErr *commandExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.Code
+		}
+
+		var usageErr *usageError
+		if errors.As(err, &usageErr) {
+			if usageErr.Err != nil {
+				_, _ = fmt.Fprintln(stderr, usageErr.Err)
+			}
+			usageErr.Command.SetOut(stderr)
+			_ = usageErr.Command.Usage()
+			return 2
+		}
+
+		_, _ = fmt.Fprintln(stderr, err)
+		cmd.SetOut(stderr)
+		_ = cmd.Usage()
 		return 2
 	}
-	if flags.NArg() > 1 {
-		flags.Usage()
-		return 2
-	}
 
+	return 0
+}
+
+func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
+	var port int
+	var verbose bool
+
+	cmd := &cobra.Command{
+		Use:               "colin [path-to-WORKFLOW.md]",
+		Short:             "Run the Colin service",
+		SilenceErrors:     true,
+		SilenceUsage:      true,
+		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+		Args:              maximumArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(runRoot(cmd.Context(), stdout, stderr, args, port, verbose))
+		},
+	}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.SetFlagErrorFunc(wrapFlagError)
+	cmd.Flags().IntVar(&port, "port", -1, "dashboard port override; default is 8888")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "print structured service logs")
+
+	setupCmd := &cobra.Command{
+		Use:           "setup",
+		Short:         "Run setup helpers",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return &usageError{Command: cmd}
+		},
+	}
+	setupCmd.SetOut(stdout)
+	setupCmd.SetErr(stderr)
+	setupCmd.SetFlagErrorFunc(wrapFlagError)
+
+	var jsonOutput bool
+	setupFunnelCmd := &cobra.Command{
+		Use:           "funnel [path-to-WORKFLOW.md]",
+		Short:         "Inspect Funnel readiness",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(runSetupFunnel(stdout, stderr, args, jsonOutput))
+		},
+	}
+	setupFunnelCmd.SetOut(stdout)
+	setupFunnelCmd.SetErr(stderr)
+	setupFunnelCmd.SetFlagErrorFunc(wrapFlagError)
+	setupFunnelCmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
+
+	setupCmd.AddCommand(setupFunnelCmd)
+	cmd.AddCommand(setupCmd)
+
+	return cmd
+}
+
+func runRoot(ctx context.Context, stdout, stderr io.Writer, args []string, port int, verbose bool) int {
 	workflowPath := ""
-	if flags.NArg() == 1 {
-		workflowPath = flags.Arg(0)
+	if len(args) == 1 {
+		workflowPath = args[0]
 	}
 
 	var options []service.Option
-	if *port >= 0 {
-		options = append(options, service.WithServerPortOverride(*port))
+	if port >= 0 {
+		options = append(options, service.WithServerPortOverride(port))
 	}
 
-	logger := service.NewDefaultLogger(*verbose)
+	logger := service.NewDefaultLogger(verbose)
 	svc, err := service.New(logger, workflowPath, options...)
 	if err != nil {
 		logger.Error("startup failed", "error", service.DescribeStartupError(err))
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	runErrCh := make(chan error, 1)
@@ -67,7 +134,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		runErrCh <- svc.Run(ctx)
 	}()
 
-	if !*verbose {
+	if !verbose {
 		exited, err := announceStartup(stdout, svc.DashboardEnabled(), svc.DashboardURL, svc.FunnelSetupURL, runErrCh)
 		if exited {
 			if err != nil {
@@ -86,30 +153,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runSetup(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "funnel" {
-		fmt.Fprintln(stderr, "usage: colin setup funnel [--json] [path-to-WORKFLOW.md]")
-		return 2
-	}
-
-	flags := flag.NewFlagSet("setup funnel", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	jsonOutput := flags.Bool("json", false, "print JSON output")
-	flags.Usage = func() {
-		fmt.Fprintln(stderr, "usage: colin setup funnel [--json] [path-to-WORKFLOW.md]")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args[1:]); err != nil {
-		return 2
-	}
-	if flags.NArg() > 1 {
-		flags.Usage()
-		return 2
-	}
-
+func runSetupFunnel(stdout, stderr io.Writer, args []string, jsonOutput bool) int {
 	workflowPath := ""
-	if flags.NArg() == 1 {
-		workflowPath = flags.Arg(0)
+	if len(args) == 1 {
+		workflowPath = args[0]
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -121,7 +168,7 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if *jsonOutput {
+	if jsonOutput {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(status); err != nil {
@@ -136,6 +183,53 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return 1
+}
+
+type usageError struct {
+	Command *cobra.Command
+	Err     error
+}
+
+func (e *usageError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "invalid command usage"
+}
+
+func (e *usageError) Unwrap() error {
+	return e.Err
+}
+
+type commandExitError struct {
+	Code int
+}
+
+func (e *commandExitError) Error() string {
+	return fmt.Sprintf("command exited with status %d", e.Code)
+}
+
+func exitCode(code int) error {
+	if code == 0 {
+		return nil
+	}
+	return &commandExitError{Code: code}
+}
+
+func wrapFlagError(cmd *cobra.Command, err error) error {
+	return &usageError{Command: cmd, Err: err}
+}
+
+func maximumArgs(limit int) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) <= limit {
+			return nil
+		}
+		return &usageError{
+			Command: cmd,
+			Err:     fmt.Errorf("accepts at most %d arg(s), received %d", limit, len(args)),
+		}
+	}
 }
 
 func announceStartup(stdout io.Writer, dashboardEnabled bool, dashboardURL func() string, setupURL func() string, runErrCh <-chan error) (bool, error) {
