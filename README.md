@@ -85,7 +85,7 @@ go run . --workflow /path/to/WORKFLOW.md setup tailscale
 - If an issue ever has multiple `Colin ExecPlan` attachments, Colin fails closed, moves the issue to `Refine`, and requires human cleanup instead of guessing which plan to use.
 - Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
-- For tracked issues that already have a linked GitHub PR, Colin mirrors the current Codex PR review status back into Linear labels so the board shows whether Codex review is pending, approved, or still has unresolved feedback. Colin removes stale Codex review labels when no current Codex review status applies.
+- For non-terminal tracked issues that already have a linked GitHub PR, Colin mirrors the current Codex PR review status back into Linear labels so the board shows whether Codex review is pending, approved, or still has unresolved feedback. Colin removes stale Codex review labels when no current Codex review status applies.
 - If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/`, JSON state at `/api/v1/state`, and buffered internal logs at `/api/v1/logs`.

@@ -193,6 +193,128 @@ func TestSyncIssueCodexReviewLabelKeepsCurrentLabelWhenReplacementAddFails(t *te
 	}
 }
 
+func TestShouldFetchCodexReviewLabelState(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo", "In Progress"},
+				TerminalStates: []string{"Done"},
+			},
+			Repo: domain.RepoConfig{
+				PublishStates: []string{"Review"},
+				MergeStates:   []string{"Merge"},
+			},
+		}},
+	}
+
+	cases := []struct {
+		state string
+		want  bool
+	}{
+		{state: "Todo", want: true},
+		{state: "Review", want: true},
+		{state: "Merge", want: true},
+		{state: "Done", want: false},
+	}
+
+	for _, tc := range cases {
+		if got := orch.shouldFetchCodexReviewLabelState(tc.state); got != tc.want {
+			t.Fatalf("shouldFetchCodexReviewLabelState(%q) = %t, want %t", tc.state, got, tc.want)
+		}
+	}
+}
+
+func TestSyncCodexReviewLabelsClearsTerminalIssueWithoutRepoFetch(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	orch.syncCodexReviewLabels(context.Background(), []domain.Issue{
+		{
+			ID:         "issue-1",
+			Identifier: "COLIN-128",
+			State:      "Done",
+			Labels: []string{
+				domain.CodexReviewApprovedLabel,
+				"other",
+			},
+			AttachedPullRequests: []domain.PullRequestRef{{Number: 42}},
+		},
+	})
+
+	if len(tracker.addedLabels) != 0 {
+		t.Fatalf("addedLabels = %v, want none", tracker.addedLabels)
+	}
+	if got, want := tracker.removedLabels, []string{"issue-1:" + domain.CodexReviewApprovedLabel}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("removedLabels = %v, want %v", got, want)
+	}
+}
+
+func TestSyncCodexReviewLabelsStopsQuietlyWhenContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	orch.syncCodexReviewLabels(ctx, []domain.Issue{
+		{
+			ID:         "issue-1",
+			Identifier: "COLIN-128",
+			State:      "Done",
+			Labels:     []string{domain.CodexReviewApprovedLabel},
+		},
+		{
+			ID:         "issue-2",
+			Identifier: "COLIN-129",
+			State:      "Done",
+			Labels:     []string{domain.CodexReviewPendingLabel},
+		},
+	})
+
+	if len(tracker.addedLabels) != 0 {
+		t.Fatalf("addedLabels = %v, want none", tracker.addedLabels)
+	}
+	if len(tracker.removedLabels) != 0 {
+		t.Fatalf("removedLabels = %v, want none", tracker.removedLabels)
+	}
+}
+
 type runnerStub struct {
 	invoked chan struct{}
 	release chan struct{}

@@ -195,6 +195,13 @@ func (o *Orchestrator) syncCodexReviewLabels(ctx context.Context, issues []domai
 		return
 	}
 	for _, issue := range issues {
+		if ctx.Err() != nil {
+			return
+		}
+		if !o.shouldFetchCodexReviewLabelState(issue.State) {
+			o.syncIssueCodexReviewLabel(ctx, issue, "")
+			continue
+		}
 		if !hasIssueReviewSyncPullRequestSignal(issue) {
 			o.syncIssueCodexReviewLabel(ctx, issue, "")
 			continue
@@ -204,11 +211,17 @@ func (o *Orchestrator) syncCodexReviewLabels(ctx context.Context, issues []domai
 		}
 		workspace, err := o.runtime.Workspace.Ensure(ctx, issue)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			o.logger.Warn("failed to prepare workspace for codex review label sync", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
 			continue
 		}
 		reviewContext, err := o.runtime.Repo.ReviewContext(ctx, issue, workspace.Path)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			o.logger.Warn("failed to read review context for codex review label sync", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
 			continue
 		}
@@ -233,6 +246,10 @@ func (o *Orchestrator) syncIssueCodexReviewLabel(ctx context.Context, issue doma
 			o.logger.Warn("failed to remove codex review label", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "label", labelName, "error", err)
 		}
 	}
+}
+
+func (o *Orchestrator) shouldFetchCodexReviewLabelState(state string) bool {
+	return o.isActive(state) || o.isPublishState(state) || o.isMergeState(state)
 }
 
 func (o *Orchestrator) trackerThrottleDelay(now time.Time) time.Duration {
