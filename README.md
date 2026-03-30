@@ -29,7 +29,7 @@ By default Colin is started with:
 go run .
 ```
 
-By default Colin prints a single startup line with the local dashboard URL, for example `Colin is running. Web UI: http://127.0.0.1:8888`.
+By default Colin prints a single startup line with both the local dashboard URL and the local Funnel setup page, for example `Colin is running. Web UI: http://127.0.0.1:8888 Setup: http://127.0.0.1:8888/setup/funnel`.
 
 To keep the previous structured log stream on the terminal, pass `--verbose`:
 
@@ -44,6 +44,14 @@ go run . --port 9999
 ```
 
 If Colin is exposed through a reverse proxy or any non-loopback address, set `server.public_url` in `WORKFLOW.md` so the `Colin metadata` attachment in Linear points at the externally reachable web UI address instead of the local loopback bind.
+
+Before configuring incoming Linear or GitHub webhooks, use Colin's Funnel readiness flow to make sure the service is publicly reachable:
+
+```bash
+go run . setup funnel
+```
+
+That command checks Tailscale, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
 
 You can also point it at a specific workflow file:
 
@@ -216,7 +224,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
-- When `server.public_url` is unset, Colin uses the loopback UI address for Linear metadata links. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
+- When `server.public_url` is unset, Colin auto-detects an active Tailscale Funnel for the Colin port and uses that public URL for metadata links and setup guidance. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
 - The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. The embedded browser refresh keeps the task fragment current without reloading the full page shell, and if a refresh fails the toolbar marks the dashboard as stale so operators know they are looking at the last successful snapshot.
 - The issue-specific metadata page is separate from the main dashboard and is meant for reviewing one issue's latest Colin run, including the captured Codex output that Colin persisted to Linear metadata.
 - Colin automatically moves successful, reviewable coding runs into the first configured publish state, which is currently `Review`.
@@ -224,3 +232,47 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - If `review_publish` finds no reviewable repository changes, Colin moves the issue back to the working active state instead of retrying PR creation or applying the `paused` label.
 - Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.
 - Colin can automatically move an issue out of `Merge` when the Linear team has a git `merge` automation target configured, which this repository currently does (`Merged`).
+
+## Tailscale Funnel Webhook Readiness
+
+Colin now includes a dedicated readiness flow for the public ingress you need before configuring incoming webhooks.
+
+Use either:
+
+```bash
+go run . setup funnel
+```
+
+or the browser page at `/setup/funnel` once Colin is running.
+
+The readiness flow checks:
+
+- `tailscale` is installed and the backend is running
+- MagicDNS is enabled
+- a root-mounted Tailscale Funnel is proxying Colin's local port
+- Colin responds locally at `/webhooks/readyz`
+- Colin responds publicly at `/webhooks/readyz`
+
+The recommended command is:
+
+```bash
+tailscale funnel --bg --https=443 8888
+```
+
+If port `443` is already occupied by another Serve or Funnel configuration, Colin suggests `8443` or `10000` instead.
+
+Tailscale Funnel requirements come from Tailscale itself and currently include:
+
+- MagicDNS enabled
+- HTTPS certificates enabled for the tailnet
+- a `funnel` node attribute in the tailnet policy
+- on macOS, a Tailscale client variant that supports Funnel port sharing
+
+When Funnel is active and `server.public_url` is unset, Colin derives its public base URL from the active Funnel automatically. If `server.public_url` is set, Colin uses that value instead and still shows Funnel diagnostics on the setup page.
+
+The setup page and CLI both show the final URLs you will paste into provider webhook settings later:
+
+- GitHub: `<public-base-url>/webhooks/github`
+- Linear: `<public-base-url>/webhooks/linear`
+
+Those webhook endpoints are reserved now so the URLs are stable, but they intentionally return `501 Not Implemented` until webhook handling itself is added. The readiness endpoint is live today at `/webhooks/readyz`.

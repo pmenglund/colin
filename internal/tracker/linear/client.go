@@ -43,16 +43,17 @@ const (
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
-	endpoint  string
-	apiKey    string
-	project   string
-	active    []string
-	client    *http.Client
-	publicURL string
-	rateMu    sync.RWMutex
-	rateInfo  map[string]any
-	labelMu   sync.RWMutex
-	labelIDs  map[string]string
+	endpoint          string
+	apiKey            string
+	project           string
+	active            []string
+	client            *http.Client
+	publicURL         string
+	publicURLResolver func(context.Context) string
+	rateMu            sync.RWMutex
+	rateInfo          map[string]any
+	labelMu           sync.RWMutex
+	labelIDs          map[string]string
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -75,6 +76,14 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		return nil, err
 	}
 	return client, nil
+}
+
+// SetPublicURLResolver configures a late-bound metadata URL resolver.
+func (c *Client) SetPublicURLResolver(resolver func(context.Context) string) {
+	if c == nil {
+		return
+	}
+	c.publicURLResolver = resolver
 }
 
 // FetchCandidateIssues returns the current active issues for the configured Linear project.
@@ -383,7 +392,7 @@ mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
 		"input": map[string]any{
 			"issueId":  issueID,
 			"title":    colinMetadataAttachmentTitle,
-			"url":      c.metadataAttachmentURL(issueID),
+			"url":      c.metadataAttachmentURL(ctx, issueID),
 			"metadata": colinMetadataValue(metadata),
 		},
 	})
@@ -1290,8 +1299,14 @@ func colinMetadataAttachmentURL(issueID string) string {
 	return domain.ColinMetadataPath(issueID)
 }
 
-func (c *Client) metadataAttachmentURL(issueID string) string {
-	return strings.TrimRight(c.publicURL, "/") + colinMetadataAttachmentURL(issueID)
+func (c *Client) metadataAttachmentURL(ctx context.Context, issueID string) string {
+	baseURL := strings.TrimSpace(c.publicURL)
+	if c.publicURLResolver != nil {
+		if resolved := strings.TrimSpace(c.publicURLResolver(ctx)); resolved != "" {
+			baseURL = resolved
+		}
+	}
+	return strings.TrimRight(baseURL, "/") + colinMetadataAttachmentURL(issueID)
 }
 
 func isColinMetadataURL(value string) bool {

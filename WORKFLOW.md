@@ -54,7 +54,8 @@ codex:
 
 server:
   port: 8888
-  # Optional when Colin is reachable through a reverse proxy or non-loopback host.
+  # Optional when Colin is reachable through a reverse proxy or another public host.
+  # When unset, Colin will use an active Tailscale Funnel for this port if one exists.
   # public_url: https://colin.example.com
 ---
 

@@ -19,17 +19,28 @@ type SnapshotProvider func(context.Context) (domain.Snapshot, error)
 // IssueProvider returns the current issue snapshot for a single tracker issue.
 type IssueProvider func(context.Context, string) (domain.Issue, error)
 
+// FunnelSetupProvider returns the current Funnel readiness snapshot.
+type FunnelSetupProvider func(context.Context) (domain.FunnelSetupStatus, error)
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup)
 }
 
 // NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider) (http.Handler, error) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
+		}
+	}
+	if setupProvider == nil {
+		setupProvider = func(context.Context) (domain.FunnelSetupStatus, error) {
+			now := time.Now().UTC()
+			return domain.FunnelSetupStatus{
+				GeneratedAt: now,
+			}, nil
 		}
 	}
 
@@ -56,6 +67,44 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			return
 		}
 		if err := json.NewEncoder(w).Encode(snapshot); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	mux.HandleFunc("/api/v1/setup/funnel", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		status, err := setupProvider(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := json.NewEncoder(w).Encode(status); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	mux.HandleFunc("/setup/funnel", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		status, err := setupProvider(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := ui.FunnelSetupPage(status, time.Now().UTC()).Render(w); err != nil && !errors.Is(err, context.Canceled) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
@@ -90,6 +139,22 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
+	mux.HandleFunc("/webhooks/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	mux.HandleFunc("/webhooks/linear", reservedWebhookHandler)
+	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -119,6 +184,19 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 	})
 
 	return secureHeaders(mux), nil
+}
+
+func reservedWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusNotImplemented)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": "Webhook endpoint reserved, but not implemented yet.",
+	})
 }
 
 func mergeLiveIssueOutput(issue *domain.Issue, snapshot domain.Snapshot) {
@@ -279,6 +357,42 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 		return issue, nil
 	}
 	return domain.Issue{}, errors.New("issue not found")
+}
+
+func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupStatus, error) {
+	now := time.Now().UTC()
+	baseURL := "https://colin-demo.tail.example.ts.net"
+	return domain.FunnelSetupStatus{
+		GeneratedAt:       now,
+		Ready:             true,
+		PublicURLSource:   "funnel",
+		LocalBaseURL:      "http://127.0.0.1:8888",
+		LocalSetupURL:     "http://127.0.0.1:8888/setup/funnel",
+		LocalReadyURL:     "http://127.0.0.1:8888/webhooks/readyz",
+		PublicBaseURL:     baseURL,
+		PublicSetupURL:    baseURL + "/setup/funnel",
+		PublicReadyURL:    baseURL + "/webhooks/readyz",
+		DetectedFunnelURL: baseURL,
+		SuggestedCommand:  "tailscale funnel --bg --https=443 8888",
+		LinearWebhookURL:  baseURL + "/webhooks/linear",
+		GitHubWebhookURL:  baseURL + "/webhooks/github",
+		Checks: []domain.SetupCheck{
+			{
+				ID:        "tailscale_cli",
+				Label:     "Tailscale CLI is installed",
+				Status:    "ok",
+				Detail:    "Using `/usr/local/bin/tailscale`.",
+				CheckedAt: now,
+			},
+			{
+				ID:        "funnel_route",
+				Label:     "Funnel proxies Colin at `/`",
+				Status:    "ok",
+				Detail:    "Detected `https://colin-demo.tail.example.ts.net` proxying Colin from `/`.",
+				CheckedAt: now,
+			},
+		},
+	}, nil
 }
 
 func ptrTime(value time.Time) *time.Time {

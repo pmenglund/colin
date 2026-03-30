@@ -198,6 +198,34 @@ type ServerConfig struct {
 	PublicURL string
 }
 
+// SetupCheck is one operator-facing readiness check.
+type SetupCheck struct {
+	ID          string    `json:"id"`
+	Label       string    `json:"label"`
+	Status      string    `json:"status"`
+	Detail      string    `json:"detail,omitempty"`
+	Remediation string    `json:"remediation,omitempty"`
+	CheckedAt   time.Time `json:"checked_at"`
+}
+
+// FunnelSetupStatus describes Colin's current Tailscale Funnel readiness.
+type FunnelSetupStatus struct {
+	GeneratedAt       time.Time    `json:"generated_at"`
+	Ready             bool         `json:"ready"`
+	PublicURLSource   string       `json:"public_url_source,omitempty"`
+	LocalBaseURL      string       `json:"local_base_url,omitempty"`
+	LocalSetupURL     string       `json:"local_setup_url,omitempty"`
+	LocalReadyURL     string       `json:"local_ready_url,omitempty"`
+	PublicBaseURL     string       `json:"public_base_url,omitempty"`
+	PublicSetupURL    string       `json:"public_setup_url,omitempty"`
+	PublicReadyURL    string       `json:"public_ready_url,omitempty"`
+	DetectedFunnelURL string       `json:"detected_funnel_url,omitempty"`
+	SuggestedCommand  string       `json:"suggested_command,omitempty"`
+	LinearWebhookURL  string       `json:"linear_webhook_url,omitempty"`
+	GitHubWebhookURL  string       `json:"github_webhook_url,omitempty"`
+	Checks            []SetupCheck `json:"checks,omitempty"`
+}
+
 // Workspace describes a prepared per-issue workspace directory.
 type Workspace struct {
 	Path         string

@@ -60,6 +60,8 @@ func Page(snapshot domain.Snapshot, shellRenderedAt time.Time) g.Node {
 					h.Class("footnote"),
 					g.Text("JSON API: "),
 					h.A(h.Href("/api/v1/state"), g.Text("/api/v1/state")),
+					g.Text(" | "),
+					h.A(h.Href("/setup/funnel"), g.Text("Tailscale Funnel setup")),
 				),
 			),
 		),
@@ -141,6 +143,104 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 				h.Footer(
 					h.Class("footnote"),
 					h.A(h.Href("/"), g.Text("Back to dashboard")),
+				),
+			),
+		),
+	))
+}
+
+// FunnelSetupPage renders the Tailscale Funnel readiness page.
+func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time) g.Node {
+	stateText := "Needs setup"
+	if status.Ready {
+		stateText = "Ready for webhooks"
+	}
+
+	return h.Doctype(h.HTML(
+		h.Lang("en"),
+		h.Head(
+			h.Meta(h.Charset("utf-8")),
+			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
+			h.Title("Colin Funnel Setup"),
+			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
+		),
+		h.Body(
+			h.Class("page-shell"),
+			h.Div(
+				h.Class("page-inner"),
+				h.Header(
+					h.Class("hero"),
+					h.Div(
+						h.Class("hero-grid"),
+						h.Div(
+							h.Span(h.Class("hero-label"), g.Text("Tailscale Funnel Setup")),
+							h.H1(g.Text("Webhook ingress readiness")),
+							h.P(g.Text("Verify Colin is publicly reachable before configuring Linear or GitHub webhooks.")),
+						),
+						h.Div(
+							h.Class("shell-meta"),
+							h.Div(
+								h.Class("card"),
+								h.Data("testid", "funnel-status"),
+								h.Span(h.Class("badge badge-info"), g.Text(stateText)),
+								h.Div(h.Class("issue-title"), g.Text(shellRenderedAt.UTC().Format(time.RFC3339))),
+							),
+						),
+					),
+				),
+				h.Main(
+					h.Class("dashboard-root"),
+					h.Section(
+						h.Class("table-card"),
+						h.Data("testid", "funnel-urls"),
+						h.H3(g.Text("URLs")),
+						h.Div(
+							h.Class("worker-grid"),
+							metadataStatCard("Local base URL", fallback(status.LocalBaseURL, "not available")),
+							metadataStatCard("Public base URL", fallback(status.PublicBaseURL, "not available")),
+							metadataStatCard("Linear webhook URL", fallback(status.LinearWebhookURL, "not available")),
+							metadataStatCard("GitHub webhook URL", fallback(status.GitHubWebhookURL, "not available")),
+						),
+						h.P(g.Text("Suggested command: "), h.Code(g.Text(fallback(status.SuggestedCommand, "none")))),
+					),
+					h.Section(
+						h.Class("table-card"),
+						h.Data("testid", "funnel-checks"),
+						h.H3(g.Text("Checks")),
+						h.Div(
+							h.Class("table-wrap"),
+							h.Table(
+								h.Class("table"),
+								h.THead(
+									h.Tr(
+										h.Th(g.Text("Check")),
+										h.Th(g.Text("Status")),
+										h.Th(g.Text("Detail")),
+									),
+								),
+								h.TBody(g.Map(status.Checks, func(check domain.SetupCheck) g.Node {
+									detail := check.Detail
+									if detail == "" {
+										detail = check.Remediation
+									} else if check.Remediation != "" {
+										detail += " " + check.Remediation
+									}
+									return h.Tr(
+										h.Data("testid", "funnel-check-"+check.ID),
+										h.Td(g.Text(check.Label)),
+										h.Td(g.Text(strings.ToUpper(check.Status))),
+										h.Td(g.Text(fallback(detail, "none"))),
+									)
+								})),
+							),
+						),
+					),
+				),
+				h.Footer(
+					h.Class("footnote"),
+					h.A(h.Href("/"), g.Text("Back to dashboard")),
+					g.Text(" | "),
+					h.A(h.Href("/api/v1/setup/funnel"), g.Text("JSON status")),
 				),
 			),
 		),

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/repoops"
+	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/internal/workspace"
@@ -36,6 +38,7 @@ type Service struct {
 	runtimeMu    sync.RWMutex
 	runtime      orchestrator.Runtime
 	orch         *orchestrator.Orchestrator
+	inspector    *tsdiag.Inspector
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
@@ -56,6 +59,7 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 		serverPort:   clonePort(runtime.Config.Server.Port),
 		runtime:      runtime,
 		orch:         orch,
+		inspector:    tsdiag.NewInspector(),
 	}, nil
 }
 
@@ -65,6 +69,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.startHTTPServer(ctx); err != nil {
 		return err
 	}
+	s.applyPublicURLResolver(s.currentRuntime())
 	if err := s.ensurePausedLabel(ctx); err != nil {
 		return err
 	}
@@ -88,18 +93,24 @@ func (s *Service) DashboardEnabled() bool {
 	return s.serverPort != nil
 }
 
+// FunnelSetupURL returns the local setup page URL when the HTTP server is enabled.
+func (s *Service) FunnelSetupURL() string {
+	base := strings.TrimRight(s.DashboardURL(), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/setup/funnel"
+}
+
 func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.Runtime, error) {
 	loader := workflow.Loader{}
 	def, err := loader.Load(path)
 	if err != nil {
 		return orchestrator.Runtime{}, err
 	}
-	cfg, err := config.Build(def, path)
+	_, cfg, err := loadConfig(path, opts)
 	if err != nil {
 		return orchestrator.Runtime{}, err
-	}
-	if opts.serverPortOverride != nil {
-		cfg.Server.Port = intPtr(*opts.serverPortOverride)
 	}
 	if err := config.ValidateDispatch(cfg); err != nil {
 		return orchestrator.Runtime{}, err
@@ -170,6 +181,7 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 			s.logger.Info("workflow reloaded", "path", s.workflowPath)
 			s.setRuntime(runtime)
 			s.orch.UpdateRuntime(runtime)
+			s.applyPublicURLResolver(runtime)
 		}
 	}
 }
@@ -189,6 +201,9 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 				return domain.Issue{}, errors.New("tracker unavailable")
 			}
 			return runtime.Tracker.FetchIssueByID(snapshotCtx, issueID)
+		},
+		func(snapshotCtx context.Context) (domain.FunnelSetupStatus, error) {
+			return s.funnelSetupStatus(snapshotCtx), nil
 		},
 	)
 	if err != nil {
@@ -260,6 +275,42 @@ func (s *Service) ensurePausedLabel(ctx context.Context) error {
 		return fmt.Errorf("ensure %s label: %w", domain.PausedIssueLabel, err)
 	}
 	return nil
+}
+
+func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatus {
+	runtime := s.currentRuntime()
+	inspector := s.inspector
+	if inspector == nil {
+		inspector = tsdiag.NewInspector()
+	}
+	return inspector.Check(ctx, tsdiag.Options{
+		LocalPort:         runtime.Config.Server.Port,
+		LocalDashboardURL: s.DashboardURL(),
+		ExplicitPublicURL: runtime.Config.Server.PublicURL,
+	})
+}
+
+func (s *Service) effectivePublicBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
+	inspector := s.inspector
+	if inspector == nil {
+		inspector = tsdiag.NewInspector()
+	}
+	status := inspector.Resolve(ctx, tsdiag.Options{
+		LocalPort:         cfg.Port,
+		LocalDashboardURL: s.DashboardURL(),
+		ExplicitPublicURL: cfg.PublicURL,
+	})
+	return strings.TrimSpace(status.PublicBaseURL)
+}
+
+func (s *Service) applyPublicURLResolver(runtime orchestrator.Runtime) {
+	client, ok := runtime.Tracker.(*linear.Client)
+	if !ok || client == nil {
+		return
+	}
+	client.SetPublicURLResolver(func(ctx context.Context) string {
+		return s.effectivePublicBaseURL(ctx, runtime.Config.Server)
+	})
 }
 
 // NewDefaultLogger returns the repo-default structured logger.

@@ -88,6 +88,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-testid="worker-output-COLIN-93"`,
 		`hx-get="/"`,
 		`/api/v1/state`,
+		`/setup/funnel`,
 		`COLIN-93`,
 		`Add live dashboard`,
 		`Linear issues`,
@@ -259,6 +260,43 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`comment-12`,
 		`href="https://linear.app/example/issue/COLIN-111"`,
 		`Updated the metadata link.`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
+	html := renderNode(t, FunnelSetupPage(domain.FunnelSetupStatus{
+		GeneratedAt:      now,
+		Ready:            true,
+		LocalBaseURL:     "http://127.0.0.1:8888",
+		PublicBaseURL:    "https://colin.tail.example.ts.net",
+		LinearWebhookURL: "https://colin.tail.example.ts.net/webhooks/linear",
+		GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
+		SuggestedCommand: "tailscale funnel --bg --https=443 8888",
+		Checks: []domain.SetupCheck{
+			{
+				ID:        "tailscale_cli",
+				Label:     "Tailscale CLI is installed",
+				Status:    "ok",
+				Detail:    "Using `/usr/local/bin/tailscale`.",
+				CheckedAt: now,
+			},
+		},
+	}, now))
+
+	for _, want := range []string{
+		`data-testid="funnel-urls"`,
+		`data-testid="funnel-checks"`,
+		`Ready for webhooks`,
+		`https://colin.tail.example.ts.net/webhooks/github`,
+		`tailscale funnel --bg --https=443 8888`,
+		`data-testid="funnel-check-tailscale_cli"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)

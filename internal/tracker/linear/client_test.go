@@ -439,6 +439,54 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 }
 
+func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
+	t.Parallel()
+
+	var gotURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		input, _ := request.Variables["input"].(map[string]any)
+		gotURL, _ = input["url"].(string)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"attachmentCreate": map[string]any{
+					"success": true,
+					"attachment": map[string]any{
+						"id":       "attachment-1",
+						"title":    "Colin metadata",
+						"url":      gotURL,
+						"metadata": map[string]any{},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:  server.URL,
+		apiKey:    "token",
+		publicURL: "http://127.0.0.1:8888",
+		client:    &http.Client{Timeout: 5 * time.Second},
+	}
+	client.SetPublicURLResolver(func(context.Context) string {
+		return "https://colin.tail.example.ts.net"
+	})
+
+	if _, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{}); err != nil {
+		t.Fatalf("UpsertIssueMetadata() error = %v", err)
+	}
+	if gotURL != "https://colin.tail.example.ts.net/linear/issues/issue-1/metadata" {
+		t.Fatalf("url = %q", gotURL)
+	}
+}
+
 func TestEnsureIssueLabelCreatesMissingLabel(t *testing.T) {
 	t.Parallel()
 
