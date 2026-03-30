@@ -468,30 +468,31 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 }
 
 func (r *Runner) blockMergeForCodexReview(ctx context.Context, issue domain.Issue, reviewContext repoops.ReviewContext) (domain.Issue, string, bool, error) {
-	summary, blocked := buildMergeBlockedSummary(reviewContext)
+	summary, blocked, moveToReview := buildMergeBlockedSummary(reviewContext)
 	if !blocked {
 		return issue, "", false, nil
-	}
-	if r.tracker == nil {
-		return issue, "", false, errors.New("missing tracker client")
-	}
-
-	targetState, ok := firstConfiguredState(r.cfg.Repo.PublishStates)
-	if !ok {
-		targetState = "Review"
-	}
-	if !strings.EqualFold(issue.State, targetState) {
-		if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
-			return issue, "", false, fmt.Errorf("update issue state to %s: %w", targetState, err)
-		}
-		issue.State = targetState
-		now := time.Now().UTC()
-		issue.UpdatedAt = &now
 	}
 	if pr := pullRequestRef(reviewContext.PullRequest); pr != nil {
 		issue.PullRequest = pr
 	}
 	issue.ReviewThreads = append([]domain.GitHubReviewThread(nil), reviewContext.CodexReviewThreads...)
+	if moveToReview {
+		if r.tracker == nil {
+			return issue, "", false, errors.New("missing tracker client")
+		}
+		targetState, ok := firstConfiguredState(r.cfg.Repo.PublishStates)
+		if !ok {
+			targetState = "Review"
+		}
+		if !strings.EqualFold(issue.State, targetState) {
+			if err := r.tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
+				return issue, "", false, fmt.Errorf("update issue state to %s: %w", targetState, err)
+			}
+			issue.State = targetState
+			now := time.Now().UTC()
+			issue.UpdatedAt = &now
+		}
+	}
 	return issue, summary, true, nil
 }
 
@@ -1057,32 +1058,30 @@ func buildReviewBlockedSummary(summary string, pr *domain.PullRequestRef, handle
 	return strings.Join(lines, "\n")
 }
 
-func buildMergeBlockedSummary(reviewContext repoops.ReviewContext) (string, bool) {
-	if strings.EqualFold(strings.TrimSpace(reviewContext.PullRequest.State), "MERGED") {
-		return "", false
+func buildMergeBlockedSummary(reviewContext repoops.ReviewContext) (string, bool, bool) {
+	block := mergeReviewBlockDisposition(reviewContext)
+	if !block.Blocked {
+		return "", false, false
 	}
 
-	pendingApproval := codexReviewApprovalPending(reviewContext)
-	threadCount := len(reviewContext.CodexReviewThreads)
-	if !pendingApproval && threadCount == 0 {
-		return "", false
+	lines := []string{"Keeping issue in `Merge` while waiting for Codex PR review feedback."}
+	if block.MoveToReview {
+		lines = []string{"Returning issue to `Review` because Codex PR feedback still needs to be resolved."}
 	}
-
-	lines := []string{"Returning issue to `Review` because Codex PR feedback still needs to be resolved."}
 	if reviewContext.PullRequest.Number > 0 {
 		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
 	}
 	if strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
 		lines = append(lines, fmt.Sprintf("- PR URL: %s", reviewContext.PullRequest.URL))
 	}
-	if pendingApproval {
+	if block.PendingApproval {
 		lines = append(lines, "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
 	}
-	if threadCount > 0 {
-		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", threadCount))
+	if block.ThreadCount > 0 {
+		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", block.ThreadCount))
 	}
-	lines = append(lines, "- Resolve the remaining Codex PR feedback, then move the issue back to `Merge`.")
-	return strings.Join(lines, "\n"), true
+	lines = append(lines, mergeReviewBlockedNextStep(block.MoveToReview))
+	return strings.Join(lines, "\n"), true, block.MoveToReview
 }
 
 func codexReviewApprovalPending(reviewContext repoops.ReviewContext) bool {
@@ -1093,6 +1092,40 @@ func codexReviewApprovalPending(reviewContext repoops.ReviewContext) bool {
 		return true
 	}
 	return !reviewContext.CodexReviewApprovedAt.After(*reviewContext.CodexReviewRequestedAt)
+}
+
+type mergeReviewBlock struct {
+	Blocked         bool
+	MoveToReview    bool
+	PendingApproval bool
+	ThreadCount     int
+}
+
+func mergeReviewBlockDisposition(reviewContext repoops.ReviewContext) mergeReviewBlock {
+	if strings.EqualFold(strings.TrimSpace(reviewContext.PullRequest.State), "MERGED") {
+		return mergeReviewBlock{}
+	}
+
+	block := mergeReviewBlock{
+		PendingApproval: codexReviewApprovalPending(reviewContext),
+		ThreadCount:     len(reviewContext.CodexReviewThreads),
+	}
+	if block.ThreadCount > 0 {
+		block.Blocked = true
+		block.MoveToReview = true
+		return block
+	}
+	if block.PendingApproval {
+		block.Blocked = true
+	}
+	return block
+}
+
+func mergeReviewBlockedNextStep(moveToReview bool) string {
+	if moveToReview {
+		return "- Resolve the remaining Codex PR feedback, then move the issue back to `Merge`."
+	}
+	return "- Keep the issue in `Merge`. Colin will decide whether to merge or return it to `Review` after Codex leaves feedback or a `thumbs up` reaction."
 }
 
 func pullRequestRef(pr domain.PullRequestRef) *domain.PullRequestRef {
@@ -1377,6 +1410,7 @@ func buildMergeRecoveryFailureSummary(result repoops.Result, reviewState string,
 }
 
 func buildMergeRecoveryReviewBlockedSummary(recoverySummary string, reviewContext repoops.ReviewContext) string {
+	block := mergeReviewBlockDisposition(reviewContext)
 	lines := []string{"Colin repaired the merge conflict, but the updated PR still needs Codex review before it can be merged."}
 	if reviewContext.PullRequest.Number > 0 {
 		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
@@ -1387,13 +1421,13 @@ func buildMergeRecoveryReviewBlockedSummary(recoverySummary string, reviewContex
 	if strings.TrimSpace(recoverySummary) != "" {
 		lines = append(lines, "", "Codex repair summary:", "", strings.TrimSpace(recoverySummary))
 	}
-	if codexReviewApprovalPending(reviewContext) {
+	if block.PendingApproval {
 		lines = append(lines, "", "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
 	}
-	if count := len(reviewContext.CodexReviewThreads); count > 0 {
-		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", count))
+	if block.ThreadCount > 0 {
+		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", block.ThreadCount))
 	}
-	lines = append(lines, "- Resolve the remaining Codex PR feedback, then move the issue back to `Merge`.")
+	lines = append(lines, mergeReviewBlockedNextStep(block.MoveToReview))
 	return strings.Join(lines, "\n")
 }
 
