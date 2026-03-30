@@ -353,6 +353,7 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
 		ActualBranchName:       "colin-94",
+		ExecPlanDecision:       domain.ExecPlanDecisionOneShot,
 		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
 		LastRunType:            "coding",
 		LastOutcome:            "needs_spec",
@@ -384,6 +385,9 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if gotMetadata["review_publish_directive"] != "skip" {
 		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
+	}
+	if gotMetadata["exec_plan_decision"] != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("exec_plan_decision = %v, want %q", gotMetadata["exec_plan_decision"], domain.ExecPlanDecisionOneShot)
 	}
 	if gotMetadata["pull_request_number"] != float64(11) && gotMetadata["pull_request_number"] != 11 {
 		t.Fatalf("pull_request_number = %v, want 11", gotMetadata["pull_request_number"])
@@ -420,6 +424,9 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.ActualBranchName != "colin-94" {
 		t.Fatalf("metadata.ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
+	}
+	if metadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", metadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
 	}
 	if metadata.PullRequestNumber != 11 {
 		t.Fatalf("metadata.PullRequestNumber = %d, want 11", metadata.PullRequestNumber)
@@ -1191,6 +1198,7 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
 										"metadata": map[string]any{
 											"actual_branch_name":       "colin-94",
+											"exec_plan_decision":       "one_shot",
 											"review_publish_directive": "skip",
 											"last_run_type":            "coding",
 											"last_outcome":             "needs_spec",
@@ -1260,6 +1268,9 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.ReviewPublishDirective != "skip" {
 		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ColinMetadata.ReviewPublishDirective, "skip")
+	}
+	if issues[0].ColinMetadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("ExecPlanDecision = %q, want %q", issues[0].ColinMetadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
 	}
 	if got := len(issues[0].ColinMetadata.CodexOutput); got != 1 {
 		t.Fatalf("CodexOutput length = %d, want 1", got)

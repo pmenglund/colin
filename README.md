@@ -17,7 +17,7 @@ Colin runs as a long-lived process:
 1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
 2. It polls Linear for candidate issues in the configured project and tracked states.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
-4. It creates one canonical ExecPlan attachment per issue before coding starts, then reuses that same plan in later coding rounds.
+4. When ExecPlan support is enabled, it decides whether each issue should be handled as a one-shot change or should get a stored ExecPlan, persists that decision on the issue, and only creates a plan for the second case.
 5. It runs Codex for issues in coding states.
 6. It moves a successful coding run into `Review`, or into `Refine` when human clarification is still needed.
 7. It performs git and GitHub automation for issues in publish or merge states.
@@ -63,7 +63,8 @@ go run . /path/to/WORKFLOW.md
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
-- When `agent.create_exec_plan` is enabled, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
+- When `agent.create_exec_plan` is enabled, Colin first records whether the issue should be handled as `one_shot` or `exec_plan` in the `Colin metadata` attachment.
+- When that stored decision is `exec_plan`, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
 - If an issue ever has multiple `Colin ExecPlan` attachments, Colin fails closed, moves the issue to `Refine`, and requires human cleanup instead of guessing which plan to use.
 - Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
@@ -92,7 +93,7 @@ When an issue is in one of these states, Colin:
 
 When an issue moves from `Review` back to `Todo`, Colin reads the latest `Review -> Todo` cycle from the Linear timeline and injects human comments from that review window into the next prompt as review feedback. Comments starting with `[colin]` are treated as Colin-authored status updates and are excluded.
 
-Colin does not generate a second ExecPlan when an issue returns from `Review` to `Todo`. It reuses the existing canonical `Colin ExecPlan` attachment and continues working from that plan.
+Colin does not recompute the planning strategy when an issue returns from `Review` to `Todo`. It reuses the stored `exec_plan_decision`, so one-shot issues continue directly into coding and plan-backed issues continue from the existing canonical `Colin ExecPlan` attachment.
 
 Additional `Todo` rule:
 
@@ -199,7 +200,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - clone `git@github.com:pmenglund/colin.git`
 - default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
-- create one canonical ExecPlan attachment before the first coding turn
+- decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
 - serve the loopback web UI on `http://127.0.0.1:8888` unless `server.public_url` is set for an external address
 

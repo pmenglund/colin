@@ -30,12 +30,15 @@ const (
 	ReviewPublishDirectivePublish = "publish"
 	ReviewPublishDirectiveSkip    = "skip"
 	PausedIssueLabel              = "paused"
+	ExecPlanDecisionOneShot       = "one_shot"
+	ExecPlanDecisionExecPlan      = "exec_plan"
 )
 
 // ColinMetadata is persisted on the Linear issue to track Colin-specific workflow state.
 type ColinMetadata struct {
 	AttachmentID           string
 	ActualBranchName       string
+	ExecPlanDecision       string
 	ReviewPublishDirective string
 	LastRunType            string
 	LastOutcome            string

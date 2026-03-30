@@ -56,10 +56,11 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Title:      "Add dashboard",
 			State:      "In Progress",
 			ColinMetadata: &domain.ColinMetadata{
-				LastRunType: "coding",
-				LastOutcome: "ready_for_review",
-				CodexOutput: nil,
-				UpdatedAt:   ptr(time.Date(2026, 3, 28, 12, 34, 55, 0, time.UTC)),
+				ExecPlanDecision: domain.ExecPlanDecisionOneShot,
+				LastRunType:      "coding",
+				LastOutcome:      "ready_for_review",
+				CodexOutput:      nil,
+				UpdatedAt:        ptr(time.Date(2026, 3, 28, 12, 34, 55, 0, time.UTC)),
 			},
 		}, nil
 	})
@@ -180,6 +181,8 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		for _, want := range []string{
 			`data-testid="issue-metadata-panel"`,
 			`COLIN-93 - Add dashboard`,
+			`ExecPlan decision`,
+			`one_shot`,
 			`Last outcome`,
 			`ready_for_review`,
 			`refresh complete`,

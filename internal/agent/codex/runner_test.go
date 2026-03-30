@@ -596,12 +596,18 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 	if tracker.execPlan.Body != "# Fake ExecPlan\n\nPlan details." {
 		t.Fatalf("tracker exec plan = %q, want fake plan", tracker.execPlan.Body)
 	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionExecPlan {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionExecPlan)
+	}
 
 	logData, err := os.ReadFile(promptLogPath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	logText := string(logData)
+	if !strings.Contains(logText, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
+		t.Fatalf("prompts log missing exec plan decision turn: %q", logText)
+	}
 	if !strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
 		t.Fatalf("prompts log missing exec plan turn: %q", logText)
 	}
@@ -681,17 +687,275 @@ func TestRunnerReusesExistingExecPlanWithoutCreatingAnother(t *testing.T) {
 	if tracker.execPlan.Body != "" {
 		t.Fatalf("tracker exec plan = %q, want no new exec plan persisted", tracker.execPlan.Body)
 	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionExecPlan {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionExecPlan)
+	}
 
 	logData, err := os.ReadFile(promptLogPath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	logText := string(logData)
+	if strings.Contains(logText, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
+		t.Fatalf("prompts log unexpectedly recomputed the exec plan decision: %q", logText)
+	}
 	if strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
 		t.Fatalf("prompts log unexpectedly created a second exec plan: %q", logText)
 	}
 	if !strings.Contains(logText, "Work on COLIN-109.\n\nExecPlan:\n\n# Persisted plan\n\nExisting details.") {
 		t.Fatalf("prompts log missing coding prompt with reused plan: %q", logText)
+	}
+}
+
+func TestRunnerSkipsExecPlanForOneShotDecision(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		execPlanDecisionOneShotLine,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-126",
+			Title:      "ExecPlan decision",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-126",
+		Title:       "ExecPlan decision",
+		Description: testStringPtr("Decide whether to one-shot the work or persist an ExecPlan."),
+		State:       "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.ExecPlan != nil {
+		t.Fatalf("result.Issue.ExecPlan = %#v, want nil", result.Issue.ExecPlan)
+	}
+	if tracker.execPlan.Body != "" {
+		t.Fatalf("tracker.execPlan.Body = %q, want no exec plan persisted", tracker.execPlan.Body)
+	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
+	}
+
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
+		t.Fatalf("prompts log missing exec plan decision turn: %q", logText)
+	}
+	if strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
+		t.Fatalf("prompts log unexpectedly created an exec plan: %q", logText)
+	}
+	if strings.Contains(logText, "ExecPlan:\n\n") {
+		t.Fatalf("prompts log unexpectedly injected an exec plan into the coding prompt: %q", logText)
+	}
+	if !strings.Contains(logText, "Work on COLIN-126.") {
+		t.Fatalf("prompts log missing coding prompt: %q", logText)
+	}
+}
+
+func TestRunnerReusesPersistedOneShotDecisionWithoutCreatingExecPlan(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-127",
+			Title:      "Reuse one-shot decision",
+			State:      "In Progress",
+			ColinMetadata: &domain.ColinMetadata{
+				ExecPlanDecision: domain.ExecPlanDecisionOneShot,
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-127",
+		Title:      "Reuse one-shot decision",
+		State:      "In Progress",
+		ColinMetadata: &domain.ColinMetadata{
+			ExecPlanDecision: domain.ExecPlanDecisionOneShot,
+		},
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if tracker.execPlan.Body != "" {
+		t.Fatalf("tracker.execPlan.Body = %q, want no exec plan persisted", tracker.execPlan.Body)
+	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
+	}
+
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Contains(logText, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
+		t.Fatalf("prompts log unexpectedly recomputed the exec plan decision: %q", logText)
+	}
+	if strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
+		t.Fatalf("prompts log unexpectedly created an exec plan: %q", logText)
+	}
+	if strings.Contains(logText, "ExecPlan:\n\n") {
+		t.Fatalf("prompts log unexpectedly injected an exec plan into the coding prompt: %q", logText)
+	}
+}
+
+func TestRunnerFailsWhenExecPlanDecisionOutputIsMalformed(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		"maybe one-shot",
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-128",
+			Title:      "Invalid decision output",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Title:      "Invalid decision output",
+		State:      "Todo",
+	}, nil, nil)
+
+	if result.Status != "failed" {
+		t.Fatalf("Run() status = %q, want %q", result.Status, "failed")
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "unexpected decision") {
+		t.Fatalf("Run() error = %v, want unexpected decision failure", result.Err)
+	}
+	if tracker.execPlan.Body != "" {
+		t.Fatalf("tracker.execPlan.Body = %q, want no exec plan persisted", tracker.execPlan.Body)
+	}
+	if tracker.metadata.ExecPlanDecision != "" {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want empty", tracker.metadata.ExecPlanDecision)
 	}
 }
 
@@ -1115,6 +1379,12 @@ func testStringPtr(value string) *string {
 }
 
 func fakeCodexTurnText(prompt string) string {
+	if strings.Contains(prompt, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
+		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT"); ok {
+			return value
+		}
+		return execPlanDecisionExecPlanLine + "\n\nThis issue needs a persisted plan."
+	}
 	if strings.Contains(prompt, "Create an ExecPlan for the Linear issue below.") {
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_TEXT"); ok {
 			return value

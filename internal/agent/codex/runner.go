@@ -28,14 +28,16 @@ type Runner struct {
 }
 
 const (
-	outcomeReadyForReview = "COLIN_OUTCOME: READY_FOR_REVIEW"
-	outcomeNeedsSpec      = "COLIN_OUTCOME: NEEDS_SPEC"
-	refineStateName       = "Refine"
-	metadataOutcomeReady  = "ready_for_review"
-	metadataOutcomeSpec   = "needs_spec"
-	metadataOutcomeMax    = "max_turns"
-	metadataOutcomePlan   = "exec_plan_conflict"
-	metadataOutcomeMerged = "merged"
+	outcomeReadyForReview        = "COLIN_OUTCOME: READY_FOR_REVIEW"
+	outcomeNeedsSpec             = "COLIN_OUTCOME: NEEDS_SPEC"
+	execPlanDecisionOneShotLine  = "COLIN_EXECPLAN_DECISION: ONE_SHOT"
+	execPlanDecisionExecPlanLine = "COLIN_EXECPLAN_DECISION: EXEC_PLAN"
+	refineStateName              = "Refine"
+	metadataOutcomeReady         = "ready_for_review"
+	metadataOutcomeSpec          = "needs_spec"
+	metadataOutcomeMax           = "max_turns"
+	metadataOutcomePlan          = "exec_plan_conflict"
+	metadataOutcomeMerged        = "merged"
 )
 
 // NewRunner constructs a Runner bound to the current workflow, tracker, and workspace manager.
@@ -273,6 +275,11 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		"thread_id", client.threadID,
 	)
 	defer client.stop()
+
+	current, err = r.ensureExecPlanDecision(ctx, client, ws.Path, current)
+	if err != nil {
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+	}
 
 	current, err = r.ensureExecPlan(ctx, client, ws.Path, current)
 	if err != nil {
@@ -1112,11 +1119,44 @@ func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath str
 	return r.repo.ReviewableArtifact(ctx, workspacePath)
 }
 
+func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *appServerClient, workspacePath string, issue domain.Issue) (domain.Issue, error) {
+	if hasDuplicateExecPlans(issue) || !r.cfg.Agent.CreateExecPlan {
+		return issue, nil
+	}
+	if execPlanDecision(issue) != "" {
+		return issue, nil
+	}
+	if hasCanonicalExecPlan(issue) {
+		return r.persistExecPlanDecision(ctx, issue, domain.ExecPlanDecisionExecPlan)
+	}
+
+	prompt := buildExecPlanDecisionPrompt(issue)
+	r.logger.Info(
+		"deciding issue exec plan strategy",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+	)
+	if err := client.runTurn(ctx, workspacePath, issue, prompt); err != nil {
+		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
+	}
+
+	decision, err := parseExecPlanDecision(client.lastOutput())
+	if err != nil {
+		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
+	}
+	return r.persistExecPlanDecision(ctx, issue, decision)
+}
+
 func (r *Runner) ensureExecPlan(ctx context.Context, client *appServerClient, workspacePath string, issue domain.Issue) (domain.Issue, error) {
 	if hasDuplicateExecPlans(issue) {
 		return issue, tracker.ErrDuplicateExecPlans
 	}
-	if !r.cfg.Agent.CreateExecPlan || hasCanonicalExecPlan(issue) {
+	decision := execPlanDecision(issue)
+	if !r.cfg.Agent.CreateExecPlan || decision == domain.ExecPlanDecisionOneShot || hasCanonicalExecPlan(issue) {
+		return issue, nil
+	}
+	if decision != domain.ExecPlanDecisionExecPlan {
 		return issue, nil
 	}
 
@@ -1141,6 +1181,53 @@ func (r *Runner) ensureExecPlan(ctx context.Context, client *appServerClient, wo
 		Body:      body,
 		UpdatedAt: &now,
 	})
+}
+
+func buildExecPlanDecisionPrompt(issue domain.Issue) string {
+	var b strings.Builder
+	b.WriteString("Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.\n\n")
+	b.WriteString("Return a short answer.\n")
+	b.WriteString("The first line must be exactly one of:\n")
+	b.WriteString(execPlanDecisionOneShotLine + "\n")
+	b.WriteString(execPlanDecisionExecPlanLine + "\n\n")
+	b.WriteString("After the first line, include a brief rationale in 1-3 sentences.\n")
+	b.WriteString("Choose `ONE_SHOT` only when the change is small and safe enough to implement directly without a stored plan.\n")
+	b.WriteString("Choose `EXEC_PLAN` when the issue is large, risky, multi-step, or would benefit from a persistent implementation plan.\n\n")
+	b.WriteString("Issue context:\n")
+	b.WriteString(fmt.Sprintf("- Identifier: %s\n", issue.Identifier))
+	b.WriteString(fmt.Sprintf("- Title: %s\n", issue.Title))
+	b.WriteString(fmt.Sprintf("- State: %s\n", issue.State))
+	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
+		b.WriteString(fmt.Sprintf("- URL: %s\n", strings.TrimSpace(*issue.URL)))
+	}
+	if len(issue.Labels) > 0 {
+		b.WriteString("- Labels:\n")
+		for _, label := range issue.Labels {
+			b.WriteString(fmt.Sprintf("  - %s\n", label))
+		}
+	}
+	if issue.Description != nil && strings.TrimSpace(*issue.Description) != "" {
+		b.WriteString("\nIssue description:\n\n")
+		b.WriteString(strings.TrimSpace(*issue.Description))
+		b.WriteString("\n")
+	}
+	if len(issue.ReviewFeedback) > 0 {
+		b.WriteString("\nReview feedback:\n")
+		for _, item := range issue.ReviewFeedback {
+			b.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(item.Body)))
+		}
+	}
+	if len(issue.ReviewThreads) > 0 {
+		b.WriteString("\nGitHub review threads:\n")
+		for _, thread := range issue.ReviewThreads {
+			lineText := ""
+			if thread.Line != nil {
+				lineText = fmt.Sprintf(":%d", *thread.Line)
+			}
+			b.WriteString(fmt.Sprintf("- %s%s by %s: %s\n", thread.Path, lineText, thread.Author, strings.TrimSpace(thread.Body)))
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func buildExecPlanPrompt(issue domain.Issue) string {
@@ -1204,6 +1291,41 @@ func normalizeExecPlanBody(value string) string {
 	return strings.TrimSpace(value)
 }
 
+func parseExecPlanDecision(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("empty response")
+	}
+
+	firstLine := strings.TrimSpace(strings.Split(value, "\n")[0])
+	switch strings.ToUpper(firstLine) {
+	case execPlanDecisionOneShotLine:
+		return domain.ExecPlanDecisionOneShot, nil
+	case execPlanDecisionExecPlanLine:
+		return domain.ExecPlanDecisionExecPlan, nil
+	default:
+		return "", fmt.Errorf("unexpected decision %q", firstLine)
+	}
+}
+
+func execPlanDecision(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
+	}
+	return normalizeExecPlanDecision(issue.ColinMetadata.ExecPlanDecision)
+}
+
+func normalizeExecPlanDecision(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case domain.ExecPlanDecisionOneShot:
+		return domain.ExecPlanDecisionOneShot
+	case domain.ExecPlanDecisionExecPlan:
+		return domain.ExecPlanDecisionExecPlan
+	default:
+		return ""
+	}
+}
+
 func execPlanBody(plan *domain.ExecPlan) string {
 	if plan == nil {
 		return ""
@@ -1244,6 +1366,25 @@ func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, m
 	}
 	issue.ColinMetadata = &persisted
 	return issue, nil
+}
+
+func (r *Runner) persistExecPlanDecision(ctx context.Context, issue domain.Issue, decision string) (domain.Issue, error) {
+	decision = normalizeExecPlanDecision(decision)
+	if decision == "" {
+		return issue, errors.New("missing exec plan decision")
+	}
+
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+	}
+	if normalizeExecPlanDecision(metadata.ExecPlanDecision) == decision {
+		return issue, nil
+	}
+	metadata.ExecPlanDecision = decision
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	return r.persistIssueMetadata(ctx, issue, metadata)
 }
 
 func (r *Runner) persistIssueExecPlan(ctx context.Context, issue domain.Issue, plan domain.ExecPlan) (domain.Issue, error) {

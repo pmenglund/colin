@@ -1161,6 +1161,7 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadata := domain.ColinMetadata{}
 	metadata.AttachmentID, _ = stringValue(node["id"])
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
+	metadata.ExecPlanDecision, _ = stringValue(metadataMap["exec_plan_decision"])
 	metadata.ReviewPublishDirective, _ = stringValue(metadataMap["review_publish_directive"])
 	metadata.LastRunType, _ = stringValue(metadataMap["last_run_type"])
 	metadata.LastOutcome, _ = stringValue(metadataMap["last_outcome"])
@@ -1239,6 +1240,7 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
 		"actual_branch_name":       strings.TrimSpace(metadata.ActualBranchName),
+		"exec_plan_decision":       strings.TrimSpace(metadata.ExecPlanDecision),
 		"review_publish_directive": strings.TrimSpace(metadata.ReviewPublishDirective),
 		"last_run_type":            strings.TrimSpace(metadata.LastRunType),
 		"last_outcome":             strings.TrimSpace(metadata.LastOutcome),
