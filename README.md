@@ -29,6 +29,12 @@ By default Colin is started with:
 go run .
 ```
 
+This uses `--workflow WORKFLOW.md` implicitly. To point Colin at a different workflow file, pass the shared `--workflow` flag:
+
+```bash
+go run . --workflow /path/to/WORKFLOW.md
+```
+
 By default Colin prints a single startup line with both the local dashboard URL and the local Funnel setup page, for example `Colin is running. Web UI: http://127.0.0.1:8888 Setup: http://127.0.0.1:8888/setup/funnel`.
 
 To keep the previous structured log stream on the terminal, pass `--verbose`:
@@ -47,18 +53,18 @@ go run . --port 9999
 
 If Colin is exposed through a reverse proxy or any non-loopback address, set `server.public_url` in `WORKFLOW.md` so the `Colin metadata` attachment in Linear points at the externally reachable web UI address instead of the local loopback bind.
 
-Before configuring incoming Linear or GitHub webhooks, use Colin's Funnel readiness flow to make sure the service is publicly reachable:
+Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the service is publicly reachable:
 
 ```bash
-go run . setup funnel
+go run . setup tailscale
 ```
 
-That command checks Tailscale, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
+That command checks Tailscale, explains that Colin uses Tailscale Funnel for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
 
-You can also point it at a specific workflow file:
+Because `--workflow` is a persistent root flag, the same override also applies to setup commands:
 
 ```bash
-go run . /path/to/WORKFLOW.md
+go run . --workflow /path/to/WORKFLOW.md setup tailscale
 ```
 
 ## How Colin Works
@@ -249,10 +255,16 @@ Colin now includes a dedicated readiness flow for the public ingress you need be
 Use either:
 
 ```bash
-go run . setup funnel
+go run . setup tailscale
 ```
 
 or the browser page at `/setup/funnel` once Colin is running.
+
+To inspect readiness against a non-default workflow file, use:
+
+```bash
+go run . --workflow /path/to/WORKFLOW.md setup tailscale
+```
 
 The readiness flow checks:
 
