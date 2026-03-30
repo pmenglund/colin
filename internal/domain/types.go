@@ -236,16 +236,23 @@ type Totals struct {
 	SecondsRunning float64 `json:"seconds_running"`
 }
 
+// PausedStateSummary captures paused issue count and investigation URL for one Linear state.
+type PausedStateSummary struct {
+	Count int    `json:"count"`
+	URL   string `json:"url,omitempty"`
+}
+
 // Snapshot is a read-only summary of orchestrator state for observability.
 type Snapshot struct {
-	GeneratedAt time.Time           `json:"generated_at"`
-	Running     []SnapshotRunning   `json:"running"`
-	Retrying    []RetryEntry        `json:"retrying"`
-	CodexTotals Totals              `json:"codex_totals"`
-	RateLimits  map[string]any      `json:"rate_limits"`
-	Counts      map[string]int      `json:"counts"`
-	IssueStates map[string]int      `json:"issue_states"`
-	Tracked     map[string]struct{} `json:"-"`
+	GeneratedAt       time.Time                     `json:"generated_at"`
+	Running           []SnapshotRunning             `json:"running"`
+	Retrying          []RetryEntry                  `json:"retrying"`
+	CodexTotals       Totals                        `json:"codex_totals"`
+	RateLimits        map[string]any                `json:"rate_limits"`
+	Counts            map[string]int                `json:"counts"`
+	IssueStates       map[string]int                `json:"issue_states"`
+	PausedIssueStates map[string]PausedStateSummary `json:"paused_issue_states,omitempty"`
+	Tracked           map[string]struct{}           `json:"-"`
 }
 
 // SnapshotRunning is the per-running-issue row included in a Snapshot.

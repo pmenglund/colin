@@ -191,6 +191,105 @@ func TestShouldDispatchRejectsPausedLabel(t *testing.T) {
 	}
 }
 
+func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{
+			{ID: "1", Identifier: "COLIN-1", Title: "Ready", State: "Todo"},
+			{
+				ID:         "2",
+				Identifier: "COLIN-2",
+				Title:      "Waiting on review",
+				State:      "Review",
+				Labels:     []string{domain.PausedIssueLabel},
+				URL:        stringPtr("https://linear.app/example/issue/COLIN-2/waiting-on-review"),
+			},
+			{
+				ID:         "3",
+				Identifier: "COLIN-3",
+				Title:      "Needs human follow-up",
+				State:      "Review",
+				Labels:     []string{domain.PausedIssueLabel},
+				URL:        stringPtr("https://linear.app/example/issue/COLIN-3/needs-human-follow-up"),
+			},
+			{ID: "4", Identifier: "COLIN-4", Title: "Shipping", State: "Merge"},
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Tracker: tracker, Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo", "Review", "Merge"},
+				TerminalStates: []string{"Done"},
+			},
+		}},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.refreshIssueStateCounts(context.Background())
+
+	if got := orch.issueStates["Review"]; got != 2 {
+		t.Fatalf("Review count = %d, want 2", got)
+	}
+	if got := orch.issueStates["Todo"]; got != 1 {
+		t.Fatalf("Todo count = %d, want 1", got)
+	}
+	summary, ok := orch.pausedIssueStates["Review"]
+	if !ok {
+		t.Fatal("paused review summary missing")
+	}
+	if summary.Count != 2 {
+		t.Fatalf("Review paused count = %d, want 2", summary.Count)
+	}
+	if summary.URL != "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22" {
+		t.Fatalf("Review paused url = %q", summary.URL)
+	}
+	if _, ok := orch.pausedIssueStates["Todo"]; ok {
+		t.Fatalf("unexpected paused summary for Todo: %+v", orch.pausedIssueStates["Todo"])
+	}
+}
+
+func TestSnapshotClonesPausedIssueStates(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{Tracker: &trackerStub{}},
+		pausedIssueStates: map[string]domain.PausedStateSummary{
+			"Review": {
+				Count: 1,
+				URL:   "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+			},
+		},
+		issueStates: map[string]int{"Review": 2},
+	}
+
+	snapshot := orch.snapshotAt(time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC))
+	snapshot.PausedIssueStates["Review"] = domain.PausedStateSummary{Count: 99, URL: "https://example.invalid"}
+
+	if got := orch.pausedIssueStates["Review"].Count; got != 1 {
+		t.Fatalf("orchestrator paused count = %d, want 1", got)
+	}
+	if got := orch.pausedIssueStates["Review"].URL; got != "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22" {
+		t.Fatalf("orchestrator paused url = %q", got)
+	}
+}
+
+func TestBuildPausedIssueSearchURL(t *testing.T) {
+	t.Parallel()
+
+	got := buildPausedIssueSearchURL("https://linear.app/example/issue/COLIN-2/waiting-on-review", "Review")
+	want := "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22"
+	if got != want {
+		t.Fatalf("buildPausedIssueSearchURL() = %q, want %q", got, want)
+	}
+
+	if got := buildPausedIssueSearchURL("not a url", "Review"); got != "" {
+		t.Fatalf("buildPausedIssueSearchURL() malformed = %q, want empty", got)
+	}
+}
+
 func TestHandleWorkerExitSchedulesContinuationRetry(t *testing.T) {
 	t.Parallel()
 
@@ -958,4 +1057,8 @@ func TestAppendOutputSkipsAdjacentTerminalDuplicateMessage(t *testing.T) {
 	if got := entry.outputLog[0].Event; got != codex.EventOtherMessage {
 		t.Fatalf("first event = %q, want %q", got, codex.EventOtherMessage)
 	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

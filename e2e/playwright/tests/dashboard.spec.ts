@@ -9,6 +9,11 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   const stateCounts = page.getByTestId("linear-state-counts");
   await expect(stateCounts).toBeVisible();
   await expect(stateCounts.getByText("In Progress")).toBeVisible();
+  await expect(page.getByTestId("paused-issues-review")).toBeVisible();
+  await expect(page.getByTestId("paused-issues-review")).toHaveAttribute(
+    "href",
+    "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+  );
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
 });
 

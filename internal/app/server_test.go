@@ -22,6 +22,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			GeneratedAt: now,
 			Counts:      map[string]int{"running": 1, "retrying": 0},
 			IssueStates: map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
+			PausedIssueStates: map[string]domain.PausedStateSummary{
+				"Review": {
+					Count: 1,
+					URL:   "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+				},
+			},
 			Running: []domain.SnapshotRunning{{
 				IssueID:      "issue-1",
 				Identifier:   "COLIN-93",
@@ -84,6 +90,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="worker-card-COLIN-93"`) {
 			t.Fatalf("missing worker card: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="paused-issues-review"`) {
+			t.Fatalf("missing paused issue indicator: %s", text)
+		}
 	})
 
 	t.Run("fragment", func(t *testing.T) {
@@ -122,6 +131,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if got := snapshot.IssueStates["Review"]; got != 2 {
 			t.Fatalf("review count = %d, want 2", got)
+		}
+		if got := snapshot.PausedIssueStates["Review"].Count; got != 1 {
+			t.Fatalf("review paused count = %d, want 1", got)
+		}
+		if got := snapshot.PausedIssueStates["Review"].URL; got != "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22" {
+			t.Fatalf("review paused url = %q", got)
 		}
 	})
 

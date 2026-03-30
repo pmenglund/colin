@@ -17,6 +17,12 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		GeneratedAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
 		Counts:      map[string]int{"running": 1, "retrying": 1},
 		IssueStates: map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 3, "Merge": 1, "Done": 2},
+		PausedIssueStates: map[string]domain.PausedStateSummary{
+			"Review": {
+				Count: 2,
+				URL:   "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+			},
+		},
 		RateLimits: map[string]any{
 			"primary": map[string]any{
 				"resetsAt":           time.Date(2026, 3, 28, 17, 32, 0, 0, time.UTC).Unix(),
@@ -90,6 +96,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Issue needs human clarification before a PR can be reviewed.`,
 		`Review`,
 		`Issue has a PR and is awaiting human review.`,
+		`data-testid="paused-issues-review"`,
+		`href="https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22"`,
+		`2 paused`,
 		`Merge`,
 		`Issue is approved and waiting to be merged.`,
 		`data-testid="rate-limits-codex"`,
@@ -117,6 +126,21 @@ func TestPageRendersDashboardShell(t *testing.T) {
 
 	if strings.Index(html, "Running tasks") > strings.Index(html, "API snapshot") {
 		t.Fatalf("API snapshot should render after running tasks:\n%s", html)
+	}
+}
+
+func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, stateCountCard("Review", 3, domain.PausedStateSummary{Count: 1}))
+	if !strings.Contains(html, `data-testid="paused-issues-review"`) {
+		t.Fatalf("paused indicator missing test id\n%s", html)
+	}
+	if !strings.Contains(html, `>1 paused</span>`) {
+		t.Fatalf("paused indicator missing label\n%s", html)
+	}
+	if strings.Contains(html, `<a `) {
+		t.Fatalf("paused indicator should not render a link without URL\n%s", html)
 	}
 }
 

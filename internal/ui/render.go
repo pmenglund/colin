@@ -215,7 +215,7 @@ func stateCountsPanel(snapshot domain.Snapshot) g.Node {
 		h.Div(
 			h.Class("state-count-grid"),
 			g.Map(states, func(state string) g.Node {
-				return statCard(state, strconv.Itoa(snapshot.IssueStates[state]), stateDescription(state))
+				return stateCountCard(state, snapshot.IssueStates[state], snapshot.PausedIssueStates[state])
 			}),
 		),
 	)
@@ -247,6 +247,43 @@ func statCard(title, value, desc string) g.Node {
 		h.Div(h.Class("stat-value"), g.Text(value)),
 		h.Div(h.Class("stat-desc"), g.Text(desc)),
 	)
+}
+
+func stateCountCard(state string, total int, paused domain.PausedStateSummary) g.Node {
+	return h.Div(
+		h.Class("stat"),
+		h.Class("state-card"),
+		h.Div(h.Class("stat-title"), g.Text(state)),
+		h.Div(h.Class("stat-value"), g.Text(strconv.Itoa(total))),
+		h.Div(h.Class("stat-desc"), g.Text(stateDescription(state))),
+		pausedIndicator(state, paused),
+	)
+}
+
+func pausedIndicator(state string, paused domain.PausedStateSummary) g.Node {
+	if paused.Count <= 0 {
+		return nil
+	}
+
+	label := fmt.Sprintf("%d paused", paused.Count)
+	testID := "paused-issues-" + stateSlug(state)
+	if strings.TrimSpace(paused.URL) == "" {
+		return h.Span(
+			h.Class("paused-indicator"),
+			h.Data("testid", testID),
+			g.Text(label),
+		)
+	}
+	return h.A(
+		h.Class("paused-indicator"),
+		h.Data("testid", testID),
+		h.Href(paused.URL),
+		g.Text(label),
+	)
+}
+
+func stateSlug(state string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(state), " ", "-"))
 }
 
 func metadataStatCard(title, value string) g.Node {

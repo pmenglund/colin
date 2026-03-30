@@ -30,18 +30,19 @@ type Runner interface {
 
 // Orchestrator owns all mutable scheduling state for issue dispatch, reconciliation, and retries.
 type Orchestrator struct {
-	logger      *slog.Logger
-	eventCh     chan any
-	runtime     Runtime
-	loopStarted atomic.Bool
-	running     map[string]*runningEntry
-	claimed     map[string]struct{}
-	retrying    map[string]*retryState
-	reviewSync  map[string]*reviewSyncState
-	completed   map[string]string
-	totalTokens domain.Totals
-	rateLimits  map[string]any
-	issueStates map[string]int
+	logger            *slog.Logger
+	eventCh           chan any
+	runtime           Runtime
+	loopStarted       atomic.Bool
+	running           map[string]*runningEntry
+	claimed           map[string]struct{}
+	retrying          map[string]*retryState
+	reviewSync        map[string]*reviewSyncState
+	completed         map[string]string
+	totalTokens       domain.Totals
+	rateLimits        map[string]any
+	issueStates       map[string]int
+	pausedIssueStates map[string]domain.PausedStateSummary
 }
 
 type runningEntry struct {
