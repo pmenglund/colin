@@ -116,6 +116,31 @@ func TestMergeReturnsPublishContextWhenGitHubMergeFails(t *testing.T) {
 	}
 }
 
+func TestMergePullRequestMergesPublishedPR(t *testing.T) {
+	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
+	result, err := manager.Publish(context.Background(), issue, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	merged, err := manager.MergePullRequest(context.Background(), workspacePath, result)
+	if err != nil {
+		t.Fatalf("MergePullRequest() error = %v", err)
+	}
+	if merged.Action != "merged" {
+		t.Fatalf("merged.Action = %q, want %q", merged.Action, "merged")
+	}
+
+	log := readFile(t, ghLogPath)
+	if !strings.Contains(log, "pr merge 1 --merge") {
+		t.Fatalf("gh log = %q, want merge invocation", log)
+	}
+}
+
 func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	workspacePath, _, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
@@ -618,6 +643,14 @@ PY
     if [ -n "${COLIN_FAKE_GH_MERGE_ERROR:-}" ]; then
       printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR" >&2
       exit 1
+    fi
+    if [ -n "${COLIN_FAKE_GH_MERGE_ERROR_ONCE:-}" ]; then
+      once_file="${COLIN_FAKE_GH_STATE}.merge-once"
+      if [ ! -f "$once_file" ]; then
+        : >"$once_file"
+        printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR_ONCE" >&2
+        exit 1
+      fi
     fi
     python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
 import json, sys

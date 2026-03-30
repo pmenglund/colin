@@ -149,6 +149,11 @@ func (m *Manager) Merge(ctx context.Context, issue domain.Issue, workspacePath s
 	if err != nil {
 		return Result{}, err
 	}
+	return m.MergePullRequest(ctx, workspacePath, result)
+}
+
+// MergePullRequest merges the pull request described by a prior publish result.
+func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, result Result) (Result, error) {
 	if strings.EqualFold(result.PRState, "MERGED") {
 		result.Action = "already_merged"
 		return result, nil

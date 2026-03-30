@@ -229,7 +229,7 @@ func shouldCaptureTurnText(eventName, summary string) bool {
 
 func isExplicitOutcomeSummary(summary string) bool {
 	firstLine := strings.TrimSpace(strings.Split(strings.TrimSpace(summary), "\n")[0])
-	return firstLine == outcomeReadyForReview || firstLine == outcomeNeedsSpec
+	return firstLine == outcomeReadyForReview || firstLine == outcomeNeedsSpec || firstLine == outcomeReadyForMergeRetry
 }
 
 func (c *appServerClient) stop() {

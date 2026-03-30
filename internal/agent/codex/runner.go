@@ -29,6 +29,7 @@ type Runner struct {
 
 const (
 	outcomeReadyForReview        = "COLIN_OUTCOME: READY_FOR_REVIEW"
+	outcomeReadyForMergeRetry    = "COLIN_OUTCOME: READY_FOR_MERGE_RETRY"
 	outcomeNeedsSpec             = "COLIN_OUTCOME: NEEDS_SPEC"
 	execPlanDecisionOneShotLine  = "COLIN_EXECPLAN_DECISION: ONE_SHOT"
 	execPlanDecisionExecPlanLine = "COLIN_EXECPLAN_DECISION: EXEC_PLAN"
@@ -210,58 +211,11 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		result, err := r.repo.Merge(ctx, issue, ws.Path)
 		if err != nil {
 			if isHumanMergeFailure(err) {
-				return r.handleMergeFailure(ctx, issue, ws.Path, result, err)
+				return r.handleRecoverableMergeFailure(ctx, issue, ws.Path, emit, result, err)
 			}
 			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 		}
-		r.logger.Info(
-			"merge automation completed",
-			"issue_id", issue.ID,
-			"issue_identifier", issue.Identifier,
-			"workspace_path", ws.Path,
-			"branch", result.Branch,
-			"base_ref", result.BaseRef,
-			"pr_number", result.PRNumber,
-			"pr_url", result.PRURL,
-			"pr_state", result.PRState,
-			"action", result.Action,
-		)
-		emit(Event{
-			Event:     EventMergeDone,
-			Timestamp: time.Now().UTC(),
-			Workspace: ws.Path,
-			State:     issue.State,
-			Message:   "Merge automation completed",
-			Branch:    result.Branch,
-			BaseRef:   result.BaseRef,
-			PRNumber:  result.PRNumber,
-			PRURL:     result.PRURL,
-			PRState:   result.PRState,
-			Action:    result.Action,
-		})
-		issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
-		issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
-		issue.PullRequest = &domain.PullRequestRef{
-			Number:  result.PRNumber,
-			URL:     result.PRURL,
-			State:   result.PRState,
-			HeadRef: result.PRHeadRef,
-			BaseRef: result.PRBaseRef,
-		}
-		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadataWithResult(issue, runType, metadataOutcomeMerged, "", result))
-		return Result{
-			Issue:         issue,
-			RunType:       runType,
-			WorkspacePath: ws.Path,
-			Status:        "succeeded",
-			PR: &domain.PullRequestRef{
-				Number:  result.PRNumber,
-				URL:     result.PRURL,
-				State:   result.PRState,
-				HeadRef: result.PRHeadRef,
-				BaseRef: result.PRBaseRef,
-			},
-		}
+		return r.buildMergedResult(ctx, issue, ws.Path, result, emit)
 	}
 
 	if err := client.start(ctx, ws.Path); err != nil {
@@ -560,6 +514,265 @@ func (r *Runner) handleMergeFailure(ctx context.Context, issue domain.Issue, wor
 			Number: result.PRNumber,
 			URL:    result.PRURL,
 			State:  result.PRState,
+		},
+	}
+}
+
+func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain.Issue, workspacePath string, emit func(Event), result repoops.Result, mergeErr error) Result {
+	r.logger.Info(
+		"merge conflict detected; starting codex merge recovery",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+		"branch", result.Branch,
+		"base_ref", result.BaseRef,
+		"pr_number", result.PRNumber,
+		"error", mergeErr,
+	)
+	emit(Event{
+		Event:     EventNotification,
+		Timestamp: time.Now().UTC(),
+		Workspace: workspacePath,
+		State:     issue.State,
+		Message:   "Merge conflict detected; asking Codex to repair the branch before retrying merge.",
+	})
+
+	client := &appServerClient{
+		cfg:       r.cfg,
+		logger:    r.logger,
+		onEvent:   emit,
+		issue:     issue,
+		workspace: workspacePath,
+		runType:   RunTypeMerge,
+	}
+	if err := client.start(ctx, workspacePath); err != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	r.logger.Info(
+		"codex session ready for merge recovery",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+		"thread_id", client.threadID,
+	)
+	defer client.stop()
+
+	recoverySummary, ready, err := r.runMergeRecoveryTurns(ctx, client, issue, workspacePath, result, mergeErr, emit)
+	if err != nil {
+		if shouldHandoffMergeRecoveryError(err) {
+			return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, result, mergeErr, err.Error(), client.lastOutput())
+		}
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	if !ready {
+		return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, result, mergeErr, "Codex did not finish the merge-conflict repair within the configured turn limit.", client.lastOutput())
+	}
+
+	published, err := r.repo.Publish(ctx, issue, workspacePath)
+	if err != nil {
+		if isHumanMergeFailure(err) {
+			return r.handleMergeFailure(ctx, issue, workspacePath, published, err)
+		}
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, published.Branch)
+	issue.PullRequest = &domain.PullRequestRef{
+		Number:  published.PRNumber,
+		URL:     published.PRURL,
+		State:   published.PRState,
+		HeadRef: published.PRHeadRef,
+		BaseRef: published.PRBaseRef,
+	}
+
+	reviewContext, err := r.repo.ReviewContext(ctx, issue, workspacePath)
+	if err != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	current, _, blocked, err := r.blockMergeForCodexReview(ctx, issue, reviewContext)
+	if err != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	if blocked {
+		return Result{
+			Issue:         current,
+			RunType:       RunTypeMerge,
+			WorkspacePath: workspacePath,
+			Status:        "succeeded",
+			Summary:       buildMergeRecoveryReviewBlockedSummary(recoverySummary, reviewContext),
+			PR:            pullRequestRef(reviewContext.PullRequest),
+		}
+	}
+
+	r.logger.Info(
+		"merge conflict repaired; retrying merge",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+		"branch", published.Branch,
+		"base_ref", published.BaseRef,
+		"pr_number", published.PRNumber,
+	)
+	emit(Event{
+		Event:     EventNotification,
+		Timestamp: time.Now().UTC(),
+		Workspace: workspacePath,
+		State:     issue.State,
+		Message:   "Merge conflict repaired; retrying merge.",
+	})
+
+	merged, err := r.repo.MergePullRequest(ctx, workspacePath, published)
+	if err != nil {
+		if isHumanMergeFailure(err) {
+			return r.handleMergeFailure(ctx, issue, workspacePath, merged, err)
+		}
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	return r.buildMergedResult(ctx, issue, workspacePath, merged, emit)
+}
+
+func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *appServerClient, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, emit func(Event)) (string, bool, error) {
+	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
+		prompt := buildMergeRecoveryPrompt(issue, result, mergeErr)
+		if turn > 1 {
+			prompt = buildMergeRecoveryContinuationPrompt(issue, result)
+		}
+		r.logger.Info(
+			"merge recovery turn starting",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"workspace_path", workspacePath,
+			"turn", turn,
+			"max_turns", r.cfg.Agent.MaxTurns,
+			"continuation", turn > 1,
+		)
+		startedAt := time.Now()
+		if err := client.runTurn(ctx, workspacePath, issue, prompt); err != nil {
+			duration := time.Since(startedAt).Round(time.Millisecond)
+			r.logger.Warn(
+				"merge recovery turn failed",
+				"issue_id", issue.ID,
+				"issue_identifier", issue.Identifier,
+				"workspace_path", workspacePath,
+				"turn", turn,
+				"duration", duration.String(),
+				"error", err,
+			)
+			emit(Event{
+				Event:     EventRunFailed,
+				Timestamp: time.Now().UTC(),
+				Workspace: workspacePath,
+				State:     issue.State,
+				Duration:  duration,
+				Message:   err.Error(),
+			})
+			return "", false, err
+		}
+
+		duration := time.Since(startedAt).Round(time.Millisecond)
+		r.logger.Info(
+			"merge recovery turn completed",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"workspace_path", workspacePath,
+			"turn", turn,
+			"duration", duration.String(),
+		)
+		emit(Event{
+			Event:     EventIssueStateRefreshed,
+			Timestamp: time.Now().UTC(),
+			Workspace: workspacePath,
+			State:     issue.State,
+			PrevState: issue.State,
+			Duration:  duration,
+			Message:   fmt.Sprintf("Merge recovery turn %d completed; issue state is still %s", turn, issue.State),
+		})
+
+		if outcome, summary := parseMergeRecoverySummaryOutcome(client.finalSummary()); outcome == outcomeReadyForMergeRetry {
+			return summary, true, nil
+		}
+		if turn < r.cfg.Agent.MaxTurns {
+			emit(Event{
+				Event:     EventContinuationNeeded,
+				Timestamp: time.Now().UTC(),
+				Workspace: workspacePath,
+				State:     issue.State,
+				Message:   fmt.Sprintf("Merge recovery is still in progress in %s; continuing in the same run", issue.State),
+			})
+		}
+	}
+	return strings.TrimSpace(client.lastOutput()), false, nil
+}
+
+func (r *Runner) handleMergeRecoveryFailure(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, reason string, recoveryOutput string) Result {
+	reviewState := mergeReviewState(r.cfg)
+	updated, updateErr := r.moveIssueToState(ctx, issue, reviewState)
+	if updateErr != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
+	}
+	updated = r.persistActualBranchNameValueBestEffort(ctx, updated, result.Branch)
+	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeMerge, metadataOutcomeReady, ""))
+
+	return Result{
+		Issue:         updated,
+		RunType:       RunTypeMerge,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		Summary:       buildMergeRecoveryFailureSummary(result, reviewState, mergeErr, reason, recoveryOutput),
+		PR: &domain.PullRequestRef{
+			Number: result.PRNumber,
+			URL:    result.PRURL,
+			State:  result.PRState,
+		},
+	}
+}
+
+func (r *Runner) buildMergedResult(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, emit func(Event)) Result {
+	r.logger.Info(
+		"merge automation completed",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+		"branch", result.Branch,
+		"base_ref", result.BaseRef,
+		"pr_number", result.PRNumber,
+		"pr_url", result.PRURL,
+		"pr_state", result.PRState,
+		"action", result.Action,
+	)
+	emit(Event{
+		Event:     EventMergeDone,
+		Timestamp: time.Now().UTC(),
+		Workspace: workspacePath,
+		State:     issue.State,
+		Message:   "Merge automation completed",
+		Branch:    result.Branch,
+		BaseRef:   result.BaseRef,
+		PRNumber:  result.PRNumber,
+		PRURL:     result.PRURL,
+		PRState:   result.PRState,
+		Action:    result.Action,
+	})
+	issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
+	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
+	issue.PullRequest = &domain.PullRequestRef{
+		Number:  result.PRNumber,
+		URL:     result.PRURL,
+		State:   result.PRState,
+		HeadRef: result.PRHeadRef,
+		BaseRef: result.PRBaseRef,
+	}
+	issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadataWithResult(issue, RunTypeMerge, metadataOutcomeMerged, "", result))
+	return Result{
+		Issue:         issue,
+		RunType:       RunTypeMerge,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		PR: &domain.PullRequestRef{
+			Number:  result.PRNumber,
+			URL:     result.PRURL,
+			State:   result.PRState,
+			HeadRef: result.PRHeadRef,
+			BaseRef: result.PRBaseRef,
 		},
 	}
 }
@@ -965,6 +1178,22 @@ func parseCodingSummaryOutcome(summary string) (string, string) {
 	}
 }
 
+func parseMergeRecoverySummaryOutcome(summary string) (string, string) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "", ""
+	}
+
+	lines := strings.Split(summary, "\n")
+	first := strings.TrimSpace(lines[0])
+	switch first {
+	case outcomeReadyForMergeRetry:
+		return outcomeReadyForMergeRetry, strings.TrimSpace(strings.Join(lines[1:], "\n"))
+	default:
+		return "", summary
+	}
+}
+
 func codingOutcome(handoffOutcome string, maxTurnsReached bool) string {
 	if maxTurnsReached {
 		return metadataOutcomeMax
@@ -997,6 +1226,10 @@ func appendMaxTurnsSummary(summary string, state string, maxTurns int) string {
 		return note
 	}
 	return summary + "\n\n" + note
+}
+
+func shouldHandoffMergeRecoveryError(err error) bool {
+	return errors.Is(err, ErrTurnTimeout) || errors.Is(err, ErrTurnFailed) || errors.Is(err, ErrTurnInputNeeded)
 }
 
 func isHumanMergeFailure(err error) bool {
@@ -1033,6 +1266,108 @@ func buildMergeFailureSummary(result repoops.Result, reviewState string, err err
 	} else {
 		lines = append(lines, "- What to do: resolve the merge issue on the PR branch, push the updated branch, then move the issue back to `Merge`.")
 	}
+	return strings.Join(lines, "\n")
+}
+
+func buildMergeRecoveryPrompt(issue domain.Issue, result repoops.Result, mergeErr error) string {
+	var b strings.Builder
+	b.WriteString("Repair the merge conflict for the Linear issue below so Colin can retry the GitHub merge.\n\n")
+	b.WriteString("You are working in the issue branch workspace that GitHub reported as not mergeable.\n")
+	b.WriteString("Fetch the base branch, merge it into the current branch, resolve any conflicts without dropping valid changes from either side, run focused verification, and leave the branch ready for Colin to publish and retry the merge.\n\n")
+	b.WriteString("Return a short answer.\n")
+	b.WriteString("The first line must be exactly:\n")
+	b.WriteString(outcomeReadyForMergeRetry + "\n\n")
+	b.WriteString("Only return that line when the branch is ready for Colin to retry the merge.\n")
+	b.WriteString("After the first line, include a brief 1-3 sentence summary of what you resolved and any verification you ran.\n\n")
+	b.WriteString("Issue context:\n")
+	b.WriteString(fmt.Sprintf("- Identifier: %s\n", issue.Identifier))
+	b.WriteString(fmt.Sprintf("- Title: %s\n", issue.Title))
+	b.WriteString(fmt.Sprintf("- State: %s\n", issue.State))
+	if result.PRNumber > 0 {
+		b.WriteString(fmt.Sprintf("- PR: #%d\n", result.PRNumber))
+	}
+	if strings.TrimSpace(result.PRURL) != "" {
+		b.WriteString(fmt.Sprintf("- PR URL: %s\n", result.PRURL))
+	}
+	if strings.TrimSpace(result.Branch) != "" {
+		b.WriteString(fmt.Sprintf("- Branch: %s\n", result.Branch))
+	}
+	if strings.TrimSpace(result.BaseRef) != "" {
+		b.WriteString(fmt.Sprintf("- Base ref: %s\n", result.BaseRef))
+	}
+	if mergeErr != nil {
+		b.WriteString("\nOriginal merge error:\n\n")
+		b.WriteString(strings.TrimSpace(mergeErr.Error()))
+		b.WriteString("\n")
+	}
+	b.WriteString("\nRequirements:\n")
+	b.WriteString("- Merge the latest base branch into the current branch inside this workspace.\n")
+	b.WriteString("- Resolve conflicts fully; do not leave conflict markers or an unfinished merge.\n")
+	b.WriteString("- Preserve both the branch changes and the relevant base-branch updates.\n")
+	b.WriteString("- Run the most relevant focused checks for the conflicted files.\n")
+	b.WriteString("- Do not move the Linear issue or open/close PRs yourself; Colin will handle publish and merge retry after your turn.\n")
+	return strings.TrimSpace(b.String())
+}
+
+func buildMergeRecoveryContinuationPrompt(issue domain.Issue, result repoops.Result) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Continue resolving the merge conflict for %s.", issue.Identifier))
+	if strings.TrimSpace(result.BaseRef) != "" {
+		b.WriteString(fmt.Sprintf(" The goal is to leave the current branch ready to merge %s.", result.BaseRef))
+	}
+	b.WriteString("\n\nReturn `")
+	b.WriteString(outcomeReadyForMergeRetry)
+	b.WriteString("` only when the branch is fully ready for Colin to retry the merge.")
+	return strings.TrimSpace(b.String())
+}
+
+func buildMergeRecoveryFailureSummary(result repoops.Result, reviewState string, mergeErr error, reason string, recoveryOutput string) string {
+	lines := []string{
+		fmt.Sprintf("Colin hit a merge conflict, tried to repair it automatically, and then moved the issue back to `%s`.", reviewState),
+	}
+	if result.PRNumber > 0 {
+		lines = append(lines, fmt.Sprintf("- PR: `#%d`", result.PRNumber))
+	}
+	if strings.TrimSpace(result.PRURL) != "" {
+		lines = append(lines, fmt.Sprintf("- PR URL: %s", result.PRURL))
+	}
+	if strings.TrimSpace(result.Branch) != "" {
+		lines = append(lines, fmt.Sprintf("- Branch: `%s`", result.Branch))
+	}
+	if mergeErr != nil {
+		lines = append(lines, fmt.Sprintf("- Original merge error: %s", strings.TrimSpace(mergeErr.Error())))
+	}
+	if strings.TrimSpace(reason) != "" {
+		lines = append(lines, fmt.Sprintf("- Recovery blocker: %s", strings.TrimSpace(reason)))
+	}
+	if strings.TrimSpace(recoveryOutput) != "" {
+		lines = append(lines, "", "Codex recovery output:", "", strings.TrimSpace(recoveryOutput))
+	}
+	if result.PRNumber > 0 && strings.TrimSpace(result.BaseRef) != "" {
+		lines = append(lines, "", fmt.Sprintf("- What to do: check out the PR branch, merge `%s`, resolve any conflicts, push the updated branch, then move the issue back to `Merge`.", result.BaseRef))
+		lines = append(lines, fmt.Sprintf("- Suggested command: `gh pr checkout %d && git fetch origin %s && git merge origin/%s`", result.PRNumber, result.BaseRef, result.BaseRef))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildMergeRecoveryReviewBlockedSummary(recoverySummary string, reviewContext repoops.ReviewContext) string {
+	lines := []string{"Colin repaired the merge conflict, but the updated PR still needs Codex review before it can be merged."}
+	if reviewContext.PullRequest.Number > 0 {
+		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
+	}
+	if strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
+		lines = append(lines, fmt.Sprintf("- PR URL: %s", reviewContext.PullRequest.URL))
+	}
+	if strings.TrimSpace(recoverySummary) != "" {
+		lines = append(lines, "", "Codex repair summary:", "", strings.TrimSpace(recoverySummary))
+	}
+	if codexReviewApprovalPending(reviewContext) {
+		lines = append(lines, "", "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
+	}
+	if count := len(reviewContext.CodexReviewThreads); count > 0 {
+		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", count))
+	}
+	lines = append(lines, "- Resolve the remaining Codex PR feedback, then move the issue back to `Merge`.")
 	return strings.Join(lines, "\n")
 }
 

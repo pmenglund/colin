@@ -135,8 +135,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	if event.result.Status == "blocked" {
 		event.result.Issue = o.clearLoopState(ctx, event.result.Issue)
 		if strings.TrimSpace(event.result.Summary) != "" {
-			commentID := o.postReply(ctx, entry, event.result.Summary)
-			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
+			event.result.Issue = o.postRunSummary(ctx, entry, event.result.Issue, event.result.Summary)
 		}
 		o.logger.Info(
 			"worker completed but review follow-up is incomplete; keeping issue in todo",
@@ -153,12 +152,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	if event.result.Status == "succeeded" {
 		event.result.Issue = o.clearLoopState(ctx, event.result.Issue)
 		if shouldPostSummaryForSucceededRun(o, event.result) {
-			commentID := o.postReply(ctx, entry, event.result.Summary)
-			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
-		}
-		if (event.result.RunType == codex.RunTypeReviewPublish || event.result.RunType == codex.RunTypeMerge) && strings.TrimSpace(event.result.Summary) != "" {
-			commentID := o.postReply(ctx, entry, event.result.Summary)
-			event.result.Issue = o.persistSummaryCommentMetadata(ctx, event.result.Issue, commentID)
+			event.result.Issue = o.postRunSummary(ctx, entry, event.result.Issue, event.result.Summary)
 		}
 		if event.result.RunType == codex.RunTypeCoding && !o.isActive(event.result.Issue.State) && !o.isPublishState(event.result.Issue.State) && !o.isMergeState(event.result.Issue.State) {
 			o.completed[event.issueID] = event.result.Issue.State
@@ -272,11 +266,20 @@ func shouldPostSummaryForSucceededRun(o *Orchestrator, result codex.Result) bool
 	switch result.RunType {
 	case codex.RunTypeCoding:
 		return !o.isActive(result.Issue.State)
-	case codex.RunTypeMerge:
+	case codex.RunTypeReviewPublish, codex.RunTypeMerge:
 		return true
 	default:
 		return false
 	}
+}
+
+func (o *Orchestrator) postRunSummary(ctx context.Context, entry *runningEntry, issue domain.Issue, summary string) domain.Issue {
+	if strings.TrimSpace(summary) == "" || entry == nil {
+		return issue
+	}
+	comment, commentID := o.postIssueStatusDetailed(ctx, issue, entry.identifier, entry.comment, summary)
+	entry.comment = comment
+	return o.persistSummaryCommentMetadata(ctx, issue, commentID)
 }
 
 func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration, comment *commentThreadState, notifyLinear bool) {

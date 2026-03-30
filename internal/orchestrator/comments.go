@@ -89,8 +89,13 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 }
 
 func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) *commentThreadState {
+	comment, _ = o.postIssueStatusDetailed(ctx, issue, identifier, comment, body)
+	return comment
+}
+
+func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) (*commentThreadState, string) {
 	if o.runtime.Tracker == nil || strings.TrimSpace(body) == "" {
-		return comment
+		return comment, ""
 	}
 	if comment == nil {
 		comment = &commentThreadState{RunType: codex.RunTypeCoding}
@@ -108,13 +113,13 @@ func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, 
 				"issue_identifier", identifier,
 				"error", err,
 			)
-			return comment
+			return comment, ""
 		}
 		comment.RootCommentID = commentID
-		return comment
+		return comment, commentID
 	}
 
-	_, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
+	commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
 		return o.runtime.Tracker.CreateCommentReply(ctx, issue.ID, comment.RootCommentID, body)
 	})
 	if err != nil {
@@ -125,8 +130,9 @@ func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, 
 			"comment_id", comment.RootCommentID,
 			"error", err,
 		)
+		return comment, ""
 	}
-	return comment
+	return comment, commentID
 }
 
 func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.Context) (string, error)) (string, error) {
