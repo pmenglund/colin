@@ -29,7 +29,7 @@ func TestResolveMissingBinary(t *testing.T) {
 	if status.Ready {
 		t.Fatal("Resolve() reported ready without tailscale")
 	}
-	if status.SuggestedCommand != "tailscale funnel --bg --https=443 8888" {
+	if status.SuggestedCommand != "tailscale funnel --bg --https=443 --set-path=/webhooks 8888" {
 		t.Fatalf("SuggestedCommand = %q", status.SuggestedCommand)
 	}
 	if got := status.Checks[0].ID; got != "tailscale_cli" {
@@ -78,7 +78,7 @@ func TestResolveDetectsMatchingFunnel(t *testing.T) {
 					"Web": map[string]any{
 						"colin.tail.example.ts.net:443": map[string]any{
 							"Handlers": map[string]any{
-								"/": map[string]any{
+								"/webhooks": map[string]any{
 									"Proxy": "http://127.0.0.1:" + itoa(localPort),
 								},
 							},
@@ -100,9 +100,9 @@ func TestResolveDetectsMatchingFunnel(t *testing.T) {
 	}
 
 	status := inspector.Check(context.Background(), Options{
-		LocalPort:         intPtr(localPort),
-		LocalDashboardURL: local.URL,
-		ExplicitPublicURL: public.URL,
+		LocalPort:                intPtr(localPort),
+		LocalDashboardURL:        local.URL,
+		ExplicitWebhookPublicURL: public.URL,
 	})
 	if !status.Ready {
 		t.Fatalf("Check() Ready = false, checks = %#v", status.Checks)
@@ -118,7 +118,7 @@ func TestResolveDetectsMatchingFunnel(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsNonRootMount(t *testing.T) {
+func TestResolveRejectsNonWebhookMount(t *testing.T) {
 	t.Parallel()
 
 	inspector := &Inspector{
@@ -137,7 +137,7 @@ func TestResolveRejectsNonRootMount(t *testing.T) {
 					"Web": map[string]any{
 						"colin.tail.example.ts.net:443": map[string]any{
 							"Handlers": map[string]any{
-								"/colin": map[string]any{
+								"/": map[string]any{
 									"Proxy": "http://127.0.0.1:8888",
 								},
 							},
@@ -161,13 +161,13 @@ func TestResolveRejectsNonRootMount(t *testing.T) {
 		LocalPort: intPtr(8888),
 	})
 	if status.Ready {
-		t.Fatal("Resolve() reported ready for non-root funnel mount")
+		t.Fatal("Resolve() reported ready for non-webhook funnel mount")
 	}
 	last := status.Checks[len(status.Checks)-1]
 	if last.ID != "funnel_route" {
 		t.Fatalf("last check id = %q, want funnel_route", last.ID)
 	}
-	if !strings.Contains(last.Detail, "root `/`") {
+	if !strings.Contains(last.Detail, "/webhooks") {
 		t.Fatalf("funnel detail = %q", last.Detail)
 	}
 }
@@ -191,7 +191,7 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 					"Web": map[string]any{
 						"colin.tail.example.ts.net:8443": map[string]any{
 							"Handlers": map[string]any{
-								"/": map[string]any{
+								"/webhooks": map[string]any{
 									"Proxy": "http://127.0.0.1:8888",
 								},
 							},

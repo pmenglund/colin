@@ -278,7 +278,7 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		PublicBaseURL:    "https://colin.tail.example.ts.net",
 		LinearWebhookURL: "https://colin.tail.example.ts.net/webhooks/linear",
 		GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
-		SuggestedCommand: "tailscale funnel --bg --https=443 8888",
+		SuggestedCommand: "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
 		Checks: []domain.SetupCheck{
 			{
 				ID:        "tailscale_cli",
@@ -295,7 +295,7 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		`data-testid="funnel-checks"`,
 		`Ready for webhooks`,
 		`https://colin.tail.example.ts.net/webhooks/github`,
-		`tailscale funnel --bg --https=443 8888`,
+		`tailscale funnel --bg --https=443 --set-path=/webhooks 8888`,
 		`data-testid="funnel-check-tailscale_cli"`,
 	} {
 		if !strings.Contains(html, want) {

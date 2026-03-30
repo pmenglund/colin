@@ -174,7 +174,7 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
-	mux.HandleFunc("/webhooks/readyz", func(w http.ResponseWriter, r *http.Request) {
+	readyzHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
@@ -187,9 +187,13 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-	})
+	}
+	mux.HandleFunc("/webhooks/readyz", readyzHandler)
+	mux.HandleFunc("/readyz", readyzHandler)
 	mux.HandleFunc("/webhooks/linear", reservedWebhookHandler)
+	mux.HandleFunc("/linear", reservedWebhookHandler)
 	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
+	mux.HandleFunc("/github", reservedWebhookHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -426,10 +430,9 @@ func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupSta
 		LocalSetupURL:     "http://127.0.0.1:8888/setup/funnel",
 		LocalReadyURL:     "http://127.0.0.1:8888/webhooks/readyz",
 		PublicBaseURL:     baseURL,
-		PublicSetupURL:    baseURL + "/setup/funnel",
 		PublicReadyURL:    baseURL + "/webhooks/readyz",
 		DetectedFunnelURL: baseURL,
-		SuggestedCommand:  "tailscale funnel --bg --https=443 8888",
+		SuggestedCommand:  "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
 		LinearWebhookURL:  baseURL + "/webhooks/linear",
 		GitHubWebhookURL:  baseURL + "/webhooks/github",
 		Checks: []domain.SetupCheck{
@@ -442,9 +445,9 @@ func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupSta
 			},
 			{
 				ID:        "funnel_route",
-				Label:     "Funnel proxies Colin at `/`",
+				Label:     "Funnel proxies Colin at `/webhooks`",
 				Status:    "ok",
-				Detail:    "Detected `https://colin-demo.tail.example.ts.net` proxying Colin from `/`.",
+				Detail:    "Detected `https://colin-demo.tail.example.ts.net` proxying Colin from `/webhooks`.",
 				CheckedAt: now,
 			},
 		},

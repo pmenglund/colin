@@ -51,15 +51,15 @@ To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pas
 go run . --port 9999
 ```
 
-If Colin is exposed through a reverse proxy or any non-loopback address, set `server.public_url` in `WORKFLOW.md` so the `Colin metadata` attachment in Linear points at the externally reachable web UI address instead of the local loopback bind.
+If operators need explicit URLs instead of Colin's defaults, set `server.webhook_public_url` for externally reachable webhook URLs and `server.ui_url` for operator-facing dashboard or metadata links. `server.public_url` remains as a deprecated fallback for the webhook public URL.
 
-Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the service is publicly reachable:
+Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the webhook endpoints are publicly reachable:
 
 ```bash
 go run . setup tailscale
 ```
 
-That command checks Tailscale, explains that Colin uses Tailscale Funnel for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
+That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
 
 Because `--workflow` is a persistent root flag, the same override also applies to setup commands:
 
@@ -221,7 +221,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - base publish and merge automation on branch `symphony`
 - decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
-- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.public_url` is set for an external address
+- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set for an alternate operator-facing address
 - keep the last `1000` internal log lines in memory by default, configurable with `server.log_buffer_lines`
 
 ## Operational Notes
@@ -236,7 +236,8 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
-- When `server.public_url` is unset, Colin auto-detects an active Tailscale Funnel for the Colin port and uses that public URL for metadata links and setup guidance. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
+- Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links point at the local Colin UI address.
+- Colin uses Tailscale Funnel only for `/webhooks/*`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for the Colin port and derives the public webhook base URL from that Funnel. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
 - `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
 - The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. The embedded browser refresh keeps the task fragment current without reloading the full page shell, and if a refresh fails the toolbar marks the dashboard as stale so operators know they are looking at the last successful snapshot.
@@ -270,14 +271,14 @@ The readiness flow checks:
 
 - `tailscale` is installed and the backend is running
 - MagicDNS is enabled
-- a root-mounted Tailscale Funnel is proxying Colin's local port
+- a `/webhooks`-mounted Tailscale Funnel is proxying Colin's local port
 - Colin responds locally at `/webhooks/readyz`
 - Colin responds publicly at `/webhooks/readyz`
 
 The recommended command is:
 
 ```bash
-tailscale funnel --bg --https=443 8888
+tailscale funnel --bg --https=443 --set-path=/webhooks 8888
 ```
 
 If port `443` is already occupied by another Serve or Funnel configuration, Colin suggests `8443` or `10000` instead.
@@ -289,7 +290,9 @@ Tailscale Funnel requirements come from Tailscale itself and currently include:
 - a `funnel` node attribute in the tailnet policy
 - on macOS, a Tailscale client variant that supports Funnel port sharing
 
-When Funnel is active and `server.public_url` is unset, Colin derives its public base URL from the active Funnel automatically. If `server.public_url` is set, Colin uses that value instead and still shows Funnel diagnostics on the setup page.
+When Funnel is active and `server.webhook_public_url` is unset, Colin derives its public webhook base URL from the active Funnel automatically. If `server.webhook_public_url` is set, Colin uses that value instead and still shows Funnel diagnostics on the setup page.
+
+Dashboard and issue-metadata pages are not meant to be exposed through Funnel in this setup. If operators need non-local UI links, set `server.ui_url` separately.
 
 The setup page and CLI both show the final URLs you will paste into provider webhook settings later:
 

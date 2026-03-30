@@ -241,7 +241,7 @@ func TestCreateIssueComment(t *testing.T) {
 	client := &Client{
 		endpoint:  server.URL,
 		apiKey:    "token",
-		publicURL: "https://colin.example.test/root/",
+		uiBaseURL: "https://colin.example.test/root/",
 		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
@@ -288,7 +288,7 @@ func TestCreateCommentReply(t *testing.T) {
 	client := &Client{
 		endpoint:  server.URL,
 		apiKey:    "token",
-		publicURL: "https://colin.example.test/root/",
+		uiBaseURL: "https://colin.example.test/root/",
 		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
@@ -346,7 +346,7 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	client := &Client{
 		endpoint:  server.URL,
 		apiKey:    "token",
-		publicURL: "https://colin.example.test/root/",
+		uiBaseURL: "https://colin.example.test/root/",
 		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
@@ -472,10 +472,10 @@ func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
 	client := &Client{
 		endpoint:  server.URL,
 		apiKey:    "token",
-		publicURL: "http://127.0.0.1:8888",
+		uiBaseURL: "http://127.0.0.1:8888",
 		client:    &http.Client{Timeout: 5 * time.Second},
 	}
-	client.SetPublicURLResolver(func(context.Context) string {
+	client.SetUIBaseURLResolver(func(context.Context) string {
 		return "https://colin.tail.example.ts.net"
 	})
 
@@ -807,8 +807,8 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	if gotTitle != "Colin ExecPlan" {
 		t.Fatalf("title = %q, want %q", gotTitle, "Colin ExecPlan")
 	}
-	if gotURL != "https://colin.invalid/linear/issues/issue-1/exec-plan" {
-		t.Fatalf("url = %q, want %q", gotURL, "https://colin.invalid/linear/issues/issue-1/exec-plan")
+	if gotURL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
+		t.Fatalf("url = %q, want %q", gotURL, "http://127.0.0.1/linear/issues/issue-1/exec-plan")
 	}
 	if gotMetadata["body"] != "# Plan\n\nDetails." {
 		t.Fatalf("body = %v, want plan body", gotMetadata["body"])
@@ -841,7 +841,7 @@ func TestUpsertIssueExecPlanRejectsDuplicates(t *testing.T) {
 								{
 									"id":    "attachment-1",
 									"title": "Colin ExecPlan",
-									"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+									"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
 									"metadata": map[string]any{
 										"body": "# Plan A",
 									},
@@ -849,7 +849,7 @@ func TestUpsertIssueExecPlanRejectsDuplicates(t *testing.T) {
 								{
 									"id":    "attachment-2",
 									"title": "Colin ExecPlan",
-									"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+									"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
 									"metadata": map[string]any{
 										"body": "# Plan B",
 									},
@@ -1541,7 +1541,7 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 									{
 										"id":    "attachment-2",
 										"title": "Colin ExecPlan",
-										"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+										"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
 										"metadata": map[string]any{
 											"body":       "# Plan\n\nDetails.",
 											"updated_at": base.Format(time.RFC3339),
@@ -1613,7 +1613,7 @@ func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
 									{
 										"id":    "attachment-1",
 										"title": "Colin ExecPlan",
-										"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+										"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
 										"metadata": map[string]any{
 											"body": "# Plan A",
 										},
@@ -1621,7 +1621,7 @@ func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
 									{
 										"id":    "attachment-2",
 										"title": "Colin ExecPlan",
-										"url":   "https://colin.invalid/linear/issues/issue-1/exec-plan",
+										"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
 										"metadata": map[string]any{
 											"body": "# Plan B",
 										},

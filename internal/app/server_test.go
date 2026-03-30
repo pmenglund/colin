@@ -92,7 +92,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Ready:            true,
 			LocalBaseURL:     "http://127.0.0.1:8888",
 			PublicBaseURL:    "https://colin.tail.example.ts.net",
-			SuggestedCommand: "tailscale funnel --bg --https=443 8888",
+			SuggestedCommand: "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
 			LinearWebhookURL: "https://colin.tail.example.ts.net/webhooks/linear",
 			GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
 			Checks: []domain.SetupCheck{
@@ -342,7 +342,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			`data-testid="funnel-urls"`,
 			`Ready for webhooks`,
 			`https://colin.tail.example.ts.net/webhooks/github`,
-			`tailscale funnel --bg --https=443 8888`,
+			`tailscale funnel --bg --https=443 --set-path=/webhooks 8888`,
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("setup page missing %q: %s", want, text)
@@ -351,22 +351,24 @@ func TestObservabilityServerRoutes(t *testing.T) {
 	})
 
 	t.Run("webhook readyz", func(t *testing.T) {
-		resp, err := http.Get(server.URL + "/webhooks/readyz")
-		if err != nil {
-			t.Fatalf("GET /webhooks/readyz error = %v", err)
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status = %d, want 200", resp.StatusCode)
-		}
-		if !strings.Contains(string(body), `"status":"ok"`) {
-			t.Fatalf("readyz body = %s", string(body))
+		for _, path := range []string{"/webhooks/readyz", "/readyz"} {
+			resp, err := http.Get(server.URL + path)
+			if err != nil {
+				t.Fatalf("GET %s error = %v", path, err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200", path, resp.StatusCode)
+			}
+			if !strings.Contains(string(body), `"status":"ok"`) {
+				t.Fatalf("%s body = %s", path, string(body))
+			}
 		}
 	})
 
 	t.Run("reserved webhook endpoints", func(t *testing.T) {
-		for _, path := range []string{"/webhooks/linear", "/webhooks/github"} {
+		for _, path := range []string{"/webhooks/linear", "/webhooks/github", "/linear", "/github"} {
 			resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(`{}`))
 			if err != nil {
 				t.Fatalf("POST %s error = %v", path, err)

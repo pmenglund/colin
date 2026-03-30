@@ -48,8 +48,8 @@ type Client struct {
 	project           string
 	active            []string
 	client            *http.Client
-	publicURL         string
-	publicURLResolver func(context.Context) string
+	uiBaseURL         string
+	uiBaseURLResolver func(context.Context) string
 	rateMu            sync.RWMutex
 	rateInfo          map[string]any
 	labelMu           sync.RWMutex
@@ -66,7 +66,7 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		apiKey:    cfg.Tracker.APIKey,
 		project:   cfg.Tracker.ProjectSlug,
 		active:    slices.Clone(config.CandidateStates(cfg)),
-		publicURL: metadataBaseURL(cfg.Server),
+		uiBaseURL: uiBaseURL(cfg.Server),
 		labelIDs:  map[string]string{},
 		client: &http.Client{
 			Timeout: 30 * time.Second,
@@ -78,12 +78,12 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	return client, nil
 }
 
-// SetPublicURLResolver configures a late-bound metadata URL resolver.
-func (c *Client) SetPublicURLResolver(resolver func(context.Context) string) {
+// SetUIBaseURLResolver configures a late-bound metadata URL resolver.
+func (c *Client) SetUIBaseURLResolver(resolver func(context.Context) string) {
 	if c == nil {
 		return
 	}
-	c.publicURLResolver = resolver
+	c.uiBaseURLResolver = resolver
 }
 
 // FetchCandidateIssues returns the current active issues for the configured Linear project.
@@ -475,7 +475,7 @@ mutation UpsertIssueExecPlan($input: AttachmentCreateInput!) {
 		"input": map[string]any{
 			"issueId":  issueID,
 			"title":    colinExecPlanAttachmentTitle,
-			"url":      colinExecPlanAttachmentURL(issueID),
+			"url":      c.execPlanAttachmentURL(ctx, issueID),
 			"metadata": colinExecPlanValue(plan),
 		},
 	})
@@ -1334,13 +1334,24 @@ func colinMetadataAttachmentURL(issueID string) string {
 }
 
 func (c *Client) metadataAttachmentURL(ctx context.Context, issueID string) string {
-	baseURL := strings.TrimSpace(c.publicURL)
-	if c.publicURLResolver != nil {
-		if resolved := strings.TrimSpace(c.publicURLResolver(ctx)); resolved != "" {
+	return strings.TrimRight(c.resolvedUIBaseURL(ctx), "/") + colinMetadataAttachmentURL(issueID)
+}
+
+func (c *Client) execPlanAttachmentURL(ctx context.Context, issueID string) string {
+	return strings.TrimRight(c.resolvedUIBaseURL(ctx), "/") + domain.ColinExecPlanPath(issueID)
+}
+
+func (c *Client) resolvedUIBaseURL(ctx context.Context) string {
+	baseURL := strings.TrimSpace(c.uiBaseURL)
+	if c.uiBaseURLResolver != nil {
+		if resolved := strings.TrimSpace(c.uiBaseURLResolver(ctx)); resolved != "" {
 			baseURL = resolved
 		}
 	}
-	return strings.TrimRight(baseURL, "/") + colinMetadataAttachmentURL(issueID)
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1"
+	}
+	return baseURL
 }
 
 func isColinMetadataURL(value string) bool {
@@ -1399,8 +1410,8 @@ func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, boo
 	}, true
 }
 
-func metadataBaseURL(cfg domain.ServerConfig) string {
-	if value := strings.TrimSpace(cfg.PublicURL); value != "" {
+func uiBaseURL(cfg domain.ServerConfig) string {
+	if value := strings.TrimSpace(cfg.UIURL); value != "" {
 		return value
 	}
 	if cfg.Port != nil {
@@ -1410,12 +1421,16 @@ func metadataBaseURL(cfg domain.ServerConfig) string {
 }
 
 func colinExecPlanAttachmentURL(issueID string) string {
-	return colinMetadataURLPrefix + strings.TrimSpace(issueID) + colinExecPlanURLSuffix
+	return domain.ColinExecPlanPath(issueID)
 }
 
 func isColinExecPlanURL(value string) bool {
-	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, colinMetadataURLPrefix) && strings.HasSuffix(value, colinExecPlanURLSuffix)
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	_, ok := domain.ParseColinExecPlanPath(parsed.EscapedPath())
+	return ok
 }
 
 func (c *Client) ensureIssueLabelID(ctx context.Context, labelName string) (string, error) {

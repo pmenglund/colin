@@ -75,7 +75,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.startHTTPServer(ctx); err != nil {
 		return err
 	}
-	s.applyPublicURLResolver(s.currentRuntime())
+	s.applyUIBaseURLResolver(s.currentRuntime())
 	if err := s.ensureManagedLabels(ctx); err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 			s.logger.Info("workflow reloaded", "path", s.workflowPath)
 			s.setRuntime(runtime)
 			s.orch.UpdateRuntime(runtime)
-			s.applyPublicURLResolver(runtime)
+			s.applyUIBaseURLResolver(runtime)
 		}
 	}
 }
@@ -301,32 +301,52 @@ func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatu
 		inspector = tsdiag.NewInspector()
 	}
 	return inspector.Check(ctx, tsdiag.Options{
-		LocalPort:         runtime.Config.Server.Port,
-		LocalDashboardURL: s.DashboardURL(),
-		ExplicitPublicURL: runtime.Config.Server.PublicURL,
+		LocalPort:                runtime.Config.Server.Port,
+		LocalDashboardURL:        s.DashboardURL(),
+		ExplicitWebhookPublicURL: webhookPublicURL(runtime.Config.Server),
 	})
 }
 
-func (s *Service) effectivePublicBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
+func (s *Service) effectiveWebhookPublicBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
 	inspector := s.inspector
 	if inspector == nil {
 		inspector = tsdiag.NewInspector()
 	}
 	status := inspector.Resolve(ctx, tsdiag.Options{
-		LocalPort:         cfg.Port,
-		LocalDashboardURL: s.DashboardURL(),
-		ExplicitPublicURL: cfg.PublicURL,
+		LocalPort:                cfg.Port,
+		LocalDashboardURL:        s.DashboardURL(),
+		ExplicitWebhookPublicURL: webhookPublicURL(cfg),
 	})
 	return strings.TrimSpace(status.PublicBaseURL)
 }
 
-func (s *Service) applyPublicURLResolver(runtime orchestrator.Runtime) {
+func (s *Service) effectiveUIBaseURL(cfg domain.ServerConfig) string {
+	if value := strings.TrimSpace(cfg.UIURL); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(s.DashboardURL()); value != "" {
+		return value
+	}
+	if cfg.Port != nil {
+		return fmt.Sprintf("http://127.0.0.1:%d", *cfg.Port)
+	}
+	return "http://127.0.0.1"
+}
+
+func webhookPublicURL(cfg domain.ServerConfig) string {
+	if value := strings.TrimSpace(cfg.WebhookPublicURL); value != "" {
+		return value
+	}
+	return strings.TrimSpace(cfg.PublicURL)
+}
+
+func (s *Service) applyUIBaseURLResolver(runtime orchestrator.Runtime) {
 	client, ok := runtime.Tracker.(*linear.Client)
 	if !ok || client == nil {
 		return
 	}
-	client.SetPublicURLResolver(func(ctx context.Context) string {
-		return s.effectivePublicBaseURL(ctx, runtime.Config.Server)
+	client.SetUIBaseURLResolver(func(context.Context) string {
+		return s.effectiveUIBaseURL(runtime.Config.Server)
 	})
 }
 

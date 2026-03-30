@@ -51,7 +51,36 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildReadsServerPublicURL(t *testing.T) {
+func TestBuildReadsServerWebhookAndUIURLs(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"server": map[string]any{
+				"webhook_public_url": "https://hooks.colin.example.test",
+				"ui_url":             "https://ui.colin.example.test",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Server.WebhookPublicURL; got != "https://hooks.colin.example.test" {
+		t.Fatalf("cfg.Server.WebhookPublicURL = %q, want %q", got, "https://hooks.colin.example.test")
+	}
+	if got := cfg.Server.UIURL; got != "https://ui.colin.example.test" {
+		t.Fatalf("cfg.Server.UIURL = %q, want %q", got, "https://ui.colin.example.test")
+	}
+}
+
+func TestBuildReadsDeprecatedServerPublicURLFallback(t *testing.T) {
 	t.Parallel()
 
 	def := domain.WorkflowDefinition{

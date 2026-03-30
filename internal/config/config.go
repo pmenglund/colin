@@ -379,6 +379,12 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	if value, ok := readString(raw, "public_url"); ok {
 		cfg.Server.PublicURL = resolveEnvToken(value)
 	}
+	if value, ok := readString(raw, "webhook_public_url"); ok {
+		cfg.Server.WebhookPublicURL = resolveEnvToken(value)
+	}
+	if value, ok := readString(raw, "ui_url"); ok {
+		cfg.Server.UIURL = resolveEnvToken(value)
+	}
 	if value, ok := readInt(raw, "log_buffer_lines"); ok && value > 0 {
 		cfg.Server.LogBufferLines = value
 	}

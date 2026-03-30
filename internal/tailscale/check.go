@@ -17,6 +17,7 @@ import (
 
 const (
 	setupPath         = "/setup/funnel"
+	webhookMountPath  = "/webhooks"
 	readyzPath        = "/webhooks/readyz"
 	linearWebhookPath = "/webhooks/linear"
 	githubWebhookPath = "/webhooks/github"
@@ -26,9 +27,9 @@ var allowedFunnelPorts = []int{443, 8443, 10000}
 
 // Options configures one Tailscale Funnel readiness inspection.
 type Options struct {
-	LocalPort         *int
-	LocalDashboardURL string
-	ExplicitPublicURL string
+	LocalPort                *int
+	LocalDashboardURL        string
+	ExplicitWebhookPublicURL string
 }
 
 // Inspector inspects local Tailscale state and Colin reachability.
@@ -133,7 +134,7 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 	if err != nil {
 		addCheck(
 			"funnel_route",
-			"Funnel proxies Colin at `/`",
+			"Funnel proxies Colin at `/webhooks`",
 			"error",
 			err.Error(),
 			"Run the suggested `tailscale funnel` command after Tailscale is healthy.",
@@ -148,7 +149,7 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 	if matchErr != nil {
 		addCheck(
 			"funnel_route",
-			"Funnel proxies Colin at `/`",
+			"Funnel proxies Colin at `/webhooks`",
 			"error",
 			matchErr.Error(),
 			funnelRemediation(status.SuggestedCommand),
@@ -157,21 +158,20 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 		status.DetectedFunnelURL = match.URL
 		addCheck(
 			"funnel_route",
-			"Funnel proxies Colin at `/`",
+			"Funnel proxies Colin at `/webhooks`",
 			"ok",
-			fmt.Sprintf("Detected `%s` proxying Colin from `/`.", match.URL),
+			fmt.Sprintf("Detected `%s` proxying Colin from `/webhooks`.", match.URL),
 			"",
 		)
 	}
 
-	if value := strings.TrimSpace(opts.ExplicitPublicURL); value != "" {
+	if value := strings.TrimSpace(opts.ExplicitWebhookPublicURL); value != "" {
 		status.PublicBaseURL = strings.TrimRight(value, "/")
 		status.PublicURLSource = "config"
 	} else if match != nil {
 		status.PublicBaseURL = strings.TrimRight(match.URL, "/")
 		status.PublicURLSource = "funnel"
 	}
-	status.PublicSetupURL = joinURL(status.PublicBaseURL, setupPath)
 	status.PublicReadyURL = joinURL(status.PublicBaseURL, readyzPath)
 	status.LinearWebhookURL = joinURL(status.PublicBaseURL, linearWebhookPath)
 	status.GitHubWebhookURL = joinURL(status.PublicBaseURL, githubWebhookPath)
@@ -252,7 +252,7 @@ func matchFunnel(cfg serveConfig, localPort *int) (*funnelMatchInfo, map[int]str
 	ports := usedPorts(cfg)
 	var sawProxyForPort bool
 	for hostPort, server := range cfg.Web {
-		handler, ok := server.Handlers["/"]
+		handler, ok := server.Handlers[webhookMountPath]
 		if !ok {
 			for _, other := range server.Handlers {
 				if proxyTargetsPort(other.Proxy, *localPort) {
@@ -275,9 +275,9 @@ func matchFunnel(cfg serveConfig, localPort *int) (*funnelMatchInfo, map[int]str
 		}, ports, nil
 	}
 	if sawProxyForPort {
-		return nil, ports, errors.New("Funnel points at Colin, but not from the root `/` mount.")
+		return nil, ports, errors.New("Funnel points at Colin, but not from `/webhooks`.")
 	}
-	return nil, ports, fmt.Errorf("No Funnel proxies `127.0.0.1:%d` from `/` yet.", *localPort)
+	return nil, ports, fmt.Errorf("No Funnel proxies `127.0.0.1:%d` from `/webhooks` yet.", *localPort)
 }
 
 func usedPorts(cfg serveConfig) map[int]struct{} {
@@ -449,12 +449,12 @@ func suggestedCommand(used map[int]struct{}, localPort *int) string {
 			break
 		}
 	}
-	return fmt.Sprintf("tailscale funnel --bg --https=%d %d", port, *localPort)
+	return fmt.Sprintf("tailscale funnel --bg --https=%d --set-path=%s %d", port, webhookMountPath, *localPort)
 }
 
 func funnelRemediation(command string) string {
 	if strings.TrimSpace(command) == "" {
-		return "Set a fixed Colin `server.port`, then configure a root Funnel for that port."
+		return "Set a fixed Colin `server.port`, then configure a `/webhooks` Funnel for that port."
 	}
 	return fmt.Sprintf("Run `%s`, then reload this page.", command)
 }

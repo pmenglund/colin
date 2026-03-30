@@ -61,7 +61,7 @@ func Page(snapshot domain.Snapshot, shellRenderedAt time.Time) g.Node {
 					g.Text("JSON API: "),
 					h.A(h.Href("/api/v1/state"), g.Text("/api/v1/state")),
 					g.Text(" | "),
-					h.A(h.Href("/setup/funnel"), g.Text("Tailscale Funnel setup")),
+					h.A(h.Href("/setup/funnel"), g.Text("Tailscale webhook setup")),
 				),
 			),
 		),
@@ -149,7 +149,7 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 	))
 }
 
-// FunnelSetupPage renders the Tailscale Funnel readiness page.
+// FunnelSetupPage renders the Tailscale webhook ingress readiness page.
 func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time) g.Node {
 	stateText := "Needs setup"
 	if status.Ready {
@@ -161,7 +161,7 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 		h.Head(
 			h.Meta(h.Charset("utf-8")),
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
-			h.Title("Colin Funnel Setup"),
+			h.Title("Colin Webhook Setup"),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
 		),
 		h.Body(
@@ -173,9 +173,9 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 					h.Div(
 						h.Class("hero-grid"),
 						h.Div(
-							h.Span(h.Class("hero-label"), g.Text("Tailscale Funnel Setup")),
+							h.Span(h.Class("hero-label"), g.Text("Tailscale Webhook Setup")),
 							h.H1(g.Text("Webhook ingress readiness")),
-							h.P(g.Text("Verify Colin is publicly reachable before configuring Linear or GitHub webhooks.")),
+							h.P(g.Text("Verify only Colin's `/webhooks` endpoints are publicly reachable before configuring Linear or GitHub webhooks. The dashboard and metadata pages stay local unless you publish them separately.")),
 						),
 						h.Div(
 							h.Class("shell-meta"),
@@ -196,11 +196,12 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 						h.H3(g.Text("URLs")),
 						h.Div(
 							h.Class("worker-grid"),
-							metadataStatCard("Local base URL", fallback(status.LocalBaseURL, "not available")),
-							metadataStatCard("Public base URL", fallback(status.PublicBaseURL, "not available")),
+							metadataStatCard("Local UI base URL", fallback(status.LocalBaseURL, "not available")),
+							metadataStatCard("Public webhook base URL", fallback(status.PublicBaseURL, "not available")),
 							metadataStatCard("Linear webhook URL", fallback(status.LinearWebhookURL, "not available")),
 							metadataStatCard("GitHub webhook URL", fallback(status.GitHubWebhookURL, "not available")),
 						),
+						h.P(g.Text("Expose only `/webhooks/*` through Tailscale Funnel. Dashboard pages continue to use the local or explicitly configured UI URL.")),
 						h.P(g.Text("Suggested command: "), h.Code(g.Text(fallback(status.SuggestedCommand, "none")))),
 					),
 					h.Section(
