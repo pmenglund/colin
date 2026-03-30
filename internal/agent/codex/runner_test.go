@@ -333,6 +333,40 @@ func TestAppendMaxTurnsSummary(t *testing.T) {
 	}
 }
 
+func TestPersistActualBranchNameValueBestEffortPreservesExistingMetadata(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue := domain.Issue{
+		ID: "issue-1",
+		ColinMetadata: &domain.ColinMetadata{
+			ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
+			LastRunType:            "coding",
+			LastOutcome:            "ready_for_review",
+			LastSummaryCommentID:   "comment-1",
+		},
+	}
+	updated := runner.persistActualBranchNameValueBestEffort(context.Background(), issue, "colin-94")
+
+	if updated.ColinMetadata == nil {
+		t.Fatal("updated.ColinMetadata = nil, want metadata")
+	}
+	if updated.ColinMetadata.ActualBranchName != "colin-94" {
+		t.Fatalf("ActualBranchName = %q, want %q", updated.ColinMetadata.ActualBranchName, "colin-94")
+	}
+	if updated.ColinMetadata.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
+		t.Fatalf("ReviewPublishDirective = %q, want %q", updated.ColinMetadata.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
+	}
+	if tracker.metadata.ActualBranchName != "colin-94" {
+		t.Fatalf("persisted ActualBranchName = %q, want %q", tracker.metadata.ActualBranchName, "colin-94")
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return

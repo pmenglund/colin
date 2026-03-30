@@ -155,21 +155,17 @@ func (m *Manager) Merge(ctx context.Context, issue domain.Issue, workspacePath s
 
 // ReviewContext returns the current PR and unresolved review threads for the issue branch.
 func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspacePath string) (ReviewContext, error) {
-	branch := ""
-	if issue.BranchName != nil {
-		branch = strings.TrimSpace(*issue.BranchName)
-	}
-	if branch == "" {
-		current, err := m.currentBranch(ctx, workspacePath)
+	var pr *pullRequest
+	for _, branch := range m.reviewLookupBranches(ctx, issue, workspacePath) {
+		candidate, err := m.findPullRequest(ctx, workspacePath, branch)
 		if err != nil {
 			return ReviewContext{}, err
 		}
-		branch = current
-	}
-
-	pr, err := m.findPullRequest(ctx, workspacePath, branch)
-	if err != nil {
-		return ReviewContext{}, err
+		if candidate == nil {
+			continue
+		}
+		pr = candidate
+		break
 	}
 	if pr == nil {
 		return ReviewContext{}, nil
@@ -199,6 +195,11 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 		CodexReviewRequestedAt: requestedAt,
 		CodexReviewApprovedAt:  approvedAt,
 	}, nil
+}
+
+// CurrentBranch returns the current checked-out git branch for the workspace.
+func (m *Manager) CurrentBranch(ctx context.Context, workspacePath string) (string, error) {
+	return m.currentBranch(ctx, workspacePath)
 }
 
 // ReplyAndResolveReviewThread posts a reply and resolves a review thread.
@@ -256,6 +257,33 @@ func (m *Manager) currentBranch(ctx context.Context, workspacePath string) (stri
 		return "", ErrNotGitRepository
 	}
 	return branch, nil
+}
+
+func (m *Manager) reviewLookupBranches(ctx context.Context, issue domain.Issue, workspacePath string) []string {
+	branches := make([]string, 0, 3)
+	addBranch := func(branch string) {
+		branch = strings.TrimSpace(branch)
+		if branch == "" {
+			return
+		}
+		for _, existing := range branches {
+			if existing == branch {
+				return
+			}
+		}
+		branches = append(branches, branch)
+	}
+
+	if current, err := m.currentBranch(ctx, workspacePath); err == nil {
+		addBranch(current)
+	}
+	if issue.ColinMetadata != nil {
+		addBranch(issue.ColinMetadata.ActualBranchName)
+	}
+	if issue.BranchName != nil {
+		addBranch(*issue.BranchName)
+	}
+	return branches
 }
 
 func (m *Manager) revParse(ctx context.Context, workspacePath string, ref string) (string, error) {

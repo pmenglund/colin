@@ -858,6 +858,7 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadataMap, _ := node["metadata"].(map[string]any)
 	metadata := domain.ColinMetadata{}
 	metadata.AttachmentID, _ = stringValue(node["id"])
+	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
 	metadata.ReviewPublishDirective, _ = stringValue(metadataMap["review_publish_directive"])
 	metadata.LastRunType, _ = stringValue(metadataMap["last_run_type"])
 	metadata.LastOutcome, _ = stringValue(metadataMap["last_outcome"])
@@ -897,6 +898,7 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
+		"actual_branch_name":       strings.TrimSpace(metadata.ActualBranchName),
 		"review_publish_directive": strings.TrimSpace(metadata.ReviewPublishDirective),
 		"last_run_type":            strings.TrimSpace(metadata.LastRunType),
 		"last_outcome":             strings.TrimSpace(metadata.LastOutcome),

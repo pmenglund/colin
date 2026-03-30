@@ -156,6 +156,7 @@ func TestUpsertIssueMetadata(t *testing.T) {
 
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
+		ActualBranchName:       "colin-94",
 		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
 		LastRunType:            "coding",
 		LastOutcome:            "needs_spec",
@@ -177,8 +178,14 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotMetadata["review_publish_directive"] != "skip" {
 		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
 	}
+	if gotMetadata["actual_branch_name"] != "colin-94" {
+		t.Fatalf("actual_branch_name = %v, want colin-94", gotMetadata["actual_branch_name"])
+	}
 	if metadata.AttachmentID != "attachment-1" {
 		t.Fatalf("metadata.AttachmentID = %q, want %q", metadata.AttachmentID, "attachment-1")
+	}
+	if metadata.ActualBranchName != "colin-94" {
+		t.Fatalf("metadata.ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
 	}
 }
 
@@ -651,6 +658,7 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 										"title": "Colin metadata",
 										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
 										"metadata": map[string]any{
+											"actual_branch_name":       "colin-94",
 											"review_publish_directive": "skip",
 											"last_run_type":            "coding",
 											"last_outcome":             "needs_spec",
@@ -720,5 +728,8 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if got := issues[0].ColinMetadata.CodexOutput[0].Message; got != "Implemented the change." {
 		t.Fatalf("CodexOutput[0].Message = %q, want %q", got, "Implemented the change.")
+	}
+	if issues[0].ColinMetadata.ActualBranchName != "colin-94" {
+		t.Fatalf("ActualBranchName = %q, want %q", issues[0].ColinMetadata.ActualBranchName, "colin-94")
 	}
 }

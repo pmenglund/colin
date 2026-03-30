@@ -89,6 +89,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		State:     issue.State,
 		Message:   "Workspace prepared",
 	})
+	issue = r.persistActualBranchNameBestEffort(ctx, issue, ws.Path)
 	if err := r.workspaces.RunBeforeRun(ctx, ws.Path); err != nil {
 		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 	}
@@ -147,6 +148,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			PRState:   result.PRState,
 			Action:    result.Action,
 		})
+		issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
 		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadata(issue, runType, metadataOutcomeReady, ""))
 		return Result{
 			Issue:         issue,
@@ -216,6 +218,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			Action:    result.Action,
 		})
 		issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
+		issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
 		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadata(issue, runType, metadataOutcomeMerged, ""))
 		return Result{
 			Issue:         issue,
@@ -858,6 +861,26 @@ func codexMetadataWithDirective(issue domain.Issue, runType string, outcome stri
 	return metadata
 }
 
+func actualBranchMetadata(issue domain.Issue, branch string) (domain.ColinMetadata, bool) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return domain.ColinMetadata{}, false
+	}
+
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+	}
+	if strings.TrimSpace(metadata.ActualBranchName) == branch {
+		return metadata, false
+	}
+
+	metadata.ActualBranchName = branch
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	return metadata, true
+}
+
 func reviewPublishDirective(issue domain.Issue) string {
 	if issue.ColinMetadata == nil {
 		return ""
@@ -893,4 +916,23 @@ func (r *Runner) persistIssueMetadataBestEffort(ctx context.Context, issue domai
 		return issue
 	}
 	return updated
+}
+
+func (r *Runner) persistActualBranchNameBestEffort(ctx context.Context, issue domain.Issue, workspacePath string) domain.Issue {
+	if r.repo == nil {
+		return issue
+	}
+	branch, err := r.repo.CurrentBranch(ctx, workspacePath)
+	if err != nil {
+		return issue
+	}
+	return r.persistActualBranchNameValueBestEffort(ctx, issue, branch)
+}
+
+func (r *Runner) persistActualBranchNameValueBestEffort(ctx context.Context, issue domain.Issue, branch string) domain.Issue {
+	metadata, changed := actualBranchMetadata(issue, branch)
+	if !changed {
+		return issue
+	}
+	return r.persistIssueMetadataBestEffort(ctx, issue, metadata)
 }

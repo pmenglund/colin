@@ -181,6 +181,68 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}
 }
 
+func TestReviewContextPrefersCurrentWorkspaceBranchOverTrackerBranchName(t *testing.T) {
+	workspacePath, _, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	t.Setenv("COLIN_FAKE_GH_HEAD", "colin-93")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		BranchName: stringPtr("pmenglund/colin-93"),
+	}
+	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+
+	reviewContext, err := manager.ReviewContext(context.Background(), issue, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if reviewContext.PullRequest.Number != 1 {
+		t.Fatalf("pull request number = %d, want 1", reviewContext.PullRequest.Number)
+	}
+	if len(reviewContext.Threads) != 1 {
+		t.Fatalf("threads length = %d, want 1", len(reviewContext.Threads))
+	}
+}
+
+func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnavailable(t *testing.T) {
+	workspacePath, _, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	t.Setenv("COLIN_FAKE_GH_HEAD", "colin-93")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		BranchName: stringPtr("pmenglund/colin-93"),
+		ColinMetadata: &domain.ColinMetadata{
+			ActualBranchName: "colin-93",
+		},
+	}
+	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	runCmd(t, workspacePath, "git", "checkout", "--detach")
+
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+
+	reviewContext, err := manager.ReviewContext(context.Background(), issue, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if reviewContext.PullRequest.Number != 1 {
+		t.Fatalf("pull request number = %d, want 1", reviewContext.PullRequest.Number)
+	}
+	if len(reviewContext.Threads) != 1 {
+		t.Fatalf("threads length = %d, want 1", len(reviewContext.Threads))
+	}
+}
+
 func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
 	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
 	manager := NewManager(testConfig(), testLogger())
