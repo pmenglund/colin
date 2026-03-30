@@ -37,6 +37,8 @@ To keep the previous structured log stream on the terminal, pass `--verbose`:
 go run . --verbose
 ```
 
+Even without `--verbose`, Colin keeps recent internal logs in memory and serves them from `/api/v1/logs`. Add `?level=info` to hide `debug` records, or `?level=debug` to inspect the full buffer.
+
 To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pass `--port`:
 
 ```bash
@@ -69,7 +71,7 @@ go run . /path/to/WORKFLOW.md
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
 - If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
-- Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/` and JSON at `/api/v1/state`.
+- Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/`, JSON state at `/api/v1/state`, and buffered internal logs at `/api/v1/logs`.
 
 ## Linear State Handling
 
@@ -202,6 +204,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - create one canonical ExecPlan attachment before the first coding turn
 - use `codex app-server` for coding runs
 - serve the loopback web UI on `http://127.0.0.1:8888` unless `server.public_url` is set for an external address
+- keep the last `1000` internal log lines in memory by default, configurable with `server.log_buffer_lines`
 
 ## Operational Notes
 
@@ -216,8 +219,11 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
 - When `server.public_url` is unset, Colin uses the loopback UI address for Linear metadata links. Set `server.public_url` when operators need those links to resolve through a reverse proxy or another externally reachable hostname.
+- Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
+- `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
 - The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. HTMX refreshes the task fragment in place so operators can inspect live work without reloading the whole page.
 - The issue-specific metadata page is separate from the main dashboard and is meant for reviewing one issue's latest Colin run, including the captured Codex output that Colin persisted to Linear metadata.
+- Poll-loop logs such as tick start and rate-limit deferrals now log at `debug` level so they remain available for diagnosis without overwhelming the normal info-level view.
 - Colin automatically moves successful, reviewable coding runs into the first configured publish state, which is currently `Review`.
 - Colin moves clarification-only or max-turn no-PR handoffs into `Refine` instead of `Review`.
 - If `review_publish` finds no reviewable repository changes, Colin moves the issue back to the working active state instead of retrying PR creation or applying the `paused` label.

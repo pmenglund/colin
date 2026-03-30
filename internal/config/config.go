@@ -77,7 +77,8 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			},
 		},
 		Server: domain.ServerConfig{
-			Port: intPtr(8888),
+			Port:           intPtr(8888),
+			LogBufferLines: domain.DefaultLogBufferLines,
 		},
 	}
 
@@ -377,6 +378,9 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	}
 	if value, ok := readString(raw, "public_url"); ok {
 		cfg.Server.PublicURL = resolveEnvToken(value)
+	}
+	if value, ok := readInt(raw, "log_buffer_lines"); ok && value > 0 {
+		cfg.Server.LogBufferLines = value
 	}
 	return nil
 }

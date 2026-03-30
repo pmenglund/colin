@@ -15,7 +15,7 @@ func (o *Orchestrator) reconcileRunning(ctx context.Context) {
 	}
 	o.reconcileStalled()
 	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
-		o.logger.Info("running-state refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+		o.logger.Debug("running-state refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
 		return
 	}
 

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -19,17 +22,25 @@ type SnapshotProvider func(context.Context) (domain.Snapshot, error)
 // IssueProvider returns the current issue snapshot for a single tracker issue.
 type IssueProvider func(context.Context, string) (domain.Issue, error)
 
+// LogProvider returns the current buffered internal logs for the request.
+type LogProvider func(context.Context, *slog.Level) (domain.BufferedLogSnapshot, error)
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue)
+	return NewObservabilityServer(source.Snapshot, source.Issue, nil)
 }
 
 // NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, logProvider LogProvider) (http.Handler, error) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
+		}
+	}
+	if logProvider == nil {
+		logProvider = func(context.Context, *slog.Level) (domain.BufferedLogSnapshot, error) {
+			return domain.BufferedLogSnapshot{}, nil
 		}
 	}
 
@@ -40,6 +51,30 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 
 	mux := http.NewServeMux()
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
+	mux.HandleFunc("/api/v1/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		level, err := parseLogLevel(r.URL.Query().Get("level"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
+		snapshot, err := logProvider(r.Context(), level)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := json.NewEncoder(w).Encode(snapshot); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
 	mux.HandleFunc("/api/v1/state", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -161,6 +196,27 @@ func writeJSONError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+func parseLogLevel(raw string) (*slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return nil, nil
+	case "debug":
+		level := slog.LevelDebug
+		return &level, nil
+	case "info":
+		level := slog.LevelInfo
+		return &level, nil
+	case "warn":
+		level := slog.LevelWarn
+		return &level, nil
+	case "error":
+		level := slog.LevelError
+		return &level, nil
+	default:
+		return nil, fmt.Errorf("invalid log level %q; want debug, info, warn, or error", raw)
+	}
 }
 
 type demoSnapshotSource struct {
