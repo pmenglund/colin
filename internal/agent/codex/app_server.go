@@ -18,20 +18,21 @@ import (
 )
 
 type appServerClient struct {
-	cfg          domain.ServiceConfig
-	logger       *slog.Logger
-	onEvent      func(Event)
-	issue        domain.Issue
-	workspace    string
-	runType      string
-	client       *sdk.Codex
-	thread       *sdk.Thread
-	threadID     string
-	sessionID    string
-	pid          *int
-	lastSummary  string
-	lastTurnText string
-	stopOnce     sync.Once
+	cfg                           domain.ServiceConfig
+	logger                        *slog.Logger
+	onEvent                       func(Event)
+	issue                         domain.Issue
+	workspace                     string
+	runType                       string
+	client                        *sdk.Codex
+	thread                        *sdk.Thread
+	threadID                      string
+	sessionID                     string
+	pid                           *int
+	lastSummary                   string
+	lastTurnText                  string
+	lastTurnTextFromCompletedItem bool
+	stopOnce                      sync.Once
 }
 
 func (c *appServerClient) start(ctx context.Context, cwd string) error {
@@ -143,8 +144,9 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 		if shouldCaptureSummary(eventName, summary) {
 			c.lastSummary = summary
 		}
-		if shouldCaptureTurnText(eventName, summary) {
-			appendTurnText(summary)
+		if output, ok := completedItemText(msg); ok {
+			appendTurnText(output)
+			c.lastTurnTextFromCompletedItem = true
 		}
 		c.emit(Event{
 			Event:      eventName,
@@ -196,9 +198,14 @@ func (c *appServerClient) lastOutput() string {
 	return strings.TrimSpace(c.lastTurnText)
 }
 
+func (c *appServerClient) lastOutputCapturedFromCompletedItem() bool {
+	return c.lastTurnTextFromCompletedItem
+}
+
 func (c *appServerClient) resetTurnState() {
 	c.lastSummary = ""
 	c.lastTurnText = ""
+	c.lastTurnTextFromCompletedItem = false
 }
 
 func shouldCaptureSummary(eventName, summary string) bool {
@@ -209,19 +216,6 @@ func shouldCaptureSummary(eventName, summary string) bool {
 	switch eventName {
 	case EventOtherMessage, EventNotification:
 		return isExplicitOutcomeSummary(summary)
-	default:
-		return false
-	}
-}
-
-func shouldCaptureTurnText(eventName, summary string) bool {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return false
-	}
-	switch eventName {
-	case EventOtherMessage, EventNotification:
-		return true
 	default:
 		return false
 	}

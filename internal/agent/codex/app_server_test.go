@@ -134,6 +134,63 @@ func TestNotificationMessageUsesTopLevelParams(t *testing.T) {
 	}
 }
 
+func TestCompletedItemTextUsesCompletedItemOnly(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(map[string]any{
+		"method": "item/completed",
+		"params": map[string]any{
+			"threadId": "thread-1",
+			"text":     "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.",
+			"item": map[string]any{
+				"text": execPlanDecisionOneShotLine + "\n\nSafe to implement directly.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	msg := notificationMessage(sdkrpc.Notification{
+		Method: "item/completed",
+		Raw:    raw,
+	})
+	got, ok := completedItemText(msg)
+	if !ok {
+		t.Fatal("completedItemText() = not found, want completed item text")
+	}
+	want := execPlanDecisionOneShotLine + "\n\nSafe to implement directly."
+	if got != want {
+		t.Fatalf("completedItemText() = %q, want %q", got, want)
+	}
+	if got := summarizeMessage(msg); got != want {
+		t.Fatalf("summarizeMessage() = %q, want completed item text %q", got, want)
+	}
+}
+
+func TestCompletedItemTextSupportsWrappedItemText(t *testing.T) {
+	t.Parallel()
+
+	msg := map[string]any{
+		"method": "item/completed",
+		"params": map[string]any{
+			"item": map[string]any{
+				"assistant": map[string]any{
+					"text": "# Fake ExecPlan\n\nPlan details.",
+				},
+			},
+		},
+	}
+
+	got, ok := completedItemText(msg)
+	if !ok {
+		t.Fatal("completedItemText() = not found, want wrapped item text")
+	}
+	if got != "# Fake ExecPlan\n\nPlan details." {
+		t.Fatalf("completedItemText() = %q, want wrapped exec plan body", got)
+	}
+}
+
 func TestIsExplicitOutcomeSummary(t *testing.T) {
 	t.Parallel()
 

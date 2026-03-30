@@ -1502,8 +1502,35 @@ func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *appServerCl
 		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
 	}
 
-	decision, err := parseExecPlanDecision(client.lastOutput())
+	output := client.lastOutput()
+	decision, err := parseExecPlanDecision(output)
+	if err == nil {
+		return r.persistExecPlanDecision(ctx, issue, decision)
+	}
+
+	r.logger.Warn(
+		"exec plan decision output was malformed; retrying once",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"workspace_path", workspacePath,
+		"invalid_first_line", firstLine(output),
+		"captured_from_completed_item", client.lastOutputCapturedFromCompletedItem(),
+	)
+	if err := client.runTurn(ctx, workspacePath, issue, buildExecPlanDecisionRetryPrompt(output)); err != nil {
+		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
+	}
+
+	output = client.lastOutput()
+	decision, err = parseExecPlanDecision(output)
 	if err != nil {
+		r.logger.Warn(
+			"exec plan decision output remained malformed after retry",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"workspace_path", workspacePath,
+			"invalid_first_line", firstLine(output),
+			"captured_from_completed_item", client.lastOutputCapturedFromCompletedItem(),
+		)
 		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
 	}
 	return r.persistExecPlanDecision(ctx, issue, decision)
@@ -1591,6 +1618,21 @@ func buildExecPlanDecisionPrompt(issue domain.Issue) string {
 	return strings.TrimSpace(b.String())
 }
 
+func buildExecPlanDecisionRetryPrompt(previousOutput string) string {
+	var b strings.Builder
+	b.WriteString("Your previous ExecPlan strategy response could not be parsed.\n\n")
+	b.WriteString("Return a short answer.\n")
+	b.WriteString("The first line must be exactly one of:\n")
+	b.WriteString(execPlanDecisionOneShotLine + "\n")
+	b.WriteString(execPlanDecisionExecPlanLine + "\n\n")
+	b.WriteString("After the first line, include a brief rationale in 1-3 sentences.\n")
+	b.WriteString("Do not repeat the original question or issue description.\n")
+	if invalid := firstLine(previousOutput); invalid != "" {
+		b.WriteString(fmt.Sprintf("Your previous first line was: %q\n", invalid))
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func buildExecPlanPrompt(issue domain.Issue) string {
 	var b strings.Builder
 	b.WriteString("Create an ExecPlan for the Linear issue below.\n\n")
@@ -1667,6 +1709,14 @@ func parseExecPlanDecision(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("unexpected decision %q", firstLine)
 	}
+}
+
+func firstLine(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(value, "\n")[0])
 }
 
 func execPlanDecision(issue domain.Issue) string {

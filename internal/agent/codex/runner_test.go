@@ -1148,6 +1148,149 @@ func TestRunnerFailsWhenExecPlanDecisionOutputIsMalformed(t *testing.T) {
 	}
 }
 
+func TestRunnerRetriesMalformedExecPlanDecisionOnce(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT=%q COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_RETRY_TEXT=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		"maybe one-shot",
+		execPlanDecisionOneShotLine,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-128",
+			Title:      "Retry malformed decision",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Title:      "Retry malformed decision",
+		State:      "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
+	}
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(logData), "Your previous ExecPlan strategy response could not be parsed.") {
+		t.Fatalf("prompts log missing retry prompt: %q", string(logData))
+	}
+}
+
+func TestRunnerParsesExecPlanTurnsFromCompletedItemTextOnly(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_ITEM_COMPLETED_PARAMS_TEXT=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		"Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.",
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-128",
+			Title:      "Completed item text only",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-128",
+		Title:      "Completed item text only",
+		State:      "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionExecPlan {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionExecPlan)
+	}
+	if tracker.execPlan.Body != "# Fake ExecPlan\n\nPlan details." {
+		t.Fatalf("tracker.execPlan.Body = %q, want fake exec plan body", tracker.execPlan.Body)
+	}
+}
+
 func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -1548,14 +1691,18 @@ func runFakeCodex() error {
 			}); err != nil {
 				return err
 			}
+			itemCompletedParams := map[string]any{
+				"threadId": threadID,
+				"item": map[string]any{
+					"text": fakeCodexTurnText(promptText),
+				},
+			}
+			if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_ITEM_COMPLETED_PARAMS_TEXT"); ok {
+				itemCompletedParams["text"] = value
+			}
 			if err := writeJSONMessage(writer, map[string]any{
 				"method": "item/completed",
-				"params": map[string]any{
-					"threadId": threadID,
-					"item": map[string]any{
-						"text": fakeCodexTurnText(promptText),
-					},
-				},
+				"params": itemCompletedParams,
 			}); err != nil {
 				return err
 			}
@@ -1581,6 +1728,15 @@ func testStringPtr(value string) *string {
 
 func fakeCodexTurnText(prompt string) string {
 	if strings.Contains(prompt, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
+		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT"); ok {
+			return value
+		}
+		return execPlanDecisionExecPlanLine + "\n\nThis issue needs a persisted plan."
+	}
+	if strings.Contains(prompt, "Your previous ExecPlan strategy response could not be parsed.") {
+		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_RETRY_TEXT"); ok {
+			return value
+		}
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT"); ok {
 			return value
 		}

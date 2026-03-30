@@ -35,6 +35,9 @@ func requiresUserInput(msg map[string]any) bool {
 }
 
 func summarizeMessage(msg map[string]any) string {
+	if value, ok := completedItemText(msg); ok {
+		return value
+	}
 	for _, key := range []string{"message", "summary", "text"} {
 		if value, ok := stringValue(msg[key]); ok && value != "" {
 			return value
@@ -60,6 +63,54 @@ func summarizeMessage(msg map[string]any) string {
 		return strings.Join(values, "\n")
 	}
 	return ""
+}
+
+func completedItemText(msg map[string]any) (string, bool) {
+	method, _ := msg["method"].(string)
+	if !strings.EqualFold(strings.TrimSpace(method), "item/completed") {
+		return "", false
+	}
+	item, ok := msg["item"]
+	if !ok {
+		params, _ := msg["params"].(map[string]any)
+		item, ok = params["item"]
+	}
+	if !ok {
+		return "", false
+	}
+	return itemTextValue(item)
+}
+
+func itemTextValue(item any) (string, bool) {
+	asMap, ok := item.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	if text, ok := stringValue(asMap["text"]); ok {
+		text = strings.TrimSpace(text)
+		if text != "" {
+			return text, true
+		}
+	}
+	if len(asMap) != 1 {
+		return "", false
+	}
+	for _, inner := range asMap {
+		nested, ok := inner.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		text, ok := stringValue(nested["text"])
+		if !ok {
+			return "", false
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return "", false
+		}
+		return text, true
+	}
+	return "", false
 }
 
 func collectTextValues(value any) []string {
