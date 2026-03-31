@@ -29,6 +29,6 @@ func runSetupLinearWebhook(cmd *cobra.Command, workflowPath string, webhookName 
 	} else {
 		cmd.Printf("Next step: copy the Linear signing secret from the webhook detail page into `%s`, then reference it from `WORKFLOW.md` as `tracker.webhook_signing_secret: $%s`.\n", result.SigningSecretEnvVar, result.SigningSecretEnvVar)
 	}
-	cmd.Printf("Note: Colin currently acknowledges Linear webhook deliveries but does not yet trigger orchestration directly from them.\n")
+	cmd.Printf("Note: Colin uses relevant Linear issue webhooks to queue an immediate reconciliation pass, while polling remains active as a fallback.\n")
 	return 0
 }

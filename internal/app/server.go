@@ -28,14 +28,25 @@ type LogProvider func(context.Context, *slog.Level) (domain.BufferedLogSnapshot,
 // FunnelSetupProvider returns the current Funnel readiness snapshot.
 type FunnelSetupProvider func(context.Context) (domain.FunnelSetupStatus, error)
 
+// LinearWebhookEvent captures the minimal webhook context needed to trigger orchestration.
+type LinearWebhookEvent struct {
+	DeliveryID   string
+	Event        string
+	Action       string
+	ResourceType string
+}
+
+// LinearWebhookTrigger queues any follow-up work for a validated webhook delivery.
+type LinearWebhookTrigger func(context.Context, LinearWebhookEvent) (queued bool, coalesced bool)
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil, nil)
 }
 
 // NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
@@ -190,8 +201,8 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 	}
 	mux.HandleFunc("/webhooks/readyz", readyzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)
-	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearSecretProvider, logger))
-	mux.HandleFunc("/linear", linearWebhookHandler(linearSecretProvider, logger))
+	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
+	mux.HandleFunc("/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
 	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
 	mux.HandleFunc("/github", reservedWebhookHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

@@ -15,7 +15,7 @@ In practice, that means Colin follows the same core shape as Symphony: a long-ru
 Colin runs as a long-lived process:
 
 1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
-2. It polls Linear for candidate issues in the configured project and tracked states.
+2. It polls Linear for candidate issues in the configured project and tracked states, and it also uses relevant Linear issue webhooks to trigger a best-effort immediate reconciliation between poll intervals.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
 4. When ExecPlan support is enabled, it decides whether each issue should be handled as a one-shot change or should get a stored ExecPlan, persists that decision on the issue, and only creates a plan for the second case.
 5. It runs Codex for issues in coding states.
@@ -123,6 +123,7 @@ Colin does not recompute the planning strategy when an issue returns from `Revie
 
 Additional `Todo` rule:
 
+- Moving an issue into `Todo` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval. Polling still remains the fallback if a webhook is delayed or dropped.
 - Colin will not dispatch a `Todo` issue if any blocker is not in a terminal state.
 - Colin will not dispatch any issue carrying the `paused` label.
 - If the issue is returning from `Review` and already has an associated PR, Colin first polls that GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
@@ -186,6 +187,7 @@ This is configured in `WORKFLOW.md` under `repo.merge_states` and currently is:
 
 When an issue is moved to `Merge`, Colin:
 
+- Moving an issue into `Merge` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval. Polling still remains the fallback if a webhook is delayed or dropped.
 - ensures the branch and PR exist
 - checks the PR for Codex web review status before merging
 - keeps the issue in `Merge` while `chatgpt-codex-connector[bot]` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that bot remain
@@ -308,4 +310,4 @@ The setup page and CLI both show the final URLs you will paste into provider web
 - GitHub: `<public-base-url>/webhooks/github`
 - Linear: `<public-base-url>/webhooks/linear`
 
-Colin now acknowledges `POST` requests to `/webhooks/linear` and verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured. GitHub webhook paths remain reserved and still return `501 Not Implemented`. The readiness endpoint is live today at `/webhooks/readyz`.
+Colin now acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and queues an immediate best-effort reconciliation for relevant Linear `Issue` webhook deliveries. Polling remains active as the fallback path when a webhook is delayed or dropped. GitHub webhook paths remain reserved and still return `501 Not Implemented`. The readiness endpoint is live today at `/webhooks/readyz`.

@@ -18,10 +18,13 @@ import (
 type LinearWebhookSecretProvider func(context.Context) string
 
 type linearWebhookEnvelope struct {
-	WebhookTimestamp int64 `json:"webhookTimestamp"`
+	WebhookTimestamp int64           `json:"webhookTimestamp"`
+	Action           string          `json:"action"`
+	Type             string          `json:"type"`
+	Data             json.RawMessage `json:"data"`
 }
 
-func linearWebhookHandler(secretProvider LinearWebhookSecretProvider, logger *slog.Logger) http.HandlerFunc {
+func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWebhookSecretProvider, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		secret := ""
 		if secretProvider != nil {
@@ -53,6 +56,37 @@ func linearWebhookHandler(secretProvider LinearWebhookSecretProvider, logger *sl
 				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 				return
 			}
+		}
+
+		envelope, err := parseLinearWebhookEnvelope(body)
+		if err != nil {
+			logLinearWebhookRequest(logger, slog.LevelWarn, "rejected linear webhook request with invalid payload", r, len(secret) > 0, []any{"status", http.StatusBadRequest, "body_bytes", len(body), "error", err})
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		event := linearWebhookEventFromRequest(r, envelope)
+		if shouldTriggerLinearWebhook(event) {
+			queued := false
+			coalesced := false
+			if trigger != nil {
+				queued, coalesced = trigger(r.Context(), event)
+			}
+			level := slog.LevelInfo
+			message := "queued immediate orchestrator refresh from linear webhook"
+			extra := []any{
+				"action", event.Action,
+				"resource_type", event.ResourceType,
+				"queued", queued,
+				"coalesced", coalesced,
+			}
+			if trigger == nil || !queued {
+				level = slog.LevelWarn
+				message = "could not queue immediate orchestrator refresh from linear webhook"
+			}
+			logLinearWebhookRequest(logger, level, message, r, len(secret) > 0, extra)
+		} else {
+			logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secret) > 0, []any{"action", event.Action, "resource_type", event.ResourceType})
 		}
 
 		w.Header().Set("Cache-Control", "no-store")
@@ -111,6 +145,51 @@ func validLinearWebhookTimestamp(body []byte, now time.Time) bool {
 		delta = -delta
 	}
 	return delta <= time.Minute
+}
+
+func parseLinearWebhookEnvelope(body []byte) (linearWebhookEnvelope, error) {
+	var envelope linearWebhookEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return linearWebhookEnvelope{}, err
+	}
+	return envelope, nil
+}
+
+func linearWebhookEventFromRequest(r *http.Request, envelope linearWebhookEnvelope) LinearWebhookEvent {
+	resourceType := strings.TrimSpace(envelope.Type)
+	headerEvent := ""
+	if r != nil {
+		headerEvent = strings.TrimSpace(r.Header.Get("Linear-Event"))
+	}
+	if resourceType == "" {
+		resourceType = headerEvent
+	}
+	eventName := headerEvent
+	if eventName == "" {
+		eventName = resourceType
+	}
+	deliveryID := ""
+	if r != nil {
+		deliveryID = strings.TrimSpace(r.Header.Get("Linear-Delivery"))
+	}
+	return LinearWebhookEvent{
+		DeliveryID:   deliveryID,
+		Event:        eventName,
+		Action:       strings.TrimSpace(envelope.Action),
+		ResourceType: resourceType,
+	}
+}
+
+func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
+	if !strings.EqualFold(strings.TrimSpace(event.ResourceType), "Issue") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(event.Action)) {
+	case "create", "update":
+		return true
+	default:
+		return false
+	}
 }
 
 func ioReadAll(body interface {
