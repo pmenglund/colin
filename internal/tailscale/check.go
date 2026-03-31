@@ -2,17 +2,18 @@ package tailscale
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"tailscale.com/client/local"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 )
 
 const (
@@ -32,22 +33,23 @@ type Options struct {
 	ExplicitWebhookPublicURL string
 }
 
+type localAPIClient interface {
+	StatusWithoutPeers(context.Context) (*ipnstate.Status, error)
+	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
+}
+
 // Inspector inspects local Tailscale state and Colin reachability.
 type Inspector struct {
-	lookPath   func(string) (string, error)
-	run        func(context.Context, string, ...string) ([]byte, error)
-	httpClient *http.Client
-	now        func() time.Time
+	localClient localAPIClient
+	httpClient  *http.Client
+	now         func() time.Time
 }
 
 // NewInspector returns the default Tailscale inspector.
 func NewInspector() *Inspector {
 	return &Inspector{
-		lookPath: exec.LookPath,
-		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return exec.CommandContext(ctx, name, args...).CombinedOutput()
-		},
-		httpClient: &http.Client{Timeout: 3 * time.Second},
+		localClient: &local.Client{},
+		httpClient:  &http.Client{Timeout: 3 * time.Second},
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -58,6 +60,14 @@ func NewInspector() *Inspector {
 func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetupStatus {
 	if i == nil {
 		i = NewInspector()
+	}
+	if i.localClient == nil {
+		i.localClient = &local.Client{}
+	}
+	if i.now == nil {
+		i.now = func() time.Time {
+			return time.Now().UTC()
+		}
 	}
 	now := i.now()
 	status := domain.FunnelSetupStatus{
@@ -79,34 +89,20 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 		})
 	}
 
-	binaryPath, err := i.lookPath("tailscale")
-	if err != nil {
-		addCheck(
-			"tailscale_cli",
-			"Tailscale CLI is installed",
-			"error",
-			"`tailscale` is not available on PATH.",
-			"Install Tailscale and ensure the `tailscale` CLI is available before configuring Funnel.",
-		)
-		status.SuggestedCommand = suggestedCommand(nil, opts.LocalPort)
-		status.Checks = checks
-		return finalizeStatus(status)
-	}
-	addCheck("tailscale_cli", "Tailscale CLI is installed", "ok", fmt.Sprintf("Using `%s`.", binaryPath), "")
-
 	tsStatus, err := i.readStatus(ctx)
 	if err != nil {
 		addCheck(
-			"tailscale_backend",
-			"Tailscale is running",
+			"tailscale_local_api",
+			"Colin can reach the local Tailscale daemon",
 			"error",
 			err.Error(),
-			"Start Tailscale and confirm `tailscale status --json` succeeds.",
+			"Start Tailscale and confirm the local Tailscale daemon is reachable.",
 		)
 		status.SuggestedCommand = suggestedCommand(nil, opts.LocalPort)
 		status.Checks = checks
 		return finalizeStatus(status)
 	}
+	addCheck("tailscale_local_api", "Colin can reach the local Tailscale daemon", "ok", "Connected to the local Tailscale daemon.", "")
 	if strings.EqualFold(strings.TrimSpace(tsStatus.BackendState), "Running") {
 		addCheck("tailscale_backend", "Tailscale is running", "ok", "Backend state is `Running`.", "")
 	} else {
@@ -118,14 +114,18 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 			"Connect this machine to Tailscale before enabling Funnel.",
 		)
 	}
-	if tsStatus.CurrentTailnet.MagicDNSEnabled {
+	if tsStatus.CurrentTailnet != nil && tsStatus.CurrentTailnet.MagicDNSEnabled {
 		addCheck("magic_dns", "MagicDNS is enabled", "ok", "MagicDNS is enabled for the current tailnet.", "")
 	} else {
+		detail := "MagicDNS is disabled for the current tailnet."
+		if tsStatus.CurrentTailnet == nil {
+			detail = "The local Tailscale daemon is not connected to a tailnet yet."
+		}
 		addCheck(
 			"magic_dns",
 			"MagicDNS is enabled",
 			"error",
-			"MagicDNS is disabled for the current tailnet.",
+			detail,
 			"Enable MagicDNS in the Tailscale admin console before enabling Funnel.",
 		)
 	}
@@ -189,62 +189,34 @@ func (i *Inspector) Check(ctx context.Context, opts Options) domain.FunnelSetupS
 	return finalizeStatus(status)
 }
 
-type statusResponse struct {
-	BackendState string `json:"BackendState"`
-	Self         struct {
-		DNSName string `json:"DNSName"`
-	} `json:"Self"`
-	CurrentTailnet struct {
-		MagicDNSEnabled bool `json:"MagicDNSEnabled"`
-	} `json:"CurrentTailnet"`
-}
-
-type serveConfig struct {
-	Web         map[string]webServerConfig `json:"Web"`
-	AllowFunnel map[string]bool            `json:"AllowFunnel"`
-}
-
-type webServerConfig struct {
-	Handlers map[string]httpHandler `json:"Handlers"`
-}
-
-type httpHandler struct {
-	Path     string `json:"Path"`
-	Proxy    string `json:"Proxy"`
-	Text     string `json:"Text"`
-	Redirect string `json:"Redirect"`
-}
-
 type funnelMatchInfo struct {
 	URL      string
 	HostPort string
 }
 
-func (i *Inspector) readStatus(ctx context.Context) (statusResponse, error) {
-	output, err := i.run(ctx, "tailscale", "status", "--json")
+func (i *Inspector) readStatus(ctx context.Context) (*ipnstate.Status, error) {
+	status, err := i.localClient.StatusWithoutPeers(ctx)
 	if err != nil {
-		return statusResponse{}, cliError("tailscale status --json", output, err)
+		return nil, fmt.Errorf("read Tailscale status from LocalAPI: %w", err)
 	}
-	var out statusResponse
-	if err := json.Unmarshal(output, &out); err != nil {
-		return statusResponse{}, fmt.Errorf("parse tailscale status JSON: %w", err)
+	if status == nil {
+		return nil, errors.New("read Tailscale status from LocalAPI: empty response")
 	}
-	return out, nil
+	return status, nil
 }
 
-func (i *Inspector) readFunnelStatus(ctx context.Context) (serveConfig, error) {
-	output, err := i.run(ctx, "tailscale", "funnel", "status", "--json")
+func (i *Inspector) readFunnelStatus(ctx context.Context) (*ipn.ServeConfig, error) {
+	cfg, err := i.localClient.GetServeConfig(ctx)
 	if err != nil {
-		return serveConfig{}, cliError("tailscale funnel status --json", output, err)
+		return nil, fmt.Errorf("read Tailscale serve config from LocalAPI: %w", err)
 	}
-	var out serveConfig
-	if err := json.Unmarshal(output, &out); err != nil {
-		return serveConfig{}, fmt.Errorf("parse tailscale funnel JSON: %w", err)
+	if cfg == nil {
+		return &ipn.ServeConfig{}, nil
 	}
-	return out, nil
+	return cfg, nil
 }
 
-func matchFunnel(cfg serveConfig, localPort *int) (*funnelMatchInfo, map[int]struct{}, error) {
+func matchFunnel(cfg *ipn.ServeConfig, localPort *int) (*funnelMatchInfo, map[int]struct{}, error) {
 	if localPort == nil || *localPort <= 0 {
 		return nil, usedPorts(cfg), errors.New("Colin needs a fixed local `server.port` before Funnel can be configured.")
 	}
@@ -252,10 +224,13 @@ func matchFunnel(cfg serveConfig, localPort *int) (*funnelMatchInfo, map[int]str
 	ports := usedPorts(cfg)
 	var sawProxyForPort bool
 	for hostPort, server := range cfg.Web {
+		if server == nil {
+			continue
+		}
 		handler, ok := server.Handlers[webhookMountPath]
 		if !ok {
 			for _, other := range server.Handlers {
-				if proxyTargetsPort(other.Proxy, *localPort) {
+				if other != nil && proxyTargetsPort(other.Proxy, *localPort) {
 					sawProxyForPort = true
 					break
 				}
@@ -270,8 +245,8 @@ func matchFunnel(cfg serveConfig, localPort *int) (*funnelMatchInfo, map[int]str
 			continue
 		}
 		return &funnelMatchInfo{
-			URL:      hostPortToURL(hostPort),
-			HostPort: hostPort,
+			URL:      hostPortToURL(string(hostPort)),
+			HostPort: string(hostPort),
 		}, ports, nil
 	}
 	if sawProxyForPort {
@@ -280,15 +255,18 @@ func matchFunnel(cfg serveConfig, localPort *int) (*funnelMatchInfo, map[int]str
 	return nil, ports, fmt.Errorf("No Funnel proxies `127.0.0.1:%d` from `/webhooks` yet.", *localPort)
 }
 
-func usedPorts(cfg serveConfig) map[int]struct{} {
+func usedPorts(cfg *ipn.ServeConfig) map[int]struct{} {
 	out := map[int]struct{}{}
+	if cfg == nil {
+		return out
+	}
 	for hostPort := range cfg.Web {
-		if port, ok := parseHostPortPort(hostPort); ok {
+		if port, ok := parseHostPortPort(string(hostPort)); ok {
 			out[port] = struct{}{}
 		}
 	}
 	for hostPort := range cfg.AllowFunnel {
-		if port, ok := parseHostPortPort(hostPort); ok {
+		if port, ok := parseHostPortPort(string(hostPort)); ok {
 			out[port] = struct{}{}
 		}
 	}
@@ -464,11 +442,4 @@ func publicRemediation(command string) string {
 		return "Finish the local Colin and Funnel setup, then verify the public readiness URL again."
 	}
 	return fmt.Sprintf("Confirm Funnel is active with `%s` and that the derived public URL resolves.", command)
-}
-
-func cliError(command string, output []byte, err error) error {
-	if len(strings.TrimSpace(string(output))) == 0 {
-		return fmt.Errorf("%s failed: %w", command, err)
-	}
-	return fmt.Errorf("%s failed: %s", command, strings.TrimSpace(string(output)))
 }

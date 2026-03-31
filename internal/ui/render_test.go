@@ -281,10 +281,10 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		SuggestedCommand: "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
 		Checks: []domain.SetupCheck{
 			{
-				ID:        "tailscale_cli",
-				Label:     "Tailscale CLI is installed",
+				ID:        "tailscale_local_api",
+				Label:     "Colin can reach the local Tailscale daemon",
 				Status:    "ok",
-				Detail:    "Using `/usr/local/bin/tailscale`.",
+				Detail:    "Connected to the local Tailscale daemon.",
 				CheckedAt: now,
 			},
 		},
@@ -296,7 +296,7 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		`Ready for webhooks`,
 		`https://colin.tail.example.ts.net/webhooks/github`,
 		`tailscale funnel --bg --https=443 --set-path=/webhooks 8888`,
-		`data-testid="funnel-check-tailscale_cli"`,
+		`data-testid="funnel-check-tailscale_local_api"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)

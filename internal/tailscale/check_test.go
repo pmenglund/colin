@@ -2,7 +2,6 @@ package tailscale
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -11,13 +10,33 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 )
 
-func TestResolveMissingBinary(t *testing.T) {
+type fakeLocalAPIClient struct {
+	status    *ipnstate.Status
+	statusErr error
+	serveCfg  *ipn.ServeConfig
+	serveErr  error
+}
+
+func (f fakeLocalAPIClient) StatusWithoutPeers(context.Context) (*ipnstate.Status, error) {
+	return f.status, f.statusErr
+}
+
+func (f fakeLocalAPIClient) GetServeConfig(context.Context) (*ipn.ServeConfig, error) {
+	return f.serveCfg, f.serveErr
+}
+
+func TestResolveMissingLocalAPI(t *testing.T) {
 	t.Parallel()
 
 	inspector := &Inspector{
-		lookPath: func(string) (string, error) { return "", errors.New("missing") },
+		localClient: fakeLocalAPIClient{
+			statusErr: errors.New("localapi unavailable"),
+		},
 		now: func() time.Time {
 			return time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
 		},
@@ -27,13 +46,13 @@ func TestResolveMissingBinary(t *testing.T) {
 		LocalPort: intPtr(8888),
 	})
 	if status.Ready {
-		t.Fatal("Resolve() reported ready without tailscale")
+		t.Fatal("Resolve() reported ready without a reachable LocalAPI")
 	}
 	if status.SuggestedCommand != "tailscale funnel --bg --https=443 --set-path=/webhooks 8888" {
 		t.Fatalf("SuggestedCommand = %q", status.SuggestedCommand)
 	}
-	if got := status.Checks[0].ID; got != "tailscale_cli" {
-		t.Fatalf("first check id = %q, want tailscale_cli", got)
+	if got := status.Checks[0].ID; got != "tailscale_local_api" {
+		t.Fatalf("first check id = %q, want tailscale_local_api", got)
 	}
 }
 
@@ -60,38 +79,25 @@ func TestResolveDetectsMatchingFunnel(t *testing.T) {
 
 	localPort := mustURLPort(t, local.URL)
 	inspector := &Inspector{
-		lookPath: func(string) (string, error) { return "/usr/local/bin/tailscale", nil },
-		run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-			switch strings.Join(args, " ") {
-			case "status --json":
-				return marshalJSON(t, map[string]any{
-					"BackendState": "Running",
-					"Self": map[string]any{
-						"DNSName": "colin.tail.example.ts.net.",
-					},
-					"CurrentTailnet": map[string]any{
-						"MagicDNSEnabled": true,
-					},
-				}), nil
-			case "funnel status --json":
-				return marshalJSON(t, map[string]any{
-					"Web": map[string]any{
-						"colin.tail.example.ts.net:443": map[string]any{
-							"Handlers": map[string]any{
-								"/webhooks": map[string]any{
-									"Proxy": "http://127.0.0.1:" + itoa(localPort),
-								},
-							},
+		localClient: fakeLocalAPIClient{
+			status: &ipnstate.Status{
+				BackendState: "Running",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					MagicDNSEnabled: true,
+				},
+			},
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/webhooks": {Proxy: "http://127.0.0.1:" + itoa(localPort)},
 						},
 					},
-					"AllowFunnel": map[string]bool{
-						"colin.tail.example.ts.net:443": true,
-					},
-				}), nil
-			default:
-				t.Fatalf("unexpected args: %v", args)
-				return nil, nil
-			}
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					"colin.tail.example.ts.net:443": true,
+				},
+			},
 		},
 		httpClient: public.Client(),
 		now: func() time.Time {
@@ -122,35 +128,25 @@ func TestResolveRejectsNonWebhookMount(t *testing.T) {
 	t.Parallel()
 
 	inspector := &Inspector{
-		lookPath: func(string) (string, error) { return "/usr/local/bin/tailscale", nil },
-		run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-			switch strings.Join(args, " ") {
-			case "status --json":
-				return marshalJSON(t, map[string]any{
-					"BackendState": "Running",
-					"CurrentTailnet": map[string]any{
-						"MagicDNSEnabled": true,
-					},
-				}), nil
-			case "funnel status --json":
-				return marshalJSON(t, map[string]any{
-					"Web": map[string]any{
-						"colin.tail.example.ts.net:443": map[string]any{
-							"Handlers": map[string]any{
-								"/": map[string]any{
-									"Proxy": "http://127.0.0.1:8888",
-								},
-							},
+		localClient: fakeLocalAPIClient{
+			status: &ipnstate.Status{
+				BackendState: "Running",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					MagicDNSEnabled: true,
+				},
+			},
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:8888"},
 						},
 					},
-					"AllowFunnel": map[string]bool{
-						"colin.tail.example.ts.net:443": true,
-					},
-				}), nil
-			default:
-				t.Fatalf("unexpected args: %v", args)
-				return nil, nil
-			}
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					"colin.tail.example.ts.net:443": true,
+				},
+			},
 		},
 		now: func() time.Time {
 			return time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
@@ -176,35 +172,25 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 	t.Parallel()
 
 	inspector := &Inspector{
-		lookPath: func(string) (string, error) { return "/usr/local/bin/tailscale", nil },
-		run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-			switch strings.Join(args, " ") {
-			case "status --json":
-				return marshalJSON(t, map[string]any{
-					"BackendState": "Running",
-					"CurrentTailnet": map[string]any{
-						"MagicDNSEnabled": true,
-					},
-				}), nil
-			case "funnel status --json":
-				return marshalJSON(t, map[string]any{
-					"Web": map[string]any{
-						"colin.tail.example.ts.net:8443": map[string]any{
-							"Handlers": map[string]any{
-								"/webhooks": map[string]any{
-									"Proxy": "http://127.0.0.1:8888",
-								},
-							},
+		localClient: fakeLocalAPIClient{
+			status: &ipnstate.Status{
+				BackendState: "Running",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					MagicDNSEnabled: true,
+				},
+			},
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:8443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/webhooks": {Proxy: "http://127.0.0.1:8888"},
 						},
 					},
-					"AllowFunnel": map[string]bool{
-						"colin.tail.example.ts.net:8443": true,
-					},
-				}), nil
-			default:
-				t.Fatalf("unexpected args: %v", args)
-				return nil, nil
-			}
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					"colin.tail.example.ts.net:8443": true,
+				},
+			},
 		},
 		now: func() time.Time {
 			return time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
@@ -222,13 +208,33 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 	}
 }
 
-func marshalJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
+func TestResolveHandlesMissingCurrentTailnet(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			status: &ipnstate.Status{
+				BackendState: "Running",
+			},
+			serveCfg: &ipn.ServeConfig{},
+		},
+		now: func() time.Time {
+			return time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
+		},
 	}
-	return data
+
+	status := inspector.Resolve(context.Background(), Options{
+		LocalPort: intPtr(8888),
+	})
+	if status.Ready {
+		t.Fatal("Resolve() reported ready without a current tailnet")
+	}
+	if got := status.Checks[2].ID; got != "magic_dns" {
+		t.Fatalf("check id = %q, want magic_dns", got)
+	}
+	if got := status.Checks[2].Detail; got != "The local Tailscale daemon is not connected to a tailnet yet." {
+		t.Fatalf("magic dns detail = %q", got)
+	}
 }
 
 func mustURLPort(t *testing.T, raw string) int {

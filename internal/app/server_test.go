@@ -97,10 +97,10 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
 			Checks: []domain.SetupCheck{
 				{
-					ID:        "tailscale_cli",
-					Label:     "Tailscale CLI is installed",
+					ID:        "tailscale_local_api",
+					Label:     "Colin can reach the local Tailscale daemon",
 					Status:    "ok",
-					Detail:    "Using `/usr/local/bin/tailscale`.",
+					Detail:    "Connected to the local Tailscale daemon.",
 					CheckedAt: now,
 				},
 			},
