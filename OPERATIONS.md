@@ -65,6 +65,8 @@ To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pas
 go run . --port 9999
 ```
 
+GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`.
+
 If operators need explicit URLs instead of Colin's defaults, set `server.webhook_public_url` for externally reachable webhook URLs and `server.ui_url` for operator-facing dashboard or metadata links. `server.public_url` remains as a deprecated fallback for the webhook public URL.
 
 Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the webhook endpoints are publicly reachable:
@@ -204,7 +206,7 @@ When an issue is moved to `Merge`, Colin:
 - Moving an issue into `Merge` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval. Polling still remains the fallback if a webhook is delayed or dropped.
 - ensures the branch and PR exist
 - checks the PR for Codex web review status before merging
-- keeps the issue in `Merge` while `chatgpt-codex-connector[bot]` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that bot remain
+- keeps the issue in `Merge` while `chatgpt-codex-connector` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that reviewer remain
 - if GitHub reports that the PR cannot be merged cleanly, asks Codex to merge the latest base branch into the issue branch, resolve conflicts in the workspace, and retry the merge while the issue stays in `Merge`
 - moves the issue back to `Review` with a Linear comment when that automatic conflict-repair attempt fails, or when the repaired branch receives unresolved Codex review feedback; otherwise it keeps waiting in `Merge` while fresh Codex review is still pending
 - merges the PR using the configured merge method
@@ -245,7 +247,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - base publish and merge automation on branch `symphony`
 - decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
-- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set for an alternate operator-facing address
+- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set or Tailscale Serve exposes Colin from `/`
 - keep the last `1000` internal log lines in memory by default, configurable with `server.log_buffer_lines`
 
 ## Operational Notes
@@ -260,7 +262,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
-- Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links point at the local Colin UI address.
+- Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for the Colin port and derives the public webhook base URL from that Funnel. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
 - Relevant Linear `Issue` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals so Colin can react faster to state changes such as `Todo` and `Merge`.

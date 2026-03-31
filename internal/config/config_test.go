@@ -10,6 +10,7 @@ import (
 func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token-from-env")
 	t.Setenv("WS_ROOT", "/tmp/colin-workspaces")
+	t.Setenv("GITHUB_TOKEN", "github-token-from-env")
 
 	def := domain.WorkflowDefinition{
 		Config: map[string]any{
@@ -42,6 +43,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Repo.BranchTemplate != "colin/{{.issue.identifier}}-{{.issue.title}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q", cfg.Repo.BranchTemplate)
+	}
+	if cfg.Repo.APIToken != "github-token-from-env" {
+		t.Fatalf("cfg.Repo.APIToken = %q", cfg.Repo.APIToken)
 	}
 	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
 		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
@@ -317,6 +321,54 @@ func TestBuildReadsBranchTemplate(t *testing.T) {
 	}
 	if got := cfg.Repo.BranchTemplate; got != "feature/{{.issue.identifier}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q, want %q", got, "feature/{{.issue.identifier}}")
+	}
+}
+
+func TestBuildReadsRepoAPITokenFromConfig(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "fallback-token")
+	t.Setenv("COLIN_GITHUB_TOKEN", "config-token")
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"repo": map[string]any{
+				"api_token": "$COLIN_GITHUB_TOKEN",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Repo.APIToken; got != "config-token" {
+		t.Fatalf("cfg.Repo.APIToken = %q, want %q", got, "config-token")
+	}
+}
+
+func TestBuildFallsBackToGHToken(t *testing.T) {
+	t.Setenv("GH_TOKEN", "gh-token")
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Repo.APIToken; got != "gh-token" {
+		t.Fatalf("cfg.Repo.APIToken = %q, want %q", got, "gh-token")
 	}
 }
 

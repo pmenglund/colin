@@ -292,6 +292,10 @@ func applyHooksConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 
 func applyRepoConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	if raw == nil {
+		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+		if cfg.Repo.APIToken == "" {
+			cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+		}
 		return nil
 	}
 	if value, ok := readStringSlice(raw, "publish_states"); ok && len(value) > 0 {
@@ -311,6 +315,15 @@ func applyRepoConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	}
 	if value, ok := readString(raw, "pr_template"); ok {
 		cfg.Repo.PRTemplate = value
+	}
+	if value, ok := readString(raw, "api_token"); ok {
+		cfg.Repo.APIToken = resolveEnvToken(value)
+	}
+	if cfg.Repo.APIToken == "" {
+		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+	}
+	if cfg.Repo.APIToken == "" {
+		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
 	}
 	return nil
 }

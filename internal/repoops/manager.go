@@ -2,7 +2,6 @@ package repoops
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
@@ -25,7 +25,10 @@ var (
 	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
 )
 
-const codexReviewBotLogin = "chatgpt-codex-connector[bot]"
+var codexReviewLogins = []string{
+	"chatgpt-codex-connector",
+	"chatgpt-codex-connector[bot]",
+}
 
 // Result captures the outcome of a publish or merge operation.
 type Result struct {
@@ -51,13 +54,21 @@ type ReviewContext struct {
 
 // Manager performs git and GitHub operations for a workspace.
 type Manager struct {
-	cfg    domain.ServiceConfig
-	logger *slog.Logger
+	cfg        domain.ServiceConfig
+	logger     *slog.Logger
+	github     GitHubClient
+	githubOnce sync.Once
+	githubErr  error
 }
 
 // NewManager constructs a repository automation manager.
 func NewManager(cfg domain.ServiceConfig, logger *slog.Logger) *Manager {
 	return &Manager{cfg: cfg, logger: logger}
+}
+
+// NewManagerWithGitHubClient constructs a repository automation manager with an injected GitHub client.
+func NewManagerWithGitHubClient(cfg domain.ServiceConfig, logger *slog.Logger, client GitHubClient) *Manager {
+	return &Manager{cfg: cfg, logger: logger, github: client}
 }
 
 // Publish commits workspace changes, pushes the issue branch, and creates or reuses a PR.
@@ -161,9 +172,15 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 	if result.PRNumber == 0 {
 		return Result{}, ErrNoPullRequest
 	}
-
-	args := []string{"pr", "merge", fmt.Sprintf("%d", result.PRNumber), "--" + m.cfg.Repo.MergeMethod}
-	if _, err := m.run(ctx, workspacePath, 2*time.Minute, "gh", args...); err != nil {
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	if err != nil {
+		return result, err
+	}
+	client, err := m.githubClient()
+	if err != nil {
+		return result, err
+	}
+	if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, m.cfg.Repo.MergeMethod); err != nil {
 		return result, err
 	}
 	result.Action = "merged"
@@ -241,36 +258,14 @@ func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath
 	if replyBody == "" {
 		return errors.New("missing review reply body")
 	}
-
-	const replyMutation = `mutation ReplyReviewThread($threadId: ID!, $body: String!) {
-  addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
-    comment { id url }
-  }
-}`
-	if _, err := m.runGraphQL(ctx, workspacePath, 30*time.Second, replyMutation, map[string]string{
-		"threadId": thread.ID,
-		"body":     replyBody,
-	}); err != nil {
+	client, err := m.githubClient()
+	if err != nil {
 		return err
 	}
-
-	const resolveMutation = `mutation ResolveReviewThread($threadId: ID!) {
-  resolveReviewThread(input: { threadId: $threadId }) {
-    thread { id isResolved }
-  }
-}`
-	_, err := m.runGraphQL(ctx, workspacePath, 30*time.Second, resolveMutation, map[string]string{
-		"threadId": thread.ID,
-	})
-	return err
-}
-
-type pullRequest struct {
-	Number      int    `json:"number"`
-	URL         string `json:"url"`
-	State       string `json:"state"`
-	HeadRefName string `json:"headRefName"`
-	BaseRefName string `json:"baseRefName"`
+	if err := client.ReplyToReviewThread(ctx, thread.ID, replyBody); err != nil {
+		return err
+	}
+	return client.ResolveReviewThread(ctx, thread.ID)
 }
 
 func (m *Manager) currentBranch(ctx context.Context, workspacePath string) (string, error) {
@@ -382,56 +377,34 @@ func (m *Manager) ensureIdentity(ctx context.Context, workspacePath string) erro
 	return nil
 }
 
-func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch string) (*pullRequest, error) {
-	out, err := m.run(
-		ctx,
-		workspacePath,
-		30*time.Second,
-		"gh", "pr", "list",
-		"--head", branch,
-		"--base", m.cfg.Workspace.BaseRef,
-		"--state", "all",
-		"--json", "number,url,state,headRefName,baseRefName",
-	)
+func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch string) (*GitHubPullRequest, error) {
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
 	if err != nil {
 		return nil, err
 	}
-	var prs []pullRequest
-	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+	client, err := m.githubClient()
+	if err != nil {
 		return nil, err
 	}
-	if len(prs) == 0 {
-		return nil, nil
-	}
-	return &prs[0], nil
+	return client.PullRequestByHead(ctx, owner, name, branch, m.cfg.Workspace.BaseRef)
 }
 
-func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*pullRequest, error) {
+func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*GitHubPullRequest, error) {
 	if number <= 0 {
 		return nil, nil
 	}
-	out, err := m.run(
-		ctx,
-		workspacePath,
-		30*time.Second,
-		"gh", "pr", "view",
-		fmt.Sprintf("%d", number),
-		"--json", "number,url,state,headRefName,baseRefName",
-	)
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
 	if err != nil {
 		return nil, err
 	}
-	var pr pullRequest
-	if err := json.Unmarshal([]byte(out), &pr); err != nil {
+	client, err := m.githubClient()
+	if err != nil {
 		return nil, err
 	}
-	if pr.Number == 0 {
-		return nil, nil
-	}
-	return &pr, nil
+	return client.PullRequestByNumber(ctx, owner, name, number)
 }
 
-func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, workspacePath, currentBranch string, allowCreate bool) (*pullRequest, bool, error) {
+func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, workspacePath, currentBranch string, allowCreate bool) (*GitHubPullRequest, bool, error) {
 	tracked, hasTracked := trackedPullRequest(issue)
 	if hasTracked {
 		pr, err := m.resolveTrackedPullRequest(ctx, workspacePath, tracked, currentBranch)
@@ -498,7 +471,7 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	return pr, true, nil
 }
 
-func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath string, tracked domain.PullRequestRef, currentBranch string) (*pullRequest, error) {
+func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath string, tracked domain.PullRequestRef, currentBranch string) (*GitHubPullRequest, error) {
 	pr, err := m.findPullRequestByNumber(ctx, workspacePath, tracked.Number)
 	if err != nil {
 		return nil, fmt.Errorf("view tracked pull request #%d: %w", tracked.Number, err)
@@ -586,20 +559,24 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 	if err != nil {
 		return "", err
 	}
-	out, err := m.run(
-		ctx,
-		workspacePath,
-		2*time.Minute,
-		"gh", "pr", "create",
-		"--base", m.cfg.Workspace.BaseRef,
-		"--head", branch,
-		"--title", title,
-		"--body", body,
-	)
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out), nil
+	client, err := m.githubClient()
+	if err != nil {
+		return "", err
+	}
+	pr, err := client.CreatePullRequest(ctx, owner, name, CreatePullRequestInput{
+		Title: title,
+		Head:  branch,
+		Base:  m.cfg.Workspace.BaseRef,
+		Body:  body,
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(pr.URL), nil
 }
 
 func (m *Manager) remoteRepository(ctx context.Context, workspacePath string) (string, string, error) {
@@ -642,69 +619,31 @@ func parseRemoteRepository(remoteURL string) (string, string, error) {
 }
 
 func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.GitHubReviewThread, []domain.GitHubReviewThread, error) {
-	const query = `query ReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      reviewThreads(first: 50, after: $cursor) {
-        nodes {
-          id
-          isResolved
-          isOutdated
-          viewerCanReply
-          viewerCanResolve
-          path
-          line
-          startLine
-          comments(first: 20) {
-            nodes {
-              id
-              body
-              url
-              createdAt
-              author { login }
-            }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-          }
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  }
-}`
-
 	var (
 		cursor       string
 		threads      []domain.GitHubReviewThread
 		codexThreads []domain.GitHubReviewThread
 	)
+	client, err := m.githubClient()
+	if err != nil {
+		return nil, nil, err
+	}
 	for {
-		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
-			"owner":  owner,
-			"name":   name,
-			"number": fmt.Sprintf("%d", prNumber),
-			"cursor": cursor,
-		})
+		resp, err := client.ReviewThreads(ctx, owner, name, prNumber, cursor)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		nodes, ok := nestedSlice(resp, "data", "repository", "pullRequest", "reviewThreads", "nodes")
-		if !ok {
-			return nil, nil, nil
+		if len(resp.Threads) == 0 && !resp.HasNextPage {
+			return threads, codexThreads, nil
 		}
-		for _, node := range nodes {
+		for _, node := range resp.Threads {
 			thread, ok := parseReviewThread(node)
 			if !ok || thread.IsResolved {
 				continue
 			}
 			threads = append(threads, thread)
-			containsAuthor, err := m.reviewThreadContainsAuthor(ctx, workspacePath, node, codexReviewBotLogin)
+			containsAuthor, err := m.reviewThreadContainsCodexAuthor(ctx, workspacePath, node)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -712,21 +651,19 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 				codexThreads = append(codexThreads, thread)
 			}
 		}
-		hasNextPage, _ := nestedBool(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "hasNextPage")
-		if !hasNextPage {
+		if !resp.HasNextPage {
 			break
 		}
-		nextCursor, ok := nestedString(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "endCursor")
-		if !ok || strings.TrimSpace(nextCursor) == "" {
+		if strings.TrimSpace(resp.EndCursor) == "" {
 			break
 		}
-		cursor = nextCursor
+		cursor = resp.EndCursor
 	}
 	return threads, codexThreads, nil
 }
 
-func (m *Manager) reviewThreadContainsAuthor(ctx context.Context, workspacePath string, node map[string]any, login string) (bool, error) {
-	if reviewThreadPageContainsAuthor(node, login) {
+func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node map[string]any) (bool, error) {
+	if reviewThreadPageContainsCodexAuthor(node) {
 		return true, nil
 	}
 	if !reviewThreadCommentsHasNextPage(node) {
@@ -736,149 +673,79 @@ func (m *Manager) reviewThreadContainsAuthor(ctx context.Context, workspacePath 
 	if strings.TrimSpace(threadID) == "" {
 		return false, nil
 	}
-	return m.fetchReviewThreadCommentAuthor(ctx, workspacePath, threadID, login)
+	return m.fetchReviewThreadCommentAuthor(ctx, workspacePath, threadID)
 }
 
-func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID, login string) (bool, error) {
-	const query = `query ReviewThreadComments($threadId: ID!, $cursor: String) {
-  node(id: $threadId) {
-    ... on PullRequestReviewThread {
-      comments(first: 100, after: $cursor) {
-        nodes {
-          author { login }
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  }
-}`
-
+func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID string) (bool, error) {
+	client, err := m.githubClient()
+	if err != nil {
+		return false, err
+	}
 	cursor := ""
 	for {
-		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
-			"threadId": threadID,
-			"cursor":   cursor,
-		})
+		resp, err := client.ReviewThreadComments(ctx, threadID, cursor)
 		if err != nil {
 			return false, err
 		}
-		nodes, ok := nestedSlice(resp, "data", "node", "comments", "nodes")
-		if ok {
-			for _, node := range nodes {
-				author, _ := nestedString(node, "author", "login")
-				if strings.EqualFold(strings.TrimSpace(author), login) {
-					return true, nil
-				}
+		for _, node := range resp.Comments {
+			author, _ := nestedString(node, "author", "login")
+			if isCodexReviewAuthor(author) {
+				return true, nil
 			}
 		}
-		hasNextPage, _ := nestedBool(resp, "data", "node", "comments", "pageInfo", "hasNextPage")
-		if !hasNextPage {
+		if !resp.HasNextPage {
 			return false, nil
 		}
-		nextCursor, ok := nestedString(resp, "data", "node", "comments", "pageInfo", "endCursor")
-		if !ok || strings.TrimSpace(nextCursor) == "" {
+		if strings.TrimSpace(resp.EndCursor) == "" {
 			return false, nil
 		}
-		cursor = nextCursor
+		cursor = resp.EndCursor
 	}
 }
 
 func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, owner, name string, prNumber int) (*time.Time, *time.Time, error) {
-	const query = `query PullRequestReactions($owner: String!, $name: String!, $number: Int!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      reactions(first: 100, after: $cursor) {
-        nodes {
-          content
-          createdAt
-          user { login }
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  }
-}`
-
 	var (
 		cursor    string
 		requested *time.Time
 		approved  *time.Time
 	)
+	client, err := m.githubClient()
+	if err != nil {
+		return nil, nil, err
+	}
 	for {
-		resp, err := m.runGraphQL(ctx, workspacePath, 45*time.Second, query, map[string]string{
-			"owner":  owner,
-			"name":   name,
-			"number": fmt.Sprintf("%d", prNumber),
-			"cursor": cursor,
-		})
+		resp, err := client.PullRequestReactions(ctx, owner, name, prNumber, cursor)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		nodes, ok := nestedSlice(resp, "data", "repository", "pullRequest", "reactions", "nodes")
-		if !ok {
+		if len(resp.Reactions) == 0 && !resp.HasNextPage {
 			return requested, approved, nil
 		}
-		for _, node := range nodes {
-			login, _ := nestedString(node, "user", "login")
-			if !strings.EqualFold(strings.TrimSpace(login), codexReviewBotLogin) {
+		for _, node := range resp.Reactions {
+			login := node.UserLogin
+			if !isCodexReviewAuthor(login) {
 				continue
 			}
-			content, _ := stringValue(node["content"])
-			createdAt, ok := parseTimestamp(node["createdAt"])
-			if !ok {
+			if node.CreatedAt == nil {
 				continue
 			}
-			switch strings.TrimSpace(content) {
+			switch strings.TrimSpace(node.Content) {
 			case "EYES":
-				requested = latestTimePtr(requested, createdAt)
+				requested = latestTimePtr(requested, *node.CreatedAt)
 			case "THUMBS_UP":
-				approved = latestTimePtr(approved, createdAt)
+				approved = latestTimePtr(approved, *node.CreatedAt)
 			}
 		}
-		hasNextPage, _ := nestedBool(resp, "data", "repository", "pullRequest", "reactions", "pageInfo", "hasNextPage")
-		if !hasNextPage {
+		if !resp.HasNextPage {
 			break
 		}
-		nextCursor, ok := nestedString(resp, "data", "repository", "pullRequest", "reactions", "pageInfo", "endCursor")
-		if !ok || strings.TrimSpace(nextCursor) == "" {
+		if strings.TrimSpace(resp.EndCursor) == "" {
 			break
 		}
-		cursor = nextCursor
+		cursor = resp.EndCursor
 	}
 	return requested, approved, nil
-}
-
-func (m *Manager) runGraphQL(ctx context.Context, cwd string, timeout time.Duration, query string, vars map[string]string) (map[string]any, error) {
-	args := []string{"api", "graphql", "-f", "query=" + query}
-	for key, value := range vars {
-		if strings.TrimSpace(value) == "" {
-			continue
-		}
-		flag := "-F"
-		if key == "body" {
-			flag = "-f"
-		}
-		args = append(args, flag, fmt.Sprintf("%s=%s", key, value))
-	}
-	out, err := m.run(ctx, cwd, timeout, "gh", args...)
-	if err != nil {
-		return nil, err
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
-		return nil, err
-	}
-	if errorsField, ok := decoded["errors"]; ok && errorsField != nil {
-		return nil, fmt.Errorf("graphql errors: %v", errorsField)
-	}
-	return decoded, nil
 }
 
 func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
@@ -921,14 +788,23 @@ func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
 	return thread, true
 }
 
-func reviewThreadPageContainsAuthor(node map[string]any, login string) bool {
+func reviewThreadPageContainsCodexAuthor(node map[string]any) bool {
 	comments, ok := nestedSlice(node, "comments", "nodes")
 	if !ok {
 		return false
 	}
 	for _, comment := range comments {
 		author, _ := nestedString(comment, "author", "login")
-		if strings.EqualFold(strings.TrimSpace(author), login) {
+		if isCodexReviewAuthor(author) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCodexReviewAuthor(login string) bool {
+	for _, candidate := range codexReviewLogins {
+		if strings.EqualFold(strings.TrimSpace(login), candidate) {
 			return true
 		}
 	}
@@ -1114,4 +990,17 @@ func truncateOutput(value string) string {
 		return value
 	}
 	return value[:4096]
+}
+
+func (m *Manager) githubClient() (GitHubClient, error) {
+	m.githubOnce.Do(func() {
+		if m.github != nil {
+			return
+		}
+		m.github, m.githubErr = NewGitHubClientFromConfig(m.cfg, m.logger)
+	})
+	if m.githubErr != nil {
+		return nil, m.githubErr
+	}
+	return m.github, nil
 }

@@ -9,6 +9,7 @@ The value is operational leverage: more tasks advancing at once, less branch and
 Before you run Colin, make sure you have:
 
 - access to [Codex](https://platform.openai.com/docs/codex/overview) and a GitHub account or organization connected to it
+- a GitHub token available to Colin via `repo.api_token`, `GITHUB_TOKEN`, or `GH_TOKEN` so publish and merge automation can talk to the GitHub API
 - a Linear project and workflow with the states Colin uses for active work and handoffs
 
 Optional but encouraged:
@@ -96,6 +97,8 @@ go run . setup linear
 ```
 
 Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses relevant `Issue` deliveries to queue best-effort immediate reconciliation. Polling remains the fallback path if a webhook is delayed or dropped.
+
+Linear metadata attachments point at `server.ui_url` when configured. If that is unset but Tailscale Serve proxies Colin from `/`, Colin uses the preferred Tailscale Serve URL for metadata links, favoring HTTPS when available; otherwise it falls back to the local loopback dashboard URL.
 
 ## Further Reading
 

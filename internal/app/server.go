@@ -159,14 +159,17 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		issueID, ok := domain.ParseColinMetadataPath(r.URL.EscapedPath())
-		if !ok || issueProvider == nil {
-			http.NotFound(w, r)
-			return
+		issueID, execPlanPage := domain.ParseColinExecPlanPath(r.URL.EscapedPath())
+		if !execPlanPage {
+			var ok bool
+			issueID, ok = domain.ParseColinMetadataPath(r.URL.EscapedPath())
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
 		}
-		snapshot, err := provider(r.Context())
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err)
+		if issueProvider == nil {
+			http.NotFound(w, r)
 			return
 		}
 		issue, err := issueProvider(r.Context(), issueID)
@@ -174,13 +177,25 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		mergeLiveIssueOutput(&issue, snapshot)
 
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if r.Method == http.MethodHead {
 			return
 		}
+		if execPlanPage {
+			if err := ui.ExecPlanPage(issue, time.Now().UTC()).Render(w); err != nil && !errors.Is(err, context.Canceled) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		snapshot, err := provider(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		mergeLiveIssueOutput(&issue, snapshot)
 		if err := ui.IssueMetadataPage(issue, time.Now().UTC()).Render(w); err != nil && !errors.Is(err, context.Canceled) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}

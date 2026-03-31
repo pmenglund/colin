@@ -17,6 +17,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/repoops"
+	"github.com/pmenglund/colin/internal/repoops/fakes"
 	"github.com/pmenglund/colin/internal/workspace"
 )
 
@@ -561,7 +562,6 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	repoURL := createRunnerGitOrigin(t, tempDir)
 	branch := "pmenglund/colin-124-internal-log-buffer"
 	prepareRunnerMergeConflict(t, tempDir, repoURL, branch, "symphony")
-	ghLogPath := setupRunnerFakeGitHub(t, tempDir, branch, "symphony", 19)
 	promptLogPath := filepath.Join(tempDir, "prompts.log")
 	command := fmt.Sprintf(
 		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_MERGE_RECOVERY_FILE_CONTENT=%q %q -test.run=TestHelperProcessFakeCodex --",
@@ -569,8 +569,6 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		"base branch text\nfeature branch text\n",
 		os.Args[0],
 	)
-	t.Setenv("COLIN_FAKE_GH_MERGE_ERROR_ONCE", "X Pull request pmenglund/colin#19 is not mergeable: the merge commit cannot be cleanly created.")
-
 	cfg := domain.ServiceConfig{
 		Workspace: domain.WorkspaceConfig{
 			Root:    filepath.Join(tempDir, "workspaces"),
@@ -600,11 +598,25 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		resolvedMergeState:  "Merged",
 		resolveMergeStateOK: true,
 	}
-	runner := NewRunner(
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(&repoops.GitHubPullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.MergePullRequestReturnsOnCall(0, errors.New("X Pull request pmenglund/colin#19 is not mergeable: the merge commit cannot be cleanly created."))
+	fakeGitHub.MergePullRequestReturnsOnCall(1, nil)
+
+	runner := newRunner(
 		cfg,
 		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
 		tracker,
 		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
@@ -626,9 +638,8 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		t.Fatalf("last updated state = %q, want %q", tracker.updatedStates[len(tracker.updatedStates)-1], "Merged")
 	}
 
-	ghLog := readRunnerFile(t, ghLogPath)
-	if got := strings.Count(ghLog, "pr merge 19 --merge"); got != 2 {
-		t.Fatalf("merge invocation count = %d, want 2\n%s", got, ghLog)
+	if got := fakeGitHub.MergePullRequestCallCount(); got != 2 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 2", got)
 	}
 
 	promptLog := readRunnerFile(t, promptLogPath)
@@ -645,15 +656,11 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 	repoURL := createRunnerGitOrigin(t, tempDir)
 	branch := "pmenglund/colin-124-internal-log-buffer"
 	prepareRunnerMergeConflict(t, tempDir, repoURL, branch, "symphony")
-	ghLogPath := setupRunnerFakeGitHub(t, tempDir, branch, "symphony", 19)
 	command := fmt.Sprintf(
-		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_MERGE_RECOVERY_FILE_CONTENT=%q COLIN_FAKE_CODEX_MERGE_RECOVERY_REACTIONS_JSON=%q %q -test.run=TestHelperProcessFakeCodex --",
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_MERGE_RECOVERY_FILE_CONTENT=%q %q -test.run=TestHelperProcessFakeCodex --",
 		"base branch text\nfeature branch text\n",
-		`{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-30T19:52:30Z","user":{"login":"chatgpt-codex-connector[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		os.Args[0],
 	)
-	t.Setenv("COLIN_FAKE_GH_MERGE_ERROR_ONCE", "X Pull request pmenglund/colin#19 is not mergeable: the merge commit cannot be cleanly created.")
-
 	cfg := domain.ServiceConfig{
 		Workspace: domain.WorkspaceConfig{
 			Root:    filepath.Join(tempDir, "workspaces"),
@@ -680,11 +687,33 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 		},
 	}
 	tracker := &stubTracker{}
-	runner := NewRunner(
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(&repoops.GitHubPullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturnsOnCall(0, repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturnsOnCall(1, repoops.GitHubReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{
+				Content:   "EYES",
+				UserLogin: "chatgpt-codex-connector[bot]",
+				CreatedAt: testTimePtr(time.Date(2026, time.March, 30, 19, 52, 30, 0, time.UTC)),
+			},
+		},
+	}, nil)
+	fakeGitHub.MergePullRequestReturnsOnCall(0, errors.New("X Pull request pmenglund/colin#19 is not mergeable: the merge commit cannot be cleanly created."))
+
+	runner := newRunner(
 		cfg,
 		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
 		tracker,
 		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
@@ -715,9 +744,8 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 		t.Fatalf("result.Summary = %q, want keep in merge instruction", result.Summary)
 	}
 
-	ghLog := readRunnerFile(t, ghLogPath)
-	if got := strings.Count(ghLog, "pr merge 19 --merge"); got != 1 {
-		t.Fatalf("merge invocation count = %d, want 1\n%s", got, ghLog)
+	if got := fakeGitHub.MergePullRequestCallCount(); got != 1 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 1", got)
 	}
 }
 
@@ -1732,6 +1760,10 @@ func testStringPtr(value string) *string {
 	return &value
 }
 
+func testTimePtr(value time.Time) *time.Time {
+	return &value
+}
+
 func fakeCodexTurnText(prompt string) string {
 	if strings.Contains(prompt, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT"); ok {
@@ -1938,47 +1970,6 @@ func prepareRunnerMergeConflict(t *testing.T, tempDir string, remotePath string,
 	runRunnerCmd(t, authorPath, "git", "push", "origin", baseRef)
 }
 
-func setupRunnerFakeGitHub(t *testing.T, tempDir string, branch string, baseRef string, prNumber int) string {
-	t.Helper()
-
-	binPath := filepath.Join(tempDir, "bin")
-	ghStatePath := filepath.Join(tempDir, "gh-state.json")
-	ghReviewThreadsPath := filepath.Join(tempDir, "gh-review-threads.json")
-	ghReviewThreadCommentsPath := filepath.Join(tempDir, "gh-review-thread-comments.json")
-	ghReactionsPath := filepath.Join(tempDir, "gh-reactions.json")
-	ghLogPath := filepath.Join(tempDir, "gh.log")
-
-	if err := os.MkdirAll(binPath, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(ghStatePath, []byte(fmt.Sprintf(`[{"number":%d,"url":"https://example.test/pr/%d","state":"OPEN","headRefName":"%s","baseRefName":"%s"}]`+"\n", prNumber, prNumber, branch, baseRef)), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := os.WriteFile(ghReviewThreadsPath, []byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := os.WriteFile(ghReviewThreadCommentsPath, []byte(`{"data":{"node":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := os.WriteFile(ghReactionsPath, []byte(`{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := os.WriteFile(ghLogPath, nil, 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(binPath, "gh"), []byte(fakeRunnerGHScript), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	t.Setenv("PATH", binPath+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("COLIN_FAKE_GH_STATE", ghStatePath)
-	t.Setenv("COLIN_FAKE_GH_REVIEW_THREADS", ghReviewThreadsPath)
-	t.Setenv("COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS", ghReviewThreadCommentsPath)
-	t.Setenv("COLIN_FAKE_GH_REACTIONS", ghReactionsPath)
-	t.Setenv("COLIN_FAKE_GH_LOG", ghLogPath)
-	return ghLogPath
-}
-
 func readRunnerFile(t *testing.T, path string) string {
 	t.Helper()
 
@@ -2033,146 +2024,3 @@ func mustGetwd() string {
 	}
 	return cwd
 }
-
-const fakeRunnerGHScript = `#!/bin/sh
-set -eu
-echo "$*" >>"$COLIN_FAKE_GH_LOG"
-case "$1 $2" in
-  "pr list")
-    head=""
-    base=""
-    shift 2
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --head)
-          head="$2"
-          shift 2
-          ;;
-        --base)
-          base="$2"
-          shift 2
-          ;;
-        *)
-          shift
-          ;;
-      esac
-    done
-    python3 - "$COLIN_FAKE_GH_STATE" "$head" "$base" <<'PY'
-import json, sys
-with open(sys.argv[1], "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-head = sys.argv[2]
-base = sys.argv[3]
-if head:
-    prs = [pr for pr in prs if pr.get("headRefName") == head]
-if base:
-    prs = [pr for pr in prs if pr.get("baseRefName") == base]
-json.dump(prs, sys.stdout)
-print()
-PY
-    ;;
-  "pr view")
-    python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
-import json, sys
-with open(sys.argv[1], "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-target = int(sys.argv[2])
-for pr in prs:
-    if int(pr.get("number", 0)) == target:
-        json.dump(pr, sys.stdout)
-        print()
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
-    ;;
-  "pr create")
-    head=""
-    base=""
-    shift 2
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --head)
-          head="$2"
-          shift 2
-          ;;
-        --base)
-          base="$2"
-          shift 2
-          ;;
-        *)
-          shift
-          ;;
-      esac
-    done
-    python3 - "$COLIN_FAKE_GH_STATE" "$head" "$base" <<'PY'
-import json, sys
-path, head, base = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-number = max([int(pr.get("number", 0)) for pr in prs] or [0]) + 1
-pr = {
-    "number": number,
-    "url": f"https://example.test/pr/{number}",
-    "state": "OPEN",
-    "headRefName": head,
-    "baseRefName": base,
-}
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump([pr], fh)
-print(pr["url"])
-PY
-    ;;
-  "pr merge")
-    if [ -n "${COLIN_FAKE_GH_MERGE_ERROR:-}" ]; then
-      printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR" >&2
-      exit 1
-    fi
-    if [ -n "${COLIN_FAKE_GH_MERGE_ERROR_ONCE:-}" ]; then
-      once_file="${COLIN_FAKE_GH_STATE}.merge-once"
-      if [ ! -f "$once_file" ]; then
-        : >"$once_file"
-        printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR_ONCE" >&2
-        exit 1
-      fi
-    fi
-    python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
-import json, sys
-path, target = sys.argv[1], int(sys.argv[2])
-with open(path, "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-for pr in prs:
-    if int(pr.get("number", 0)) == target:
-        pr["state"] = "MERGED"
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(prs, fh)
-PY
-    ;;
-  "api graphql")
-    case "$*" in
-      *"ReviewThreads"*)
-        cat "$COLIN_FAKE_GH_REVIEW_THREADS"
-        ;;
-      *"ReviewThreadComments"*)
-        cat "$COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS"
-        ;;
-      *"PullRequestReactions"*)
-        cat "$COLIN_FAKE_GH_REACTIONS"
-        ;;
-      *"ReplyReviewThread"*)
-        printf '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"reply-1","url":"https://example.test/comment/reply-1"}}}}\n'
-        ;;
-      *"ResolveReviewThread"*)
-        printf '{"data":{"resolveReviewThread":{"thread":{"id":"thread-1","isResolved":true}}}}\n'
-        ;;
-      *)
-        echo "unexpected graphql invocation: $*" >&2
-        exit 1
-        ;;
-    esac
-    ;;
-  *)
-    echo "unexpected gh invocation: $*" >&2
-    exit 1
-    ;;
-esac
-`
