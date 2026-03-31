@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pmenglund/colin/internal/domain"
 )
 
 func TestGoGitHubClientPullRequestByHeadReturnsMergedState(t *testing.T) {
@@ -57,6 +59,66 @@ func TestGoGitHubClientPullRequestByHeadReturnsMergedState(t *testing.T) {
 	}
 	if !strings.Contains(listQuery, "head=acme%3Afeature") || !strings.Contains(listQuery, "base=main") {
 		t.Fatalf("list query = %q, want head and base filters", listQuery)
+	}
+}
+
+func TestNewGitHubClientFromConfigAppliesDefaultHTTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewGitHubClientFromConfig(domain.ServiceConfig{
+		Repo: domain.RepoConfig{APIToken: "test-token"},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewGitHubClientFromConfig() error = %v", err)
+	}
+
+	goClient, ok := client.(*goGitHubClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *goGitHubClient", client)
+	}
+	if got := goClient.client.Client().Timeout; got != defaultGitHubHTTPTimeout {
+		t.Fatalf("http timeout = %s, want %s", got, defaultGitHubHTTPTimeout)
+	}
+}
+
+func TestGoGitHubClientPullRequestByHeadSupportsForkQualifiedBranch(t *testing.T) {
+	t.Parallel()
+
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/widgets/pulls" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		queries = append(queries, r.URL.RawQuery)
+		if strings.Contains(r.URL.RawQuery, "head=forkuser%3Afeature") {
+			writeJSON(t, w, []map[string]any{
+				{
+					"number":   8,
+					"html_url": "https://github.com/acme/widgets/pull/8",
+					"state":    "open",
+					"head":     map[string]any{"ref": "feature"},
+					"base":     map[string]any{"ref": "main"},
+				},
+			})
+			return
+		}
+		writeJSON(t, w, []map[string]any{})
+	}))
+	defer server.Close()
+
+	client := newTestGoGitHubClient(t, server)
+	pr, err := client.PullRequestByHead(context.Background(), "acme", "widgets", "forkuser/feature", "main")
+	if err != nil {
+		t.Fatalf("PullRequestByHead() error = %v", err)
+	}
+	if pr == nil {
+		t.Fatal("PullRequestByHead() = nil, want PR")
+	}
+	if len(queries) != 1 {
+		t.Fatalf("request count = %d, want 1", len(queries))
+	}
+	if !strings.Contains(queries[0], "head=forkuser%3Afeature") {
+		t.Fatalf("list query = %q, want fork-qualified head", queries[0])
 	}
 }
 

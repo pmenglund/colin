@@ -15,6 +15,7 @@ import (
 )
 
 const githubTokenHelp = "missing GitHub token: set repo.api_token, GITHUB_TOKEN, or GH_TOKEN"
+const defaultGitHubHTTPTimeout = 2 * time.Minute
 
 type goGitHubClient struct {
 	client *githubapi.Client
@@ -31,9 +32,7 @@ func newGoGitHubClient(token string, httpClient *http.Client, baseURL string, lo
 	if token == "" {
 		return nil, errors.New(githubTokenHelp)
 	}
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
+	httpClient = gitHubHTTPClientWithTimeout(httpClient)
 
 	client := githubapi.NewClient(httpClient).WithAuthToken(token)
 	if strings.TrimSpace(baseURL) != "" {
@@ -334,12 +333,13 @@ func pullRequestHeadQueries(owner, head string) []string {
 
 	queries := make([]string, 0, 2)
 	seen := map[string]struct{}{}
-	add := func(branch string) {
+	add := func(queryOwner, branch string) {
+		queryOwner = strings.TrimSpace(queryOwner)
 		branch = strings.TrimSpace(branch)
-		if branch == "" {
+		if queryOwner == "" || branch == "" {
 			return
 		}
-		query := owner + ":" + branch
+		query := queryOwner + ":" + branch
 		if _, ok := seen[query]; ok {
 			return
 		}
@@ -348,10 +348,24 @@ func pullRequestHeadQueries(owner, head string) []string {
 	}
 
 	if strings.HasPrefix(head, owner+"/") {
-		add(strings.TrimPrefix(head, owner+"/"))
+		add(owner, strings.TrimPrefix(head, owner+"/"))
 	}
-	add(head)
+	if idx := strings.Index(head, "/"); idx > 0 && idx < len(head)-1 {
+		add(head[:idx], head[idx+1:])
+	}
+	add(owner, head)
 	return queries
+}
+
+func gitHubHTTPClientWithTimeout(httpClient *http.Client) *http.Client {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	clone := *httpClient
+	if clone.Timeout <= 0 {
+		clone.Timeout = defaultGitHubHTTPTimeout
+	}
+	return &clone
 }
 
 func nullableCursor(cursor string) any {
