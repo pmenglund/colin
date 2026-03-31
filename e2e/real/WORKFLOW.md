@@ -25,6 +25,7 @@ repo:
     - Review
   merge_states:
     - Merge
+  codex_pr_reviews_enabled: true
   remote_name: origin
   merge_method: squash
   pr_template: |

@@ -47,6 +47,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Repo.APIToken != "github-token-from-env" {
 		t.Fatalf("cfg.Repo.APIToken = %q", cfg.Repo.APIToken)
 	}
+	if cfg.Repo.CodexPRReviewsEnabled {
+		t.Fatal("cfg.Repo.CodexPRReviewsEnabled = true, want false by default")
+	}
 	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
 		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
 	}
@@ -394,5 +397,30 @@ func TestBuildReadsCreateExecPlan(t *testing.T) {
 	}
 	if !cfg.Agent.CreateExecPlan {
 		t.Fatal("cfg.Agent.CreateExecPlan = false, want true")
+	}
+}
+
+func TestBuildReadsCodexPRReviewsEnabled(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":         "linear",
+				"project_slug": "project-1",
+				"api_key":      "token",
+			},
+			"repo": map[string]any{
+				"codex_pr_reviews_enabled": true,
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !cfg.Repo.CodexPRReviewsEnabled {
+		t.Fatal("cfg.Repo.CodexPRReviewsEnabled = false, want true")
 	}
 }

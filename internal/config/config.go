@@ -48,12 +48,13 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			Root: filepath.Join(os.TempDir(), "symphony_workspaces"),
 		},
 		Repo: domain.RepoConfig{
-			PublishStates:  []string{"Review"},
-			MergeStates:    []string{"Merge"},
-			RemoteName:     "origin",
-			MergeMethod:    "merge",
-			BranchTemplate: defaultBranchTemplate,
-			PRTemplate:     defaultPRTemplate,
+			PublishStates:         []string{"Review"},
+			MergeStates:           []string{"Merge"},
+			RemoteName:            "origin",
+			MergeMethod:           "merge",
+			BranchTemplate:        defaultBranchTemplate,
+			PRTemplate:            defaultPRTemplate,
+			CodexPRReviewsEnabled: false,
 		},
 		Hooks: domain.HookConfig{
 			Timeout: 60 * time.Second,
@@ -318,6 +319,9 @@ func applyRepoConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	}
 	if value, ok := readString(raw, "api_token"); ok {
 		cfg.Repo.APIToken = resolveEnvToken(value)
+	}
+	if value, ok := readBool(raw, "codex_pr_reviews_enabled"); ok {
+		cfg.Repo.CodexPRReviewsEnabled = value
 	}
 	if cfg.Repo.APIToken == "" {
 		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))

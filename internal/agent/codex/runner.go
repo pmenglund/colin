@@ -472,7 +472,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 }
 
 func (r *Runner) blockMergeForCodexReview(ctx context.Context, issue domain.Issue, reviewContext repoops.ReviewContext) (domain.Issue, string, bool, error) {
-	summary, blocked, moveToReview := buildMergeBlockedSummary(reviewContext)
+	summary, blocked, moveToReview := buildMergeBlockedSummary(r.cfg, reviewContext)
 	if !blocked {
 		return issue, "", false, nil
 	}
@@ -603,7 +603,7 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 			RunType:       RunTypeMerge,
 			WorkspacePath: workspacePath,
 			Status:        "succeeded",
-			Summary:       buildMergeRecoveryReviewBlockedSummary(recoverySummary, reviewContext),
+			Summary:       buildMergeRecoveryReviewBlockedSummary(r.cfg, recoverySummary, reviewContext),
 			PR:            pullRequestRef(reviewContext.PullRequest),
 		}
 	}
@@ -1062,8 +1062,8 @@ func buildReviewBlockedSummary(summary string, pr *domain.PullRequestRef, handle
 	return strings.Join(lines, "\n")
 }
 
-func buildMergeBlockedSummary(reviewContext repoops.ReviewContext) (string, bool, bool) {
-	block := mergeReviewBlockDisposition(reviewContext)
+func buildMergeBlockedSummary(cfg domain.ServiceConfig, reviewContext repoops.ReviewContext) (string, bool, bool) {
+	block := mergeReviewBlockDisposition(cfg, reviewContext)
 	if !block.Blocked {
 		return "", false, false
 	}
@@ -1071,6 +1071,8 @@ func buildMergeBlockedSummary(reviewContext repoops.ReviewContext) (string, bool
 	lines := []string{"Keeping issue in `Merge` while waiting for Codex PR review feedback."}
 	if block.MoveToReview {
 		lines = []string{"Returning issue to `Review` because Codex PR feedback still needs to be resolved."}
+	} else if block.WaitingForPickup {
+		lines = []string{"Keeping issue in `Merge` while waiting for Codex PR review to start."}
 	}
 	if reviewContext.PullRequest.Number > 0 {
 		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
@@ -1080,6 +1082,9 @@ func buildMergeBlockedSummary(reviewContext repoops.ReviewContext) (string, bool
 	}
 	if block.PendingApproval {
 		lines = append(lines, "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
+	}
+	if block.WaitingForPickup {
+		lines = append(lines, "- Codex review status: waiting for Codex to acknowledge the PR with an `eyes` reaction before merge automation continues.")
 	}
 	if block.ThreadCount > 0 {
 		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", block.ThreadCount))
@@ -1099,26 +1104,35 @@ func codexReviewApprovalPending(reviewContext repoops.ReviewContext) bool {
 }
 
 type mergeReviewBlock struct {
-	Blocked         bool
-	MoveToReview    bool
-	PendingApproval bool
-	ThreadCount     int
+	Blocked          bool
+	MoveToReview     bool
+	PendingApproval  bool
+	WaitingForPickup bool
+	ThreadCount      int
 }
 
-func mergeReviewBlockDisposition(reviewContext repoops.ReviewContext) mergeReviewBlock {
+func mergeReviewBlockDisposition(cfg domain.ServiceConfig, reviewContext repoops.ReviewContext) mergeReviewBlock {
 	if strings.EqualFold(strings.TrimSpace(reviewContext.PullRequest.State), "MERGED") {
 		return mergeReviewBlock{}
 	}
 
 	block := mergeReviewBlock{
-		PendingApproval: codexReviewApprovalPending(reviewContext),
-		ThreadCount:     len(reviewContext.CodexReviewThreads),
+		ThreadCount: len(reviewContext.CodexReviewThreads),
+	}
+	if !cfg.Repo.CodexPRReviewsEnabled {
+		return block
 	}
 	if block.ThreadCount > 0 {
 		block.Blocked = true
 		block.MoveToReview = true
 		return block
 	}
+	if reviewContext.CodexReviewRequestedAt == nil {
+		block.Blocked = true
+		block.WaitingForPickup = true
+		return block
+	}
+	block.PendingApproval = codexReviewApprovalPending(reviewContext)
 	if block.PendingApproval {
 		block.Blocked = true
 	}
@@ -1413,8 +1427,8 @@ func buildMergeRecoveryFailureSummary(result repoops.Result, reviewState string,
 	return strings.Join(lines, "\n")
 }
 
-func buildMergeRecoveryReviewBlockedSummary(recoverySummary string, reviewContext repoops.ReviewContext) string {
-	block := mergeReviewBlockDisposition(reviewContext)
+func buildMergeRecoveryReviewBlockedSummary(cfg domain.ServiceConfig, recoverySummary string, reviewContext repoops.ReviewContext) string {
+	block := mergeReviewBlockDisposition(cfg, reviewContext)
 	lines := []string{"Colin repaired the merge conflict, but the updated PR still needs Codex review before it can be merged."}
 	if reviewContext.PullRequest.Number > 0 {
 		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
@@ -1427,6 +1441,9 @@ func buildMergeRecoveryReviewBlockedSummary(recoverySummary string, reviewContex
 	}
 	if block.PendingApproval {
 		lines = append(lines, "", "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
+	}
+	if block.WaitingForPickup {
+		lines = append(lines, "", "- Codex review status: waiting for Codex to acknowledge the PR with an `eyes` reaction before merge automation continues.")
 	}
 	if block.ThreadCount > 0 {
 		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", block.ThreadCount))

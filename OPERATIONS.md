@@ -205,8 +205,8 @@ When an issue is moved to `Merge`, Colin:
 
 - Moving an issue into `Merge` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval. Polling still remains the fallback if a webhook is delayed or dropped.
 - ensures the branch and PR exist
-- checks the PR for Codex web review status before merging
-- keeps the issue in `Merge` while `chatgpt-codex-connector` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that reviewer remain
+- if `repo.codex_pr_reviews_enabled` is `true`, waits in `Merge` until Codex has picked up the PR review and then checks the PR for Codex web review status before merging
+- if `repo.codex_pr_reviews_enabled` is `true`, keeps the issue in `Merge` while `chatgpt-codex-connector` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that reviewer remain
 - if GitHub reports that the PR cannot be merged cleanly, asks Codex to merge the latest base branch into the issue branch, resolve conflicts in the workspace, and retry the merge while the issue stays in `Merge`
 - moves the issue back to `Review` with a Linear comment when that automatic conflict-repair attempt fails, or when the repaired branch receives unresolved Codex review feedback; otherwise it keeps waiting in `Merge` while fresh Codex review is still pending
 - merges the PR using the configured merge method
@@ -245,6 +245,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - clone `git@github.com:pmenglund/colin.git`
 - default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
+- wait for Codex PR review to start before merge automation because `repo.codex_pr_reviews_enabled` is `true`
 - decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
 - serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set or Tailscale Serve exposes Colin from `/`
