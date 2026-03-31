@@ -39,6 +39,8 @@ repo:
     - Review
   merge_states:
     - Merge
+  # When true, Colin waits in Merge for Codex PR review to start before merging.
+  codex_pr_reviews_enabled: false
   remote_name: origin
   merge_method: squash
   branch_template: colin/{{"{{.issue.title}}"}}

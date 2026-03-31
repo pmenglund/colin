@@ -250,7 +250,10 @@ func TestBlockMergeForCodexReviewKeepsIssueInMergeWhenApprovalPending(t *testing
 	tracker := &stubTracker{}
 	runner := &Runner{
 		cfg: domain.ServiceConfig{
-			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+			Repo: domain.RepoConfig{
+				PublishStates:         []string{"Review"},
+				CodexPRReviewsEnabled: true,
+			},
 		},
 		tracker: tracker,
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -284,6 +287,81 @@ func TestBlockMergeForCodexReviewKeepsIssueInMergeWhenApprovalPending(t *testing
 	}
 }
 
+func TestBlockMergeForCodexReviewKeepsIssueInMergeWhileWaitingForPickup(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{
+				PublishStates:         []string{"Review"},
+				CodexPRReviewsEnabled: true,
+			},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-134",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest: domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
+	}
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
+	}
+	if !strings.Contains(summary, "waiting for Codex PR review to start") {
+		t.Fatalf("summary = %q, want wait-for-pickup message", summary)
+	}
+	if !strings.Contains(summary, "eyes") {
+		t.Fatalf("summary = %q, want eyes reaction guidance", summary)
+	}
+}
+
+func TestBlockMergeForCodexReviewSkipsPickupWaitWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-134",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest: domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if blocked {
+		t.Fatal("blocked = true, want false")
+	}
+	if summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
+	}
+}
+
 func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenThreadsRemain(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +370,10 @@ func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenThreadsRemain(t *testin
 	tracker := &stubTracker{}
 	runner := &Runner{
 		cfg: domain.ServiceConfig{
-			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+			Repo: domain.RepoConfig{
+				PublishStates:         []string{"Review"},
+				CodexPRReviewsEnabled: true,
+			},
 		},
 		tracker: tracker,
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -668,10 +749,11 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 			BaseRef: "symphony",
 		},
 		Repo: domain.RepoConfig{
-			PublishStates: []string{"Review"},
-			MergeStates:   []string{"Merge"},
-			RemoteName:    "origin",
-			MergeMethod:   "merge",
+			PublishStates:         []string{"Review"},
+			MergeStates:           []string{"Merge"},
+			RemoteName:            "origin",
+			MergeMethod:           "merge",
+			CodexPRReviewsEnabled: true,
 		},
 		Agent: domain.AgentConfig{
 			MaxTurns: 1,
@@ -696,7 +778,22 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 		BaseRefName: "symphony",
 	}, nil)
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
-	fakeGitHub.PullRequestReactionsReturnsOnCall(0, repoops.GitHubReactionPage{}, nil)
+	requestedAt := testTimePtr(time.Date(2026, time.March, 30, 19, 51, 30, 0, time.UTC))
+	approvedAt := testTimePtr(time.Date(2026, time.March, 30, 19, 51, 45, 0, time.UTC))
+	fakeGitHub.PullRequestReactionsReturnsOnCall(0, repoops.GitHubReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{
+				Content:   "EYES",
+				UserLogin: "chatgpt-codex-connector[bot]",
+				CreatedAt: requestedAt,
+			},
+			{
+				Content:   "THUMBS_UP",
+				UserLogin: "chatgpt-codex-connector[bot]",
+				CreatedAt: approvedAt,
+			},
+		},
+	}, nil)
 	fakeGitHub.PullRequestReactionsReturnsOnCall(1, repoops.GitHubReactionPage{
 		Reactions: []repoops.GitHubReaction{
 			{
