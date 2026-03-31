@@ -278,7 +278,7 @@ go run . --workflow /path/to/WORKFLOW.md setup tailscale
 
 The readiness flow checks:
 
-- `tailscale` is installed and the backend is running
+- Colin can reach the local Tailscale daemon and the backend is running
 - MagicDNS is enabled
 - a `/webhooks`-mounted Tailscale Funnel is proxying Colin's local port
 - Colin responds locally at `/webhooks/readyz`
