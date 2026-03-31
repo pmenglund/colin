@@ -89,9 +89,6 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 	s.applyUIBaseURLResolver(s.currentRuntime())
-	if err := s.ensureManagedLabels(ctx); err != nil {
-		return err
-	}
 	if err := s.orch.StartupTerminalCleanup(ctx); err != nil {
 		s.logger.Warn("startup cleanup skipped", "error", err)
 	}
@@ -134,15 +131,12 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	if err := config.ValidateDispatch(cfg); err != nil {
 		return orchestrator.Runtime{}, err
 	}
-	trackerClient, err := linear.New(cfg)
+	trackerClient, _, err := PreflightTrackerConfig(context.Background(), cfg)
 	if err != nil {
 		return orchestrator.Runtime{}, err
 	}
 	manager := workspace.NewManager(cfg, logger)
 	repoManager := repoops.NewManager(cfg, logger)
-	if err := validateGitHubAccess(cfg, repoManager); err != nil {
-		return orchestrator.Runtime{}, fmt.Errorf("validate github access: %w", err)
-	}
 	runner := codex.NewRunner(cfg, def, trackerClient, manager, logger)
 	logger.Info(
 		"runtime loaded",
@@ -332,16 +326,23 @@ func intPtr(value int) *int {
 }
 
 func (s *Service) ensureManagedLabels(ctx context.Context) error {
-	runtime := s.currentRuntime()
-	if runtime.Tracker == nil {
+	return ensureManagedIssueLabels(ctx, s.currentRuntime().Tracker)
+}
+
+func ensureManagedIssueLabels(ctx context.Context, issueTracker orchestratorTracker) error {
+	if issueTracker == nil {
 		return nil
 	}
 	for _, labelName := range domain.ManagedIssueLabels() {
-		if err := runtime.Tracker.EnsureIssueLabel(ctx, labelName); err != nil {
+		if err := issueTracker.EnsureIssueLabel(ctx, labelName); err != nil {
 			return fmt.Errorf("ensure %s label: %w", labelName, err)
 		}
 	}
 	return nil
+}
+
+type orchestratorTracker interface {
+	EnsureIssueLabel(context.Context, string) error
 }
 
 func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatus {

@@ -10,6 +10,12 @@ import (
 	"github.com/pmenglund/colin/internal/bootstrap"
 )
 
+var (
+	runBootstrapPrompt = bootstrap.Run
+	runBootstrapTUI    = bootstrap.RunTUI
+	configInteractive  = isInteractiveTerminal
+)
+
 func newConfigCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "config",
@@ -34,7 +40,12 @@ func runConfig(cmd *cobra.Command, opts configOptions) int {
 		return 1
 	}
 
-	_, err = bootstrap.Run(cmd.InOrStdin(), cmd.OutOrStdout(), bootstrap.Options{
+	runner := runBootstrapPrompt
+	if configInteractive(cmd.InOrStdin(), cmd.OutOrStdout()) {
+		runner = runBootstrapTUI
+	}
+
+	_, err = runner(cmd.InOrStdin(), cmd.OutOrStdout(), bootstrap.Options{
 		WorkflowPath: opts.workflowPath,
 		WorkingDir:   workingDir,
 		AutoStart:    opts.autoStart,

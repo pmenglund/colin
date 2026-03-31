@@ -64,13 +64,15 @@ Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `
 
 ## Getting Started
 
-If `WORKFLOW.md` is missing, Colin now starts an interactive first-run setup instead of failing immediately. To create or refresh the workflow file explicitly, run:
+If the selected workflow file is missing and Colin is running in an interactive terminal, Colin starts an interactive first-run setup instead of failing immediately. This applies both to the default `WORKFLOW.md` and to custom paths passed with `--workflow`. To create or refresh the workflow file explicitly, run:
 
 ```bash
 go run . config
 ```
 
-That flow asks for the minimum runtime settings Colin needs, keeps secrets as environment-variable references such as `$LINEAR_API_KEY`, and asks whether you also want webhook setup guidance.
+In an interactive terminal, that command now launches a Bubble Tea wizard with inline validation, a review screen, and live Linear preflight checks when `LINEAR_API_KEY` is available. If the shell does not already have that key, the wizard asks for one for the current setup session without writing it to `WORKFLOW.md`; valid Linear keys must start with `lin_api_`. The wizard also checks for a GitHub token and, when needed, asks for a session-only `GITHUB_TOKEN`; valid GitHub tokens must start with `github_pat_`. When a valid Linear key is available, the wizard fetches accessible Linear projects and lets you pick one from a searchable selector, with manual slug entry still available as a fallback. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
+
+Once the workflow file and `LINEAR_API_KEY` are available, Colin validates that the configured Linear states exist and ensures its managed labels exist before startup completes.
 
 For the GitHub token itself, the fastest path is:
 

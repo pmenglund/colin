@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/pmenglund/colin/internal/bootstrap"
 	"github.com/pmenglund/colin/internal/domain"
 )
 
@@ -223,6 +225,9 @@ func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 			t.Fatal("runSetupLinearWebhook should not be called")
 			return 0
 		},
+		isInteractive: func(*cobra.Command) bool {
+			return true
+		},
 	}
 
 	if code := run(nil, emptyInput(), &stdout, &stderr, deps); code != 0 {
@@ -235,6 +240,12 @@ func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 
 func TestRunPassesWorkflowFlagToRootCommand(t *testing.T) {
 	t.Parallel()
+
+	tempDir := t.TempDir()
+	customPath := filepath.Join(tempDir, "custom.md")
+	if err := os.WriteFile(customPath, []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -259,11 +270,11 @@ func TestRunPassesWorkflowFlagToRootCommand(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+	if code := run([]string{"--workflow", customPath}, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run(--workflow) exit code = %d, want 0", code)
 	}
-	if gotWorkflow != "/tmp/custom.md" {
-		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	if gotWorkflow != customPath {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, customPath)
 	}
 }
 
@@ -574,6 +585,47 @@ func TestRunConfigCommandWritesWorkflow(t *testing.T) {
 	}
 }
 
+func TestRunConfigUsesTUIWhenInteractive(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	oldInteractive := configInteractive
+	oldPrompt := runBootstrapPrompt
+	oldTUI := runBootstrapTUI
+	t.Cleanup(func() {
+		configInteractive = oldInteractive
+		runBootstrapPrompt = oldPrompt
+		runBootstrapTUI = oldTUI
+	})
+
+	var promptCalls int
+	var tuiCalls int
+	configInteractive = func(io.Reader, io.Writer) bool { return true }
+	runBootstrapPrompt = func(io.Reader, io.Writer, bootstrap.Options) (bootstrap.Result, error) {
+		promptCalls++
+		return bootstrap.Result{}, nil
+	}
+	runBootstrapTUI = func(io.Reader, io.Writer, bootstrap.Options) (bootstrap.Result, error) {
+		tuiCalls++
+		return bootstrap.Result{}, nil
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	if code := runConfig(cmd, configOptions{workflowPath: "WORKFLOW.md"}); code != 0 {
+		t.Fatalf("runConfig() exit code = %d, want 0", code)
+	}
+	if tuiCalls != 1 {
+		t.Fatalf("RunTUI calls = %d, want 1", tuiCalls)
+	}
+	if promptCalls != 0 {
+		t.Fatalf("Run prompt calls = %d, want 0", promptCalls)
+	}
+}
+
 func TestRunWithoutWorkflowInvokesConfigFlow(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
@@ -606,6 +658,9 @@ func TestRunWithoutWorkflowInvokesConfigFlow(t *testing.T) {
 			t.Fatal("runSetupLinearWebhook should not be called")
 			return 0
 		},
+		isInteractive: func(*cobra.Command) bool {
+			return true
+		},
 	}
 
 	if code := run(nil, emptyInput(), &stdout, &stderr, deps); code != 0 {
@@ -622,12 +677,13 @@ func TestRunWithoutWorkflowInvokesConfigFlow(t *testing.T) {
 	}
 }
 
-func TestRunWithExplicitMissingWorkflowDoesNotInvokeConfigFlow(t *testing.T) {
+func TestRunWithExplicitMissingWorkflowInvokesConfigFlowWhenInteractive(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	var configCalls int
 	var rootCalls int
 
 	deps := commandDeps{
@@ -639,7 +695,13 @@ func TestRunWithExplicitMissingWorkflowDoesNotInvokeConfigFlow(t *testing.T) {
 			return 0
 		},
 		runConfig: func(cmd *cobra.Command, opts configOptions) int {
-			t.Fatal("runConfig should not be called")
+			configCalls++
+			if !opts.autoStart {
+				t.Fatal("runConfig autoStart = false, want true")
+			}
+			if opts.workflowPath != filepath.Join(tempDir, "custom.md") {
+				t.Fatalf("workflow path = %q, want %q", opts.workflowPath, filepath.Join(tempDir, "custom.md"))
+			}
 			return 0
 		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
@@ -650,17 +712,76 @@ func TestRunWithExplicitMissingWorkflowDoesNotInvokeConfigFlow(t *testing.T) {
 			t.Fatal("runSetupLinearWebhook should not be called")
 			return 0
 		},
+		isInteractive: func(*cobra.Command) bool {
+			return true
+		},
 	}
 
 	customPath := filepath.Join(tempDir, "custom.md")
 	if code := run([]string{"--workflow", customPath}, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run(--workflow missing) exit code = %d, want 0", code)
 	}
+	if configCalls != 1 {
+		t.Fatalf("runConfig calls = %d, want 1", configCalls)
+	}
 	if rootCalls != 1 {
 		t.Fatalf("runRoot calls = %d, want 1", rootCalls)
 	}
-	if got := stdout.String(); strings.Contains(got, "Starting first-run setup") {
-		t.Fatalf("stdout = %q, want no first-run message", got)
+	if got := stdout.String(); !strings.Contains(got, customPath+" was not found. Starting first-run setup.") {
+		t.Fatalf("stdout = %q, want first-run message", got)
+	}
+}
+
+func TestRunWithMissingWorkflowFailsClearlyWhenNonInteractive(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var rootCalls int
+	var configCalls int
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			rootCalls++
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			configCalls++
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+		isInteractive: func(*cobra.Command) bool {
+			return false
+		},
+	}
+
+	customPath := filepath.Join(tempDir, "custom.md")
+	if code := run([]string{"--workflow", customPath}, emptyInput(), &stdout, &stderr, deps); code != 1 {
+		t.Fatalf("run(--workflow missing non-interactive) exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if configCalls != 0 {
+		t.Fatalf("runConfig calls = %d, want 0", configCalls)
+	}
+	if rootCalls != 0 {
+		t.Fatalf("runRoot calls = %d, want 0", rootCalls)
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "workflow file not found: "+customPath) {
+		t.Fatalf("stderr = %q, want missing workflow message", got)
+	}
+	if !strings.Contains(got, "colin --workflow "+customPath+" config") {
+		t.Fatalf("stderr = %q, want config guidance", got)
 	}
 }
 

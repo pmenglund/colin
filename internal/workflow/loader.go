@@ -53,6 +53,19 @@ func (Loader) Load(path string) (domain.WorkflowDefinition, error) {
 	}, nil
 }
 
+// Parse reads and parses workflow content without loading it from disk.
+func Parse(path string, data []byte) (domain.WorkflowDefinition, error) {
+	config, body, err := parseWorkflow(data)
+	if err != nil {
+		return domain.WorkflowDefinition{}, err
+	}
+	return domain.WorkflowDefinition{
+		Config:         config,
+		PromptTemplate: body,
+		SourcePath:     path,
+	}, nil
+}
+
 // RenderPrompt renders the workflow prompt with strict missing-key behavior.
 func RenderPrompt(def domain.WorkflowDefinition, issue domain.Issue, attempt *int) (string, error) {
 	text := strings.TrimSpace(def.PromptTemplate)
