@@ -182,8 +182,8 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"chatgpt-codex-connector[bot]"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REACTIONS"), `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-28T18:01:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"content":"THUMBS_UP","createdAt":"2026-03-28T18:02:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"chatgpt-codex-connector"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REACTIONS"), `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-28T18:01:00Z","user":{"login":"chatgpt-codex-connector"}},{"content":"THUMBS_UP","createdAt":"2026-03-28T18:02:00Z","user":{"login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
@@ -215,7 +215,7 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}
 
 	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Comment 1","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer-1"}},{"id":"comment-2","body":"Comment 2","url":"https://example.test/comment/2","createdAt":"2026-03-28T18:01:00Z","author":{"login":"reviewer-2"}},{"id":"comment-3","body":"Comment 3","url":"https://example.test/comment/3","createdAt":"2026-03-28T18:02:00Z","author":{"login":"reviewer-3"}},{"id":"comment-4","body":"Comment 4","url":"https://example.test/comment/4","createdAt":"2026-03-28T18:03:00Z","author":{"login":"reviewer-4"}},{"id":"comment-5","body":"Comment 5","url":"https://example.test/comment/5","createdAt":"2026-03-28T18:04:00Z","author":{"login":"reviewer-5"}},{"id":"comment-6","body":"Comment 6","url":"https://example.test/comment/6","createdAt":"2026-03-28T18:05:00Z","author":{"login":"reviewer-6"}},{"id":"comment-7","body":"Comment 7","url":"https://example.test/comment/7","createdAt":"2026-03-28T18:06:00Z","author":{"login":"reviewer-7"}},{"id":"comment-8","body":"Comment 8","url":"https://example.test/comment/8","createdAt":"2026-03-28T18:07:00Z","author":{"login":"reviewer-8"}},{"id":"comment-9","body":"Comment 9","url":"https://example.test/comment/9","createdAt":"2026-03-28T18:08:00Z","author":{"login":"reviewer-9"}},{"id":"comment-10","body":"Comment 10","url":"https://example.test/comment/10","createdAt":"2026-03-28T18:09:00Z","author":{"login":"reviewer-10"}},{"id":"comment-11","body":"Comment 11","url":"https://example.test/comment/11","createdAt":"2026-03-28T18:10:00Z","author":{"login":"reviewer-11"}},{"id":"comment-12","body":"Comment 12","url":"https://example.test/comment/12","createdAt":"2026-03-28T18:11:00Z","author":{"login":"reviewer-12"}},{"id":"comment-13","body":"Comment 13","url":"https://example.test/comment/13","createdAt":"2026-03-28T18:12:00Z","author":{"login":"reviewer-13"}},{"id":"comment-14","body":"Comment 14","url":"https://example.test/comment/14","createdAt":"2026-03-28T18:13:00Z","author":{"login":"reviewer-14"}},{"id":"comment-15","body":"Comment 15","url":"https://example.test/comment/15","createdAt":"2026-03-28T18:14:00Z","author":{"login":"reviewer-15"}},{"id":"comment-16","body":"Comment 16","url":"https://example.test/comment/16","createdAt":"2026-03-28T18:15:00Z","author":{"login":"reviewer-16"}},{"id":"comment-17","body":"Comment 17","url":"https://example.test/comment/17","createdAt":"2026-03-28T18:16:00Z","author":{"login":"reviewer-17"}},{"id":"comment-18","body":"Comment 18","url":"https://example.test/comment/18","createdAt":"2026-03-28T18:17:00Z","author":{"login":"reviewer-18"}},{"id":"comment-19","body":"Comment 19","url":"https://example.test/comment/19","createdAt":"2026-03-28T18:18:00Z","author":{"login":"reviewer-19"}},{"id":"comment-20","body":"Comment 20","url":"https://example.test/comment/20","createdAt":"2026-03-28T18:19:00Z","author":{"login":"reviewer-20"}}],"pageInfo":{"hasNextPage":true,"endCursor":"comments-page-2"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS"), `{"data":{"node":{"comments":{"nodes":[{"author":{"login":"chatgpt-codex-connector[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS"), `{"data":{"node":{"comments":{"nodes":[{"author":{"login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`)
 
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
@@ -227,6 +227,35 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}
 	if len(reviewContext.CodexReviewThreads) != 1 {
 		t.Fatalf("codex review threads length = %d, want 1", len(reviewContext.CodexReviewThreads))
+	}
+}
+
+func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
+	workspacePath, _, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	manager := NewManager(testConfig(), testLogger())
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address Codex bot review"}
+	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"chatgpt-codex-connector[bot]"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	writeFile(t, os.Getenv("COLIN_FAKE_GH_REACTIONS"), `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-28T18:01:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+
+	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address Codex bot review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if len(reviewContext.CodexReviewThreads) != 1 {
+		t.Fatalf("codex review threads length = %d, want 1", len(reviewContext.CodexReviewThreads))
+	}
+	if reviewContext.CodexReviewRequestedAt == nil {
+		t.Fatal("CodexReviewRequestedAt = nil, want timestamp")
 	}
 }
 
