@@ -202,7 +202,7 @@ func TestRunPrintsGitHubSetupGuidanceWhenTokenMissing(t *testing.T) {
 }
 
 func TestRunPrintsGitHubTokenConfiguredWhenPresent(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "test-token")
+	t.Setenv("GITHUB_TOKEN", "github_pat_test-token")
 
 	tempDir := t.TempDir()
 	var output bytes.Buffer
@@ -228,5 +228,58 @@ func TestRunPrintsGitHubTokenConfiguredWhenPresent(t *testing.T) {
 	got := output.String()
 	if !strings.Contains(got, "GITHUB_TOKEN or GH_TOKEN is already configured in this shell.") {
 		t.Fatalf("output = %q, want configured token message", got)
+	}
+}
+
+func TestDetectPrerequisitesRequiresExpectedTokenPrefixes(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	t.Setenv("GITHUB_TOKEN", "token")
+	t.Setenv("GH_TOKEN", "")
+
+	prereqs := detectPrerequisites()
+	if prereqs.LinearAPIKeyConfigured {
+		t.Fatal("LinearAPIKeyConfigured = true, want false for invalid prefix")
+	}
+	if prereqs.GitHubTokenConfigured {
+		t.Fatal("GitHubTokenConfigured = true, want false for invalid prefix")
+	}
+
+	t.Setenv("LINEAR_API_KEY", "lin_api_valid")
+	t.Setenv("GITHUB_TOKEN", "github_pat_valid")
+
+	prereqs = detectPrerequisites()
+	if !prereqs.LinearAPIKeyConfigured {
+		t.Fatal("LinearAPIKeyConfigured = false, want true for lin_api_ token")
+	}
+	if !prereqs.GitHubTokenConfigured {
+		t.Fatal("GitHubTokenConfigured = false, want true for github_pat_ token")
+	}
+
+	t.Setenv("GITHUB_TOKEN", "ghp_valid")
+
+	prereqs = detectPrerequisites()
+	if !prereqs.GitHubTokenConfigured {
+		t.Fatal("GitHubTokenConfigured = false, want true for ghp_ token")
+	}
+}
+
+func TestBuildConfigFromAnswersUsesSessionTokens(t *testing.T) {
+	t.Parallel()
+
+	_, cfg, err := buildConfigFromAnswers("WORKFLOW.md", Answers{
+		ProjectSlug:   "project-1",
+		RepoURL:       "git@github.com:acme/repo.git",
+		BaseRef:       "main",
+		WorkspaceRoot: "./.colin/workspaces",
+		ServerPort:    8888,
+	}, "lin_api_test", "github_pat_test")
+	if err != nil {
+		t.Fatalf("buildConfigFromAnswers() error = %v", err)
+	}
+	if got := cfg.Tracker.APIKey; got != "lin_api_test" {
+		t.Fatalf("cfg.Tracker.APIKey = %q, want lin_api_test", got)
+	}
+	if got := cfg.Repo.APIToken; got != "github_pat_test" {
+		t.Fatalf("cfg.Repo.APIToken = %q, want github_pat_test", got)
 	}
 }

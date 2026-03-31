@@ -43,55 +43,46 @@ type Prerequisites struct {
 
 // Result is the operator-facing outcome of one onboarding run.
 type Result struct {
-	WorkflowPath  string
-	WroteWorkflow bool
-	Answers       Answers
-	Prereqs       Prerequisites
+	WorkflowPath              string
+	WroteWorkflow             bool
+	Answers                   Answers
+	Prereqs                   Prerequisites
+	SessionLinearAPIKeyLoaded bool
+	SessionGitHubTokenLoaded  bool
 }
 
 // Run collects onboarding answers, writes WORKFLOW.md, and reports next steps.
 func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
-	workflowPath := strings.TrimSpace(opts.WorkflowPath)
-	if workflowPath == "" {
-		workflowPath = "WORKFLOW.md"
+	resolved, err := resolveOptions(opts)
+	if err != nil {
+		return Result{}, err
 	}
-	workingDir := strings.TrimSpace(opts.WorkingDir)
-	if workingDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return Result{}, fmt.Errorf("resolve current working directory: %w", err)
-		}
-		workingDir = cwd
-	}
-
-	prereqs := detectPrerequisites()
-	defaults := detectDefaults(workingDir)
 	reader := bufio.NewReader(in)
 
 	fmt.Fprintln(out, "Colin configuration")
 	fmt.Fprintln(out)
-	printPrerequisiteSummary(out, prereqs)
+	printPrerequisiteSummary(out, resolved.prereqs)
 
-	projectSlug, err := promptRequiredString(reader, out, "Linear project slug", defaults.ProjectSlug)
+	projectSlug, err := promptRequiredString(reader, out, "Linear project slug", resolved.defaults.ProjectSlug)
 	if err != nil {
 		return Result{}, err
 	}
-	repoURL, err := promptRequiredString(reader, out, "Repository URL", defaults.RepoURL)
+	repoURL, err := promptRequiredString(reader, out, "Repository URL", resolved.defaults.RepoURL)
 	if err != nil {
 		return Result{}, err
 	}
-	if !prereqs.GitHubTokenConfigured {
+	if !resolved.prereqs.GitHubTokenConfigured {
 		printGitHubSetupGuidance(out, repoURL)
 	}
-	baseRef, err := promptRequiredString(reader, out, "Base branch", defaults.BaseRef)
+	baseRef, err := promptRequiredString(reader, out, "Base branch", resolved.defaults.BaseRef)
 	if err != nil {
 		return Result{}, err
 	}
-	workspaceRoot, err := promptRequiredString(reader, out, "Workspace root", defaults.WorkspaceRoot)
+	workspaceRoot, err := promptRequiredString(reader, out, "Workspace root", resolved.defaults.WorkspaceRoot)
 	if err != nil {
 		return Result{}, err
 	}
-	serverPort, err := promptRequiredInt(reader, out, "Server port", defaults.ServerPort)
+	serverPort, err := promptRequiredInt(reader, out, "Server port", resolved.defaults.ServerPort)
 	if err != nil {
 		return Result{}, err
 	}
@@ -99,7 +90,7 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	writeFile, err := promptBool(reader, out, fmt.Sprintf("Write workflow file to %s", workflowPath), true)
+	writeFile, err := promptBool(reader, out, fmt.Sprintf("Write workflow file to %s", resolved.workflowPath), true)
 	if err != nil {
 		return Result{}, err
 	}
@@ -116,7 +107,7 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 		WantsWebhook:  wantsWebhook,
 	}
 
-	overwrite, err := confirmOverwrite(reader, out, workflowPath)
+	overwrite, err := confirmOverwrite(reader, out, resolved.workflowPath)
 	if err != nil {
 		return Result{}, err
 	}
@@ -124,16 +115,19 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := WriteWorkflow(workflowPath, content, overwrite); err != nil {
+	if err := WriteWorkflow(resolved.workflowPath, content, overwrite); err != nil {
 		return Result{}, err
 	}
 
-	result := Result{
-		WorkflowPath:  workflowPath,
-		WroteWorkflow: true,
-		Answers:       answers,
-		Prereqs:       prereqs,
+	result := resultFromAnswers(resolved.workflowPath, answers, resolved.prereqs)
+	if err := applySessionLinearAPIKey(resolved.linearAPIKey); err != nil {
+		return Result{}, err
 	}
+	if err := applySessionGitHubToken(resolved.githubToken); err != nil {
+		return Result{}, err
+	}
+	result.SessionLinearAPIKeyLoaded = isValidLinearAPIKey(resolved.linearAPIKey) && !resolved.prereqs.LinearAPIKeyConfigured
+	result.SessionGitHubTokenLoaded = isValidGitHubToken(resolved.githubToken) && !resolved.prereqs.GitHubTokenConfigured
 	printCompletion(out, result, opts.AutoStart)
 	return result, nil
 }
@@ -169,11 +163,19 @@ type detectedDefaults struct {
 
 func detectPrerequisites() Prerequisites {
 	return Prerequisites{
-		LinearAPIKeyConfigured: strings.TrimSpace(os.Getenv("LINEAR_API_KEY")) != "",
-		GitHubTokenConfigured:  firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")) != "",
+		LinearAPIKeyConfigured: isValidLinearAPIKey(currentLinearAPIKey()),
+		GitHubTokenConfigured:  isValidGitHubToken(currentGitHubToken()),
 		GitAvailable:           commandExists("git"),
 		CodexAvailable:         commandExists("codex"),
 	}
+}
+
+func currentLinearAPIKey() string {
+	return strings.TrimSpace(os.Getenv("LINEAR_API_KEY"))
+}
+
+func currentGitHubToken() string {
+	return strings.TrimSpace(firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")))
 }
 
 func detectDefaults(workingDir string) detectedDefaults {
@@ -219,32 +221,7 @@ func printPrerequisiteSummary(out io.Writer, prereqs Prerequisites) {
 }
 
 func printCompletion(out io.Writer, result Result, autoStart bool) {
-	fmt.Fprintf(out, "Wrote %s\n", result.WorkflowPath)
-	if result.Prereqs.LinearAPIKeyConfigured {
-		fmt.Fprintln(out, "LINEAR_API_KEY is already configured in this shell.")
-	} else {
-		fmt.Fprintln(out, "Next step: export LINEAR_API_KEY in your shell before running Colin.")
-	}
-	if result.Prereqs.GitHubTokenConfigured {
-		fmt.Fprintln(out, "GITHUB_TOKEN or GH_TOKEN is already configured in this shell.")
-	} else {
-		fmt.Fprintln(out, "Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`. Run `colin setup github` for the exact token settings.")
-	}
-	if !result.Prereqs.CodexAvailable {
-		fmt.Fprintln(out, "Warning: `codex` was not found in PATH. Install or expose Codex before expecting Colin to launch coding runs.")
-	}
-	if !result.Prereqs.GitAvailable {
-		fmt.Fprintln(out, "Warning: `git` was not found in PATH. Colin needs git for workspace preparation.")
-	}
-	if result.Answers.WantsWebhook {
-		if autoStart {
-			fmt.Fprintln(out, "Webhook setup requires Tailscale. Colin will continue starting; once the setup URL is printed, open it and then run `colin setup linear` after Funnel is ready.")
-		} else {
-			fmt.Fprintln(out, "Webhook setup requires Tailscale. After Colin is running, use `colin setup tailscale` and then `colin setup linear`, or open `/setup/funnel` from the local UI.")
-		}
-	} else {
-		fmt.Fprintln(out, "Webhook setup skipped.")
-	}
+	fmt.Fprintln(out, completionText(result, autoStart))
 }
 
 func printGitHubSetupGuidance(out io.Writer, repoURL string) {

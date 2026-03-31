@@ -29,13 +29,15 @@ By default Colin is started with:
 go run .
 ```
 
-This uses `--workflow WORKFLOW.md` implicitly. If that default file is missing, Colin now starts an interactive first-run setup that writes `WORKFLOW.md` and then continues into normal startup. To create or refresh the workflow file explicitly without starting the service, run:
+This uses `--workflow WORKFLOW.md` implicitly. If the selected workflow file is missing and Colin has an interactive terminal, Colin starts an interactive first-run setup that writes that file and then continues into normal startup. This applies to the default `WORKFLOW.md` and to custom `--workflow` paths. In non-interactive runs, Colin fails clearly and tells you to run the config command manually. To create or refresh the workflow file explicitly without starting the service, run:
 
 ```bash
 go run . config
 ```
 
-That setup flow asks for the Linear project slug, repository URL, base branch, workspace root, and server port. It deliberately keeps secrets out of `WORKFLOW.md`: the generated file references `$LINEAR_API_KEY`, `$LINEAR_WEBHOOK_SECRET`, and `$GITHUB_TOKEN`, so operators should export those variables in their shell or environment manager.
+In an interactive terminal, that setup flow now runs as a Bubble Tea wizard with inline validation, a final review screen, and live Linear preflight checks when `LINEAR_API_KEY` is available. If the shell does not already provide that key, the wizard asks for one for the current setup session without writing it to `WORKFLOW.md`; valid Linear keys must start with `lin_api_`. The wizard also checks for a GitHub token and, when needed, asks for a session-only `GITHUB_TOKEN`; valid GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. When a valid Linear key is present, the wizard fetches accessible Linear projects and presents a searchable selector before falling back to manual slug entry when needed. In non-interactive contexts, Colin keeps the previous line-oriented prompt flow for scripted use. The generated file still keeps secrets out of `WORKFLOW.md`: it references `$LINEAR_API_KEY`, `$LINEAR_WEBHOOK_SECRET`, and `$GITHUB_TOKEN`, so operators should export those variables in their shell or environment manager.
+
+Once the workflow file and `LINEAR_API_KEY` are present, Colin validates the configured Linear states and ensures its managed Linear labels exist before startup or workflow reload completes.
 
 To point Colin at a different workflow file, pass the shared `--workflow` flag:
 
@@ -111,6 +113,23 @@ go run . --workflow /path/to/WORKFLOW.md setup tailscale
 ```
 
 `setup github` accepts the same `--workflow` override. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
+
+## Terminal Recordings with VHS
+
+This repository includes `github.com/charmbracelet/vhs` in `go.mod` as a Go tool for recording terminal demos from `.tape` files.
+
+Before using VHS locally, install these system dependencies:
+
+- `ttyd`
+- `ffmpeg`
+
+Once those are available, run VHS through the Go tool entry from the repository root:
+
+```bash
+go tool vhs path/to/demo.tape
+```
+
+Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen capture. The `.tape` file should describe the terminal session, and VHS will render the output animation using `ttyd` and `ffmpeg`.
 
 ## Detailed Workflow Behavior
 

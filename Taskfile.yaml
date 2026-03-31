@@ -48,6 +48,27 @@ tasks:
     cmds:
       - go build ./...
 
+  build-colin:
+    desc: Build a local `colin` binary in the repo root
+    cmds:
+      - go build -o ./colin .
+
+  vhs.wizard:
+    desc: Build `colin` and render the VHS setup wizard GIF
+    deps:
+      - build-colin
+    preconditions:
+      - sh: test -n "$LINEAR_API_KEY"
+        msg: LINEAR_API_KEY must be exported before rendering wizard.tape
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: GITHUB_TOKEN must be exported before rendering wizard.tape
+      - sh: command -v ttyd >/dev/null 2>&1
+        msg: ttyd must be installed and on PATH before rendering wizard.tape
+      - sh: command -v ffmpeg >/dev/null 2>&1
+        msg: ffmpeg must be installed and on PATH before rendering wizard.tape
+    cmds:
+      - PATH=$PATH:. go tool vhs docs/wizard.tape
+
   check:
     desc: Run formatting, vet, and tests
     deps:

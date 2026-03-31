@@ -64,13 +64,67 @@ Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `
 
 ## Getting Started
 
-If `WORKFLOW.md` is missing, Colin now starts an interactive first-run setup instead of failing immediately. To create or refresh the workflow file explicitly, run:
+The fastest way to get Colin running is:
+
+1. Export a valid `LINEAR_API_KEY` and `GITHUB_TOKEN` in your shell.
+2. Run `colin config` or `go run . config` to generate `WORKFLOW.md`.
+3. Start Colin with `colin` or `go run .`.
+4. Optionally set up Tailscale and the watched-project Linear webhook if you want immediate refreshes between polling intervals.
+
+If you are running from source, the explicit setup command is:
 
 ```bash
 go run . config
 ```
 
-That flow asks for the minimum runtime settings Colin needs, keeps secrets as environment-variable references such as `$LINEAR_API_KEY`, and asks whether you also want webhook setup guidance.
+If the selected workflow file is missing and Colin is running in an interactive terminal, Colin starts the same first-run setup automatically instead of failing immediately. This applies both to the default `WORKFLOW.md` and to custom paths passed with `--workflow`.
+
+In an interactive terminal, `colin config` launches a Bubble Tea wizard that:
+
+- collects the watched Linear project, repository URL, base branch, workspace root, port, and webhook preference
+- validates token prefixes and required fields inline while you type
+- fetches accessible Linear projects when `LINEAR_API_KEY` is available, while still allowing manual slug entry
+- runs live preflight checks before writing `WORKFLOW.md`
+- writes the workflow file without storing secrets in it
+
+![`colin config` starting the interactive setup wizard before guiding the operator through project selection, validation, and workflow creation](docs/wizard.gif)
+
+The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. Valid Linear keys must start with `lin_api_`, and GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
+
+### 1. Export the required secrets
+
+Colin keeps secrets out of `WORKFLOW.md`. Export them in your shell before running setup or startup:
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+export GITHUB_TOKEN=github_pat_...
+```
+
+`GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`. Fine-grained `github_pat_...` tokens are preferred, but classic `ghp_...` PATs also work.
+
+### 2. Generate or refresh `WORKFLOW.md`
+
+Run `colin config` or `go run . config`. The wizard will guide you through:
+
+- the Linear project Colin should watch
+- the GitHub repository Colin should prepare branches and PRs for
+- the base branch Colin should branch and merge from
+- the workspace root Colin should use for per-issue worktrees
+- the local dashboard port
+- whether you want webhook follow-up guidance
+
+At the review step Colin runs live checks when it has the required credentials:
+
+- Linear config validation
+- required Linear workflow states
+- required managed Linear labels
+- GitHub API access
+
+Once the review passes, the wizard writes `WORKFLOW.md`.
+
+Once the workflow file and `LINEAR_API_KEY` are available, Colin validates that the configured Linear states exist and ensures its managed labels exist before startup completes.
+
+### 3. Create the GitHub token if you do not already have one
 
 For the GitHub token itself, the fastest path is:
 
@@ -88,11 +142,15 @@ That command prints a pre-filled GitHub fine-grained token link for the watched 
 
 If fine-grained personal access tokens are blocked by org policy or approval flow, fall back to a classic personal access token with the `repo` scope. Classic tokens may also require `Configure SSO` after creation in orgs that use SAML SSO.
 
+### 4. Start Colin
+
 Start Colin with the checked-in or newly generated workflow:
 
 ```bash
 go run .
 ```
+
+If you prefer a built binary, build `./colin` and run that directly.
 
 Useful flags:
 
@@ -100,6 +158,8 @@ Useful flags:
 - `go run . --workflow /path/to/WORKFLOW.md` points Colin at a different workflow file.
 - `go run . --port 9999` overrides the dashboard port.
 - `go run . config --workflow /path/to/WORKFLOW.md` generates or refreshes a workflow file at a custom path.
+
+### 5. Optional: enable webhook-driven refreshes
 
 If you opted into webhooks during setup, Colin will remind you that webhook exposure requires Tailscale. Before configuring webhooks, make sure public ingress is ready:
 

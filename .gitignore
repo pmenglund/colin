@@ -1,5 +1,6 @@
 .colin
 .key.pem
-colin.toml
+colin
 dist/
 e2e/playwright/node_modules/**
+WIZARD.md

@@ -33,6 +33,7 @@ var (
 )
 
 const (
+	defaultEndpoint              = "https://api.linear.app/graphql"
 	colinMetadataAttachmentTitle = "Colin metadata"
 	colinMetadataURLPrefix       = "https://colin.invalid/linear/issues/"
 	colinMetadataURLSuffix       = "/metadata"
@@ -40,6 +41,13 @@ const (
 	colinExecPlanURLSuffix       = "/exec-plan"
 	refineStateName              = "Refine"
 )
+
+// ProjectSummary is the minimal project metadata used in setup selectors.
+type ProjectSummary struct {
+	Name      string
+	Slug      string
+	TeamNames []string
+}
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
@@ -62,23 +70,114 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	if err := config.ValidateDispatch(cfg); err != nil {
 		return nil, err
 	}
-	client := &Client{
-		endpoint:  cfg.Tracker.Endpoint,
-		apiKey:    cfg.Tracker.APIKey,
-		project:   cfg.Tracker.ProjectSlug,
-		active:    slices.Clone(config.CandidateStates(cfg)),
-		uiBaseURL: uiBaseURL(cfg.Server),
-		labelIDs:  map[string]string{},
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-	}
+	client := newAPIClient(cfg.Tracker.Endpoint, cfg.Tracker.APIKey)
+	client.project = cfg.Tracker.ProjectSlug
+	client.active = slices.Clone(config.CandidateStates(cfg))
+	client.uiBaseURL = uiBaseURL(cfg.Server)
 	projectID, err := client.validateWorkflowStates(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
 	client.watchedProjectID = projectID
 	return client, nil
+}
+
+// ListProjects returns the caller's accessible Linear projects for setup-time selection.
+func ListProjects(ctx context.Context, endpoint string, apiKey string) ([]ProjectSummary, error) {
+	client := newAPIClient(endpoint, apiKey)
+
+	const query = `
+query ProjectList($after: String) {
+  projects(first: 50, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      name
+      slugId
+      teams {
+        nodes {
+          name
+        }
+      }
+    }
+  }
+}
+`
+
+	var (
+		after    any
+		projects []ProjectSummary
+	)
+	for {
+		resp, err := client.doQuery(ctx, query, map[string]any{"after": after})
+		if err != nil {
+			return nil, err
+		}
+		nodes, ok := nestedSlice(resp, "data", "projects", "nodes")
+		if !ok {
+			return nil, ErrUnknownPayload
+		}
+		for _, node := range nodes {
+			name, _ := stringValue(node["name"])
+			slug, _ := stringValue(node["slugId"])
+			name = strings.TrimSpace(name)
+			slug = strings.TrimSpace(slug)
+			if name == "" || slug == "" {
+				continue
+			}
+			project := ProjectSummary{
+				Name: name,
+				Slug: slug,
+			}
+			if teamNodes, ok := nestedSlice(node, "teams", "nodes"); ok {
+				for _, teamNode := range teamNodes {
+					teamName, _ := stringValue(teamNode["name"])
+					teamName = strings.TrimSpace(teamName)
+					if teamName != "" {
+						project.TeamNames = append(project.TeamNames, teamName)
+					}
+				}
+			}
+			projects = append(projects, project)
+		}
+
+		hasNext, _ := nestedBool(resp, "data", "projects", "pageInfo", "hasNextPage")
+		if !hasNext {
+			break
+		}
+		endCursor, _ := nestedString(resp, "data", "projects", "pageInfo", "endCursor")
+		if strings.TrimSpace(endCursor) == "" {
+			return nil, ErrMissingEndCursor
+		}
+		after = endCursor
+	}
+
+	sort.Slice(projects, func(i, j int) bool {
+		leftName := strings.ToLower(strings.TrimSpace(projects[i].Name))
+		rightName := strings.ToLower(strings.TrimSpace(projects[j].Name))
+		if leftName == rightName {
+			return strings.ToLower(projects[i].Slug) < strings.ToLower(projects[j].Slug)
+		}
+		return leftName < rightName
+	})
+	return projects, nil
+}
+
+func newAPIClient(endpoint string, apiKey string) *Client {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		endpoint = defaultEndpoint
+	}
+	return &Client{
+		endpoint: endpoint,
+		apiKey:   apiKey,
+		labelIDs: map[string]string{},
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
 }
 
 // SetUIBaseURLResolver configures a late-bound metadata URL resolver.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -143,6 +144,281 @@ func TestValidateGitHubAccessReturnsManagerError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad credentials") {
 		t.Fatalf("validateGitHubAccess() error = %v, want bad credentials", err)
+	}
+}
+
+func TestPreflightTrackerConfigSkipsGitHubCheckWhenTokenMissing(t *testing.T) {
+	server := newServiceLinearPreflightServer(t)
+	defer server.Close()
+
+	cfg := testServicePreflightConfig(server.URL)
+	oldNewPreflightRepoManager := newPreflightRepoManager
+	newPreflightRepoManager = func(domain.ServiceConfig) *repoops.Manager {
+		t.Fatal("newPreflightRepoManager() should not be called when GitHub token is missing")
+		return nil
+	}
+	defer func() {
+		newPreflightRepoManager = oldNewPreflightRepoManager
+	}()
+
+	_, report, err := PreflightTrackerConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("PreflightTrackerConfig() error = %v", err)
+	}
+	if len(report.Checks) != 4 {
+		t.Fatalf("check count = %d, want 4", len(report.Checks))
+	}
+	if got := report.Checks[3].Status; got != PreflightStatusSkipped {
+		t.Fatalf("github check status = %q, want %q", got, PreflightStatusSkipped)
+	}
+	if got := report.Checks[3].Detail; !strings.Contains(got, "not configured") {
+		t.Fatalf("github check detail = %q, want token guidance", got)
+	}
+	if !report.Ready() {
+		t.Fatal("report.Ready() = false, want true when GitHub check is skipped")
+	}
+}
+
+func TestPreflightTrackerConfigReturnsGitHubValidationError(t *testing.T) {
+	server := newServiceLinearPreflightServer(t)
+	defer server.Close()
+
+	cfg := testServicePreflightConfig(server.URL)
+	cfg.Repo.APIToken = "github_pat_test"
+
+	oldNewPreflightRepoManager := newPreflightRepoManager
+	newPreflightRepoManager = func(cfg domain.ServiceConfig) *repoops.Manager {
+		return repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
+	}
+	defer func() {
+		newPreflightRepoManager = oldNewPreflightRepoManager
+	}()
+
+	_, report, err := PreflightTrackerConfig(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("PreflightTrackerConfig() error = nil, want bad credentials")
+	}
+	if !strings.Contains(err.Error(), "bad credentials") {
+		t.Fatalf("PreflightTrackerConfig() error = %v, want bad credentials", err)
+	}
+	if got := report.Checks[3].Status; got != PreflightStatusError {
+		t.Fatalf("github check status = %q, want %q", got, PreflightStatusError)
+	}
+	if got := report.Checks[3].Detail; !strings.Contains(got, "bad credentials") {
+		t.Fatalf("github check detail = %q, want bad credentials", got)
+	}
+}
+
+func TestNewEnsuresManagedLabelsDuringStartupPreflight(t *testing.T) {
+	t.Parallel()
+
+	var createdLabels []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamStates"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id": "project-1",
+								"teams": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"id":   "team-1",
+											"name": "Colin",
+											"states": map[string]any{
+												"nodes": []map[string]any{
+													{"name": "Todo"},
+													{"name": "In Progress"},
+													{"name": "Review"},
+													{"name": "Merge"},
+													{"name": "Done"},
+													{"name": "Refine"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			name, _ := request.Variables["name"].(string)
+			nodes := []map[string]any{}
+			if name == domain.PausedIssueLabel {
+				nodes = append(nodes, map[string]any{
+					"id":   "label-existing",
+					"name": domain.PausedIssueLabel,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": nodes,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation CreateIssueLabel"):
+			input, _ := request.Variables["input"].(map[string]any)
+			name, _ := input["name"].(string)
+			createdLabels = append(createdLabels, name)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabelCreate": map[string]any{
+						"success": true,
+						"issueLabel": map[string]any{
+							"id":   "label-" + strconv.Itoa(len(createdLabels)),
+							"name": name,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  endpoint: ` + server.URL + `
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+codex:
+  command: codex app-server
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath); err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	wantCreated := []string{
+		domain.CodexReviewPendingLabel,
+		domain.CodexReviewApprovedLabel,
+		domain.CodexReviewUnresolvedLabel,
+	}
+	if len(createdLabels) != len(wantCreated) {
+		t.Fatalf("created label count = %d, want %d", len(createdLabels), len(wantCreated))
+	}
+	for i, want := range wantCreated {
+		if createdLabels[i] != want {
+			t.Fatalf("createdLabels[%d] = %q, want %q", i, createdLabels[i], want)
+		}
+	}
+}
+
+func TestNewFailsWhenManagedLabelPreflightFails(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamStates"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id": "project-1",
+								"teams": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"id":   "team-1",
+											"name": "Colin",
+											"states": map[string]any{
+												"nodes": []map[string]any{
+													{"name": "Todo"},
+													{"name": "In Progress"},
+													{"name": "Review"},
+													{"name": "Merge"},
+													{"name": "Done"},
+													{"name": "Refine"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			http.Error(w, "boom", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  endpoint: ` + server.URL + `
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+codex:
+  command: codex app-server
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	if err == nil {
+		t.Fatal("New() error = nil, want preflight failure")
+	}
+	if !strings.Contains(err.Error(), "ensure paused label") {
+		t.Fatalf("New() error = %q, want label context", err)
 	}
 }
 
@@ -546,6 +822,106 @@ type serviceGitHubStub struct {
 
 func (s *serviceGitHubStub) ValidateAuth(context.Context) error {
 	return s.validateErr
+}
+
+func newServiceLinearPreflightServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamStates"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id": "project-1",
+								"teams": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"id":   "team-1",
+											"name": "Colin",
+											"states": map[string]any{
+												"nodes": []map[string]any{
+													{"name": "Todo"},
+													{"name": "In Progress"},
+													{"name": "Review"},
+													{"name": "Merge"},
+													{"name": "Done"},
+													{"name": "Refine"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			name, _ := request.Variables["name"].(string)
+			nodes := []map[string]any{}
+			if name == domain.PausedIssueLabel {
+				nodes = append(nodes, map[string]any{
+					"id":   "label-existing",
+					"name": domain.PausedIssueLabel,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": nodes,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation CreateIssueLabel"):
+			input, _ := request.Variables["input"].(map[string]any)
+			name, _ := input["name"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabelCreate": map[string]any{
+						"success": true,
+						"issueLabel": map[string]any{
+							"id":   "label-" + name,
+							"name": name,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+}
+
+func testServicePreflightConfig(endpoint string) domain.ServiceConfig {
+	return domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			Kind:           "linear",
+			Endpoint:       endpoint,
+			APIKey:         "test-linear-key",
+			ProjectSlug:    "test-project",
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Done"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Codex: domain.CodexConfig{
+			Command: "codex app-server",
+		},
+	}
 }
 
 func (s *serviceGitHubStub) PullRequestByHead(context.Context, string, string, string, string) (*repoops.GitHubPullRequest, error) {
