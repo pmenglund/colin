@@ -1,8 +1,9 @@
-package repoops
+package repoops_test
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -10,15 +11,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	repoops "github.com/pmenglund/colin/internal/repoops"
+	"github.com/pmenglund/colin/internal/repoops/fakes"
 )
 
 func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
-	workspacePath, remotePath, ghLogPath := setupRepoAutomationTest(t)
+	workspacePath, remotePath := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(3, testPullRequest(1, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	issueURL := "https://linear.example/COLIN-93"
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
@@ -40,22 +51,26 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	if !strings.Contains(remoteBranches, "colin-93") {
 		t.Fatalf("remote branches = %q, want issue branch", remoteBranches)
 	}
-
-	log := readFile(t, ghLogPath)
-	if !strings.Contains(log, "pr create") {
-		t.Fatalf("gh log = %q, want pr create", log)
+	if fakeGitHub.CreatePullRequestCallCount() != 1 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 1", fakeGitHub.CreatePullRequestCallCount())
 	}
 }
 
 func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
 	cfg := testConfig()
 	cfg.Workspace.BaseRef = "symphony"
 	cfg.Repo.PRTemplate = "PRBODY issue={{.issue.identifier}} branch={{.branch}} base={{.base_ref}}"
 
-	manager := NewManager(cfg, testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(cfg, testLogger(), fakeGitHub)
 	if _, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Use template",
@@ -63,22 +78,27 @@ func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 
-	log := readFile(t, ghLogPath)
-	if !strings.Contains(log, "PRBODY issue=COLIN-93 branch=colin-93 base=symphony") {
-		t.Fatalf("gh log = %q, want rendered PR body", log)
+	_, owner, repo, input := fakeGitHub.CreatePullRequestArgsForCall(0)
+	if owner != "local" || repo != "remote" {
+		t.Fatalf("CreatePullRequestArgs owner/repo = %q/%q, want local/remote", owner, repo)
+	}
+	if !strings.Contains(input.Body, "PRBODY issue=COLIN-93 branch=colin-93 base=symphony") {
+		t.Fatalf("CreatePullRequest body = %q, want rendered template", input.Body)
 	}
 }
 
 func TestMergeMergesExistingPR(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	manager := NewManager(testConfig(), testLogger())
-	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
 	result, err := manager.Merge(context.Background(), issue, workspacePath)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
@@ -86,24 +106,28 @@ func TestMergeMergesExistingPR(t *testing.T) {
 	if result.Action != "merged" {
 		t.Fatalf("result.Action = %q, want %q", result.Action, "merged")
 	}
-
-	log := readFile(t, ghLogPath)
-	if !strings.Contains(log, "pr merge 1 --merge") {
-		t.Fatalf("gh log = %q, want merge invocation", log)
+	if fakeGitHub.MergePullRequestCallCount() != 1 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 1", fakeGitHub.MergePullRequestCallCount())
+	}
+	_, owner, repo, number, method := fakeGitHub.MergePullRequestArgsForCall(0)
+	if owner != "local" || repo != "remote" || number != 1 || method != "merge" {
+		t.Fatalf("MergePullRequest args = %q/%q #%d %q, want local/remote #1 merge", owner, repo, number, method)
 	}
 }
 
 func TestMergeReturnsPublishContextWhenGitHubMergeFails(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
+	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
-	t.Setenv("COLIN_FAKE_GH_MERGE_ERROR", "X Pull request pmenglund/colin#11 is not mergeable: the merge commit cannot be cleanly created.")
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.MergePullRequestReturns(errors.New("merge failed"))
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
-
 	result, err := manager.Merge(context.Background(), issue, workspacePath)
 	if err == nil {
 		t.Fatal("Merge() error = nil, want error")
@@ -117,10 +141,16 @@ func TestMergeReturnsPublishContextWhenGitHubMergeFails(t *testing.T) {
 }
 
 func TestMergePullRequestMergesPublishedPR(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
 	result, err := manager.Publish(context.Background(), issue, workspacePath)
 	if err != nil {
@@ -134,25 +164,24 @@ func TestMergePullRequestMergesPublishedPR(t *testing.T) {
 	if merged.Action != "merged" {
 		t.Fatalf("merged.Action = %q, want %q", merged.Action, "merged")
 	}
-
-	log := readFile(t, ghLogPath)
-	if !strings.Contains(log, "pr merge 1 --merge") {
-		t.Fatalf("gh log = %q, want merge invocation", log)
+	if fakeGitHub.MergePullRequestCallCount() != 1 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 1", fakeGitHub.MergePullRequestCallCount())
 	}
 }
 
 func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
-	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
-	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address review"}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{
+			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address review",
@@ -173,18 +202,26 @@ func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 }
 
 func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
-	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
-	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address Codex review"}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
+	requestedAt := time.Date(2026, 3, 28, 18, 1, 0, 0, time.UTC)
+	approvedAt := time.Date(2026, 3, 28, 18, 2, 0, 0, time.UTC)
 
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"chatgpt-codex-connector"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REACTIONS"), `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-28T18:01:00Z","user":{"login":"chatgpt-codex-connector"}},{"content":"THUMBS_UP","createdAt":"2026-03-28T18:02:00Z","user":{"login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{
+			reviewThreadNode("thread-1", "chatgpt-codex-connector", "Please fix this.", false, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector"},
+			{Content: "THUMBS_UP", CreatedAt: &approvedAt, UserLogin: "chatgpt-codex-connector"},
+		},
+	}, nil)
 
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address Codex review",
@@ -205,18 +242,27 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 }
 
 func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
-	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
-	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address paginated Codex review"}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
+	threadNode := reviewThreadNode("thread-1", "reviewer", "Comment 20", false, true)
+	threadNode["comments"] = map[string]any{
+		"nodes":    reviewComments("reviewer", 20),
+		"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "comments-page-2"},
 	}
 
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Comment 1","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer-1"}},{"id":"comment-2","body":"Comment 2","url":"https://example.test/comment/2","createdAt":"2026-03-28T18:01:00Z","author":{"login":"reviewer-2"}},{"id":"comment-3","body":"Comment 3","url":"https://example.test/comment/3","createdAt":"2026-03-28T18:02:00Z","author":{"login":"reviewer-3"}},{"id":"comment-4","body":"Comment 4","url":"https://example.test/comment/4","createdAt":"2026-03-28T18:03:00Z","author":{"login":"reviewer-4"}},{"id":"comment-5","body":"Comment 5","url":"https://example.test/comment/5","createdAt":"2026-03-28T18:04:00Z","author":{"login":"reviewer-5"}},{"id":"comment-6","body":"Comment 6","url":"https://example.test/comment/6","createdAt":"2026-03-28T18:05:00Z","author":{"login":"reviewer-6"}},{"id":"comment-7","body":"Comment 7","url":"https://example.test/comment/7","createdAt":"2026-03-28T18:06:00Z","author":{"login":"reviewer-7"}},{"id":"comment-8","body":"Comment 8","url":"https://example.test/comment/8","createdAt":"2026-03-28T18:07:00Z","author":{"login":"reviewer-8"}},{"id":"comment-9","body":"Comment 9","url":"https://example.test/comment/9","createdAt":"2026-03-28T18:08:00Z","author":{"login":"reviewer-9"}},{"id":"comment-10","body":"Comment 10","url":"https://example.test/comment/10","createdAt":"2026-03-28T18:09:00Z","author":{"login":"reviewer-10"}},{"id":"comment-11","body":"Comment 11","url":"https://example.test/comment/11","createdAt":"2026-03-28T18:10:00Z","author":{"login":"reviewer-11"}},{"id":"comment-12","body":"Comment 12","url":"https://example.test/comment/12","createdAt":"2026-03-28T18:11:00Z","author":{"login":"reviewer-12"}},{"id":"comment-13","body":"Comment 13","url":"https://example.test/comment/13","createdAt":"2026-03-28T18:12:00Z","author":{"login":"reviewer-13"}},{"id":"comment-14","body":"Comment 14","url":"https://example.test/comment/14","createdAt":"2026-03-28T18:13:00Z","author":{"login":"reviewer-14"}},{"id":"comment-15","body":"Comment 15","url":"https://example.test/comment/15","createdAt":"2026-03-28T18:14:00Z","author":{"login":"reviewer-15"}},{"id":"comment-16","body":"Comment 16","url":"https://example.test/comment/16","createdAt":"2026-03-28T18:15:00Z","author":{"login":"reviewer-16"}},{"id":"comment-17","body":"Comment 17","url":"https://example.test/comment/17","createdAt":"2026-03-28T18:16:00Z","author":{"login":"reviewer-17"}},{"id":"comment-18","body":"Comment 18","url":"https://example.test/comment/18","createdAt":"2026-03-28T18:17:00Z","author":{"login":"reviewer-18"}},{"id":"comment-19","body":"Comment 19","url":"https://example.test/comment/19","createdAt":"2026-03-28T18:18:00Z","author":{"login":"reviewer-19"}},{"id":"comment-20","body":"Comment 20","url":"https://example.test/comment/20","createdAt":"2026-03-28T18:19:00Z","author":{"login":"reviewer-20"}}],"pageInfo":{"hasNextPage":true,"endCursor":"comments-page-2"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS"), `{"data":{"node":{"comments":{"nodes":[{"author":{"login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`)
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{threadNode},
+	}, nil)
+	fakeGitHub.ReviewThreadCommentsReturns(repoops.GitHubReviewThreadCommentPage{
+		Comments: []map[string]any{
+			{"author": map[string]any{"login": "chatgpt-codex-connector"}},
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address paginated Codex review",
@@ -228,21 +274,30 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	if len(reviewContext.CodexReviewThreads) != 1 {
 		t.Fatalf("codex review threads length = %d, want 1", len(reviewContext.CodexReviewThreads))
 	}
+	if fakeGitHub.ReviewThreadCommentsCallCount() != 1 {
+		t.Fatalf("ReviewThreadCommentsCallCount() = %d, want 1", fakeGitHub.ReviewThreadCommentsCallCount())
+	}
 }
 
 func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
-	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
-	issue := domain.Issue{Identifier: "COLIN-93", Title: "Address Codex bot review"}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
+	requestedAt := time.Date(2026, 3, 28, 18, 1, 0, 0, time.UTC)
 
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"chatgpt-codex-connector[bot]"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REACTIONS"), `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[{"content":"EYES","createdAt":"2026-03-28T18:01:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{
+			reviewThreadNode("thread-1", "chatgpt-codex-connector[bot]", "Please fix this.", false, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector[bot]"},
+		},
+	}, nil)
 
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address Codex bot review",
@@ -260,21 +315,28 @@ func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
 }
 
 func TestReviewContextPrefersCurrentWorkspaceBranchOverTrackerBranchName(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
-	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
-	t.Setenv("COLIN_FAKE_GH_HEAD", "colin-93")
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repoops.GitHubPullRequest, error) {
+		if head == "colin-93" {
+			return testPullRequest(1, "OPEN", "colin-93"), nil
+		}
+		return nil, nil
+	})
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{
+			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address review",
 		BranchName: stringPtr("pmenglund/colin-93"),
 	}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
-
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 
 	reviewContext, err := manager.ReviewContext(context.Background(), issue, workspacePath)
 	if err != nil {
@@ -283,17 +345,34 @@ func TestReviewContextPrefersCurrentWorkspaceBranchOverTrackerBranchName(t *test
 	if reviewContext.PullRequest.Number != 1 {
 		t.Fatalf("pull request number = %d, want 1", reviewContext.PullRequest.Number)
 	}
-	if len(reviewContext.Threads) != 1 {
-		t.Fatalf("threads length = %d, want 1", len(reviewContext.Threads))
+	if fakeGitHub.PullRequestByHeadCallCount() != 1 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 1", fakeGitHub.PullRequestByHeadCallCount())
+	}
+	_, _, _, head, _ := fakeGitHub.PullRequestByHeadArgsForCall(0)
+	if head != "colin-93" {
+		t.Fatalf("PullRequestByHead head = %q, want %q", head, "colin-93")
 	}
 }
 
 func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnavailable(t *testing.T) {
-	workspacePath, _, _ := setupRepoAutomationTest(t)
-	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
-	t.Setenv("COLIN_FAKE_GH_HEAD", "colin-93")
+	workspacePath, _ := setupRepoAutomationTest(t)
+	runCmd(t, workspacePath, "git", "checkout", "--detach")
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repoops.GitHubPullRequest, error) {
+		if head == "colin-93" {
+			return testPullRequest(1, "OPEN", "colin-93"), nil
+		}
+		return nil, nil
+	})
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{
+			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address review",
@@ -302,12 +381,6 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 			ActualBranchName: "colin-93",
 		},
 	}
-	if _, err := manager.Publish(context.Background(), issue, workspacePath); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
-	runCmd(t, workspacePath, "git", "checkout", "--detach")
-
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_REVIEW_THREADS"), `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"isOutdated":false,"viewerCanReply":true,"viewerCanResolve":true,"path":"internal/foo.go","line":42,"startLine":40,"comments":{"nodes":[{"id":"comment-1","body":"Please fix this.","url":"https://example.test/comment/1","createdAt":"2026-03-28T18:00:00Z","author":{"login":"reviewer"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 
 	reviewContext, err := manager.ReviewContext(context.Background(), issue, workspacePath)
 	if err != nil {
@@ -316,16 +389,22 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 	if reviewContext.PullRequest.Number != 1 {
 		t.Fatalf("pull request number = %d, want 1", reviewContext.PullRequest.Number)
 	}
-	if len(reviewContext.Threads) != 1 {
-		t.Fatalf("threads length = %d, want 1", len(reviewContext.Threads))
+	if fakeGitHub.PullRequestByHeadCallCount() != 1 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 1", fakeGitHub.PullRequestByHeadCallCount())
+	}
+	_, _, _, head, _ := fakeGitHub.PullRequestByHeadArgsForCall(0)
+	if head != "colin-93" {
+		t.Fatalf("PullRequestByHead head = %q, want %q", head, "colin-93")
 	}
 }
 
 func TestPublishReusesTrackedPullRequestFromMetadata(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"colin-93","baseRefName":"symphony"}]`)
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Reuse tracked PR",
@@ -343,21 +422,27 @@ func TestPublishReusesTrackedPullRequestFromMetadata(t *testing.T) {
 	if result.PRNumber != 11 {
 		t.Fatalf("result.PRNumber = %d, want 11", result.PRNumber)
 	}
-
-	log := readFile(t, ghLogPath)
-	if strings.Contains(log, "pr create") {
-		t.Fatalf("gh log = %q, want no pr create", log)
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
 	}
-	if !strings.Contains(log, "pr view 11") {
-		t.Fatalf("gh log = %q, want tracked pr view", log)
+	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
+		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
 	}
 }
 
 func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"pmenglund/colin-93","baseRefName":"symphony"}]`)
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+		Number:      11,
+		URL:         "https://github.com/pmenglund/colin/pull/11",
+		State:       "OPEN",
+		HeadRefName: "pmenglund/colin-93",
+		BaseRefName: "symphony",
+	}, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Reject branch drift",
@@ -375,17 +460,18 @@ func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *test
 	if !strings.Contains(err.Error(), "current branch") {
 		t.Fatalf("Publish() error = %v, want current branch mismatch", err)
 	}
-
-	log := readFile(t, ghLogPath)
-	if strings.Contains(log, "pr create") {
-		t.Fatalf("gh log = %q, want no pr create", log)
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
 	}
 }
 
 func TestPublishFailsWhenBranchIsNotAheadOfBaseAndWorkspaceIsClean(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(nil, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Refuse empty review handoff",
@@ -393,21 +479,21 @@ func TestPublishFailsWhenBranchIsNotAheadOfBaseAndWorkspaceIsClean(t *testing.T)
 	if err == nil {
 		t.Fatal("Publish() error = nil, want error")
 	}
-	if !errors.Is(err, ErrNoReviewableChanges) {
+	if !errors.Is(err, repoops.ErrNoReviewableChanges) {
 		t.Fatalf("Publish() error = %v, want ErrNoReviewableChanges", err)
 	}
-
-	log := readFile(t, ghLogPath)
-	if strings.Contains(log, "pr create") {
-		t.Fatalf("gh log = %q, want no pr create", log)
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
 	}
 }
 
 func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
-	writeFile(t, os.Getenv("COLIN_FAKE_GH_STATE"), `[{"number":11,"url":"https://github.com/pmenglund/colin/pull/11","state":"OPEN","headRefName":"colin-93","baseRefName":"symphony"}]`)
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Adopt attached PR",
@@ -421,17 +507,16 @@ func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	if result.PRNumber != 11 {
 		t.Fatalf("result.PRNumber = %d, want 11", result.PRNumber)
 	}
-
-	log := readFile(t, ghLogPath)
-	if strings.Contains(log, "pr create") {
-		t.Fatalf("gh log = %q, want no pr create", log)
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
 	}
 }
 
 func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
+	workspacePath, _ := setupRepoAutomationTest(t)
 
-	manager := NewManager(testConfig(), testLogger())
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Reject duplicate attached PRs",
@@ -443,19 +528,18 @@ func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
 	if err == nil {
 		t.Fatal("Publish() error = nil, want error")
 	}
-	if !errors.Is(err, ErrDuplicatePullRequests) {
+	if !errors.Is(err, repoops.ErrDuplicatePullRequests) {
 		t.Fatalf("Publish() error = %v, want ErrDuplicatePullRequests", err)
 	}
-
-	log := readFile(t, ghLogPath)
-	if strings.Contains(log, "pr create") {
-		t.Fatalf("gh log = %q, want no pr create", log)
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
 	}
 }
 
 func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
-	workspacePath, _, ghLogPath := setupRepoAutomationTest(t)
-	manager := NewManager(testConfig(), testLogger())
+	workspacePath, _ := setupRepoAutomationTest(t)
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
 
 	thread := domain.GitHubReviewThread{
 		ID:         "thread-1",
@@ -468,25 +552,25 @@ func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
 		t.Fatalf("ReplyAndResolveReviewThread() error = %v", err)
 	}
 
-	log := readFile(t, ghLogPath)
-	if !strings.Contains(log, "api graphql") || !strings.Contains(log, "ReplyReviewThread") || !strings.Contains(log, "ResolveReviewThread") {
-		t.Fatalf("gh log = %q, want review-thread reply and resolve mutations", log)
+	if fakeGitHub.ReplyToReviewThreadCallCount() != 1 {
+		t.Fatalf("ReplyToReviewThreadCallCount() = %d, want 1", fakeGitHub.ReplyToReviewThreadCallCount())
+	}
+	if fakeGitHub.ResolveReviewThreadCallCount() != 1 {
+		t.Fatalf("ResolveReviewThreadCallCount() = %d, want 1", fakeGitHub.ResolveReviewThreadCallCount())
+	}
+	_, threadID, body := fakeGitHub.ReplyToReviewThreadArgsForCall(0)
+	if threadID != "thread-1" || body != "[colin] Addressed." {
+		t.Fatalf("ReplyToReviewThread args = %q %q, want thread-1 [colin] Addressed.", threadID, body)
 	}
 }
 
-func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath string, ghLogPath string) {
+func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath string) {
 	t.Helper()
 
 	tempDir := t.TempDir()
 	remotePath = filepath.Join(tempDir, "remote.git")
 	seedPath := filepath.Join(tempDir, "seed")
 	workspacePath = filepath.Join(tempDir, "workspace")
-	binPath := filepath.Join(tempDir, "bin")
-	ghStatePath := filepath.Join(tempDir, "gh-state.json")
-	ghReviewThreadsPath := filepath.Join(tempDir, "gh-review-threads.json")
-	ghReviewThreadCommentsPath := filepath.Join(tempDir, "gh-review-thread-comments.json")
-	ghReactionsPath := filepath.Join(tempDir, "gh-reactions.json")
-	ghLogPath = filepath.Join(tempDir, "gh.log")
 
 	runCmd(t, "", "git", "init", "--bare", remotePath)
 	runCmd(t, "", "git", "init", seedPath)
@@ -502,27 +586,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	runCmd(t, "", "git", "clone", remotePath, workspacePath)
 	runCmd(t, workspacePath, "git", "checkout", "-b", "colin-93", "origin/symphony")
 
-	if err := os.MkdirAll(binPath, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	writeFile(t, ghStatePath, "[]\n")
-	writeFile(t, ghReviewThreadsPath, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, ghReviewThreadCommentsPath, `{"data":{"node":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`)
-	writeFile(t, ghReactionsPath, `{"data":{"repository":{"pullRequest":{"reactions":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	writeFile(t, ghLogPath, "")
-	writeFile(t, filepath.Join(binPath, "gh"), fakeGHScript)
-	if err := os.Chmod(filepath.Join(binPath, "gh"), 0o755); err != nil {
-		t.Fatalf("Chmod() error = %v", err)
-	}
-
-	t.Setenv("PATH", binPath+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("COLIN_FAKE_GH_STATE", ghStatePath)
-	t.Setenv("COLIN_FAKE_GH_REVIEW_THREADS", ghReviewThreadsPath)
-	t.Setenv("COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS", ghReviewThreadCommentsPath)
-	t.Setenv("COLIN_FAKE_GH_REACTIONS", ghReactionsPath)
-	t.Setenv("COLIN_FAKE_GH_LOG", ghLogPath)
-
-	return workspacePath, remotePath, ghLogPath
+	return workspacePath, remotePath
 }
 
 func testConfig() domain.ServiceConfig {
@@ -561,164 +625,63 @@ func writeFile(t *testing.T, path string, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-}
-
-func readFile(t *testing.T, path string) string {
-	t.Helper()
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	return string(data)
 }
 
 func stringPtr(value string) *string {
 	return &value
 }
 
-const fakeGHScript = `#!/bin/sh
-set -eu
-echo "$*" >>"$COLIN_FAKE_GH_LOG"
-case "$1 $2" in
-  "pr list")
-    head=""
-    base=""
-    shift 2
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --head)
-          head="$2"
-          shift 2
-          ;;
-        --base)
-          base="$2"
-          shift 2
-          ;;
-        *)
-          shift
-          ;;
-      esac
-    done
-    python3 - "$COLIN_FAKE_GH_STATE" "$head" "$base" <<'PY'
-import json, sys
-with open(sys.argv[1], "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-head = sys.argv[2]
-base = sys.argv[3]
-if head:
-    prs = [pr for pr in prs if pr.get("headRefName") == head]
-if base:
-    prs = [pr for pr in prs if pr.get("baseRefName") == base]
-json.dump(prs, sys.stdout)
-print()
-PY
-    ;;
-  "pr view")
-    python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
-import json, sys
-with open(sys.argv[1], "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-target = int(sys.argv[2])
-for pr in prs:
-    if int(pr.get("number", 0)) == target:
-        json.dump(pr, sys.stdout)
-        print()
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
-    ;;
-  "pr create")
-    head=""
-    base=""
-    shift 2
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --head)
-          head="$2"
-          shift 2
-          ;;
-        --base)
-          base="$2"
-          shift 2
-          ;;
-        *)
-          shift
-          ;;
-      esac
-    done
-    python3 - "$COLIN_FAKE_GH_STATE" "$head" "$base" <<'PY'
-import json, sys
-path, head, base = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-number = max([int(pr.get("number", 0)) for pr in prs] or [0]) + 1
-pr = {
-    "number": number,
-    "url": f"https://example.test/pr/{number}",
-    "state": "OPEN",
-    "headRefName": head,
-    "baseRefName": base,
+func testPullRequest(number int, state, head string) *repoops.GitHubPullRequest {
+	return &repoops.GitHubPullRequest{
+		Number:      number,
+		URL:         fmt.Sprintf("https://github.com/pmenglund/colin/pull/%d", number),
+		State:       state,
+		HeadRefName: head,
+		BaseRefName: "symphony",
+	}
 }
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump([pr], fh)
-print(pr["url"])
-PY
-    ;;
-  "pr merge")
-    if [ -n "${COLIN_FAKE_GH_MERGE_ERROR:-}" ]; then
-      printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR" >&2
-      exit 1
-    fi
-    if [ -n "${COLIN_FAKE_GH_MERGE_ERROR_ONCE:-}" ]; then
-      once_file="${COLIN_FAKE_GH_STATE}.merge-once"
-      if [ ! -f "$once_file" ]; then
-        : >"$once_file"
-        printf '%s\n' "$COLIN_FAKE_GH_MERGE_ERROR_ONCE" >&2
-        exit 1
-      fi
-    fi
-    python3 - "$COLIN_FAKE_GH_STATE" "$3" <<'PY'
-import json, sys
-path, target = sys.argv[1], int(sys.argv[2])
-with open(path, "r", encoding="utf-8") as fh:
-    prs = json.load(fh)
-for pr in prs:
-    if int(pr.get("number", 0)) == target:
-        pr["state"] = "MERGED"
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(prs, fh)
-PY
-    ;;
-  "api graphql")
-    case "$*" in
-      *"ReviewThreads"*)
-        cat "$COLIN_FAKE_GH_REVIEW_THREADS"
-        ;;
-      *"ReviewThreadComments"*)
-        cat "$COLIN_FAKE_GH_REVIEW_THREAD_COMMENTS"
-        ;;
-      *"PullRequestReactions"*)
-        cat "$COLIN_FAKE_GH_REACTIONS"
-        ;;
-      *"ReplyReviewThread"*)
-        printf '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"reply-1","url":"https://example.test/comment/reply-1"}}}}\n'
-        ;;
-      *"ResolveReviewThread"*)
-        printf '{"data":{"resolveReviewThread":{"thread":{"id":"thread-1","isResolved":true}}}}\n'
-        ;;
-      *)
-        echo "unexpected graphql invocation: $*" >&2
-        exit 1
-        ;;
-    esac
-    ;;
-  *)
-    echo "unexpected gh invocation: $*" >&2
-    exit 1
-    ;;
-esac
-`
+
+func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPage bool) map[string]any {
+	return map[string]any{
+		"id":               id,
+		"isResolved":       resolved,
+		"isOutdated":       false,
+		"viewerCanReply":   true,
+		"viewerCanResolve": true,
+		"path":             "internal/foo.go",
+		"line":             float64(42),
+		"startLine":        float64(40),
+		"comments": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"id":        "comment-1",
+					"body":      body,
+					"url":       "https://example.test/comment/1",
+					"createdAt": "2026-03-28T18:00:00Z",
+					"author":    map[string]any{"login": author},
+				},
+			},
+			"pageInfo": map[string]any{
+				"hasNextPage": commentsHasNextPage,
+				"endCursor":   "comments-page-2",
+			},
+		},
+	}
+}
+
+func reviewComments(author string, count int) []any {
+	out := make([]any, 0, count)
+	for i := 1; i <= count; i++ {
+		out = append(out, map[string]any{
+			"id":        fmt.Sprintf("comment-%d", i),
+			"body":      fmt.Sprintf("Comment %d", i),
+			"url":       fmt.Sprintf("https://example.test/comment/%d", i),
+			"createdAt": "2026-03-28T18:00:00Z",
+			"author":    map[string]any{"login": author},
+		})
+	}
+	return out
+}

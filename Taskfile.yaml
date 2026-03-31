@@ -11,6 +11,11 @@ tasks:
     cmds:
       - gofmt -w .
 
+  generate:
+    desc: Regenerate counterfeiter fakes
+    cmds:
+      - go generate ./internal/repoops
+
   vet:
     desc: Run go vet
     cmds:

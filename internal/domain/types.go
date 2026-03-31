@@ -184,6 +184,7 @@ type RepoConfig struct {
 	MergeMethod    string
 	BranchTemplate string
 	PRTemplate     string
+	APIToken       string
 }
 
 // HookConfig configures workspace lifecycle hooks.

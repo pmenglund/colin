@@ -43,10 +43,14 @@ const (
 
 // NewRunner constructs a Runner bound to the current workflow, tracker, and workspace manager.
 func NewRunner(cfg domain.ServiceConfig, def domain.WorkflowDefinition, trackerClient tracker.Client, manager *workspace.Manager, logger *slog.Logger) *Runner {
+	return newRunner(cfg, def, trackerClient, manager, repoops.NewManager(cfg, logger), logger)
+}
+
+func newRunner(cfg domain.ServiceConfig, def domain.WorkflowDefinition, trackerClient tracker.Client, manager *workspace.Manager, repoManager *repoops.Manager, logger *slog.Logger) *Runner {
 	return &Runner{
 		cfg:        cfg,
 		workflow:   def,
-		repo:       repoops.NewManager(cfg, logger),
+		repo:       repoManager,
 		tracker:    trackerClient,
 		workspaces: manager,
 		logger:     logger,
