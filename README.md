@@ -61,6 +61,14 @@ go run . setup tailscale
 
 That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
 
+To create or repair the watched project's Linear webhook after public ingress is ready, run:
+
+```bash
+go run . setup linear
+```
+
+That command creates or repairs one team-scoped Linear webhook for the watched project, points it at `<public-base-url>/webhooks/linear`, and reminds you to store the signing secret as `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
+
 Because `--workflow` is a persistent root flag, the same override also applies to setup commands:
 
 ```bash
@@ -238,6 +246,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
 - Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for the Colin port and derives the public webhook base URL from that Funnel. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
+- Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
 - `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
 - The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. The embedded browser refresh keeps the task fragment current without reloading the full page shell, and if a refresh fails the toolbar marks the dashboard as stale so operators know they are looking at the last successful snapshot.
@@ -299,4 +308,4 @@ The setup page and CLI both show the final URLs you will paste into provider web
 - GitHub: `<public-base-url>/webhooks/github`
 - Linear: `<public-base-url>/webhooks/linear`
 
-Those webhook endpoints are reserved now so the URLs are stable, but they intentionally return `501 Not Implemented` until webhook handling itself is added. The readiness endpoint is live today at `/webhooks/readyz`.
+Colin now acknowledges `POST` requests to `/webhooks/linear` and verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured. GitHub webhook paths remain reserved and still return `501 Not Implemented`. The readiness endpoint is live today at `/webhooks/readyz`.

@@ -25,6 +25,7 @@ func newSetupCmd(stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) 
 	}
 	configureCommand(cmd, stdout, stderr)
 	cmd.AddCommand(newSetupTailscaleCmd(stdout, stderr, opts, deps))
+	cmd.AddCommand(newSetupLinearWebhookCmd(stdout, stderr, opts, deps))
 
 	return cmd
 }
@@ -48,5 +49,26 @@ func newSetupTailscaleCmd(stdout, stderr io.Writer, opts *rootOptions, deps comm
 	cmd.Example = "  colin setup tailscale\n  colin --workflow /path/to/WORKFLOW.md setup tailscale"
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
 
+	return cmd
+}
+
+func newSetupLinearWebhookCmd(stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	var webhookName string
+
+	cmd := &cobra.Command{
+		Use:   "linear",
+		Short: "Create or repair the Linear webhook for this workflow",
+		Long: "Create or repair the watched project's Linear webhook so it points at Colin's public `/webhooks/linear` endpoint.\n\n" +
+			"This command uses `server.webhook_public_url` when configured, or the current Tailscale Funnel public base URL when available. It manages one team-scoped Linear webhook for the watched project, sets the webhook label with `--name`, and reminds you to store the Linear signing secret in `tracker.webhook_signing_secret` via `$LINEAR_WEBHOOK_SECRET`.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(deps.runSetupLinearWebhook(cmd, opts.workflowPath, webhookName))
+		},
+	}
+	configureCommand(cmd, stdout, stderr)
+	cmd.Example = "  colin setup linear\n  colin --workflow /path/to/WORKFLOW.md setup linear"
+	cmd.Flags().StringVar(&webhookName, "name", "colin", "Linear webhook label to create or repair")
 	return cmd
 }

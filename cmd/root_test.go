@@ -202,6 +202,10 @@ func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 			t.Fatal("runSetupTailscale should not be called")
 			return 0
 		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
 	}
 
 	if code := run(nil, &stdout, &stderr, deps); code != 0 {
@@ -228,6 +232,10 @@ func TestRunPassesWorkflowFlagToRootCommand(t *testing.T) {
 			t.Fatal("runSetupTailscale should not be called")
 			return 0
 		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
 	}
 
 	if code := run([]string{"--workflow", "/tmp/custom.md"}, &stdout, &stderr, deps); code != 0 {
@@ -252,6 +260,10 @@ func TestRunPassesWorkflowFlagToSetupTailscale(t *testing.T) {
 		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
 			gotWorkflow = workflowPath
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
 			return 0
 		},
 	}
@@ -289,6 +301,99 @@ func TestSetupTailscaleHelpExplainsPurpose(t *testing.T) {
 	}
 	if !strings.Contains(got, "tailscale funnel") {
 		t.Fatalf("help output = %q, want funnel command explanation", got)
+	}
+}
+
+func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+	var gotName string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			gotWorkflow = workflowPath
+			gotName = webhookName
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "linear", "--workflow", "/tmp/custom.md"}, &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup linear --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+	if gotName != "colin" {
+		t.Fatalf("webhook name = %q, want %q", gotName, "colin")
+	}
+}
+
+func TestRunPassesWebhookNameToSetupLinearWebhook(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotName string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			gotName = webhookName
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "linear", "--name", "colin-dev"}, &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup linear --name) exit code = %d, want 0", code)
+	}
+	if gotName != "colin-dev" {
+		t.Fatalf("webhook name = %q, want %q", gotName, "colin-dev")
+	}
+}
+
+func TestSetupLinearWebhookHelpExplainsPurpose(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "linear", "--help"}, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup linear --help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "/webhooks/linear") {
+		t.Fatalf("help output = %q, want webhook URL context", got)
+	}
+	if !strings.Contains(got, "LINEAR_WEBHOOK_SECRET") {
+		t.Fatalf("help output = %q, want signing secret env var", got)
+	}
+	if !strings.Contains(got, "--name") {
+		t.Fatalf("help output = %q, want name flag", got)
+	}
+	if !strings.Contains(got, "setup linear") {
+		t.Fatalf("help output = %q, want command name", got)
 	}
 }
 

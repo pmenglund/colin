@@ -151,6 +151,147 @@ func TestEnsureManagedLabelsEnsuresPausedAndCodexReviewLabels(t *testing.T) {
 	}
 }
 
+func TestSetupLinearWebhookCreatesManagedWebhook(t *testing.T) {
+	t.Parallel()
+
+	var createdInput map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamStates"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{{
+									"id":   "team-1",
+									"name": "Colin",
+									"states": map[string]any{
+										"nodes": []map[string]any{
+											{"name": "Todo"},
+											{"name": "In Progress"},
+											{"name": "Review"},
+											{"name": "Merge"},
+											{"name": "Done"},
+											{"name": "Refine"},
+										},
+									},
+								}},
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "ProjectTeamInfo"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{{
+									"id":   "team-1",
+									"name": "Colin",
+								}},
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "OrganizationWebhooks"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhooks": map[string]any{
+						"nodes": []map[string]any{},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "CreateWebhook"):
+			createdInput, _ = request.Variables["input"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhookCreate": map[string]any{
+						"success": true,
+						"webhook": map[string]any{
+							"id":      "webhook-1",
+							"enabled": true,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  endpoint: ` + server.URL + `
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+codex:
+  command: codex app-server
+server:
+  webhook_public_url: https://hooks.colin.example.test
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := SetupLinearWebhook(context.Background(), workflowPath, "colin")
+	if err != nil {
+		t.Fatalf("SetupLinearWebhook() error = %v", err)
+	}
+	if result.Action != "created" {
+		t.Fatalf("Action = %q, want %q", result.Action, "created")
+	}
+	if result.WebhookURL != "https://hooks.colin.example.test/webhooks/linear" {
+		t.Fatalf("WebhookURL = %q", result.WebhookURL)
+	}
+	if result.WebhookID != "webhook-1" {
+		t.Fatalf("WebhookID = %q, want %q", result.WebhookID, "webhook-1")
+	}
+	if result.WebhookName != "colin" {
+		t.Fatalf("WebhookName = %q, want %q", result.WebhookName, "colin")
+	}
+	if result.TeamID != "team-1" {
+		t.Fatalf("TeamID = %q, want %q", result.TeamID, "team-1")
+	}
+	if got, _ := createdInput["url"].(string); got != "https://hooks.colin.example.test/webhooks/linear" {
+		t.Fatalf("create input url = %q", got)
+	}
+	if got, _ := createdInput["teamId"].(string); got != "team-1" {
+		t.Fatalf("create input teamId = %q", got)
+	}
+	if got, _ := createdInput["label"].(string); got != "colin" {
+		t.Fatalf("create input label = %q", got)
+	}
+}
+
 type serviceTrackerStub struct {
 	ensuredLabels []string
 }

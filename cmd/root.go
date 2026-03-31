@@ -16,8 +16,9 @@ type rootOptions struct {
 }
 
 type commandDeps struct {
-	runRoot           func(*cobra.Command, rootOptions) int
-	runSetupTailscale func(*cobra.Command, string, bool) int
+	runRoot               func(*cobra.Command, rootOptions) int
+	runSetupTailscale     func(*cobra.Command, string, bool) int
+	runSetupLinearWebhook func(*cobra.Command, string, string) int
 }
 
 type usageError struct {
@@ -110,8 +111,9 @@ func newRootCmd(stdout, stderr io.Writer, deps commandDeps) *cobra.Command {
 
 func defaultCommandDeps() commandDeps {
 	return commandDeps{
-		runRoot:           runRoot,
-		runSetupTailscale: runSetupTailscale,
+		runRoot:               runRoot,
+		runSetupTailscale:     runSetupTailscale,
+		runSetupLinearWebhook: runSetupLinearWebhook,
 	}
 }
 

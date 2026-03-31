@@ -155,12 +155,13 @@ type ServiceConfig struct {
 
 // TrackerConfig configures the issue tracker adapter.
 type TrackerConfig struct {
-	Kind           string
-	Endpoint       string
-	APIKey         string
-	ProjectSlug    string
-	ActiveStates   []string
-	TerminalStates []string
+	Kind                 string
+	Endpoint             string
+	APIKey               string
+	WebhookSigningSecret string
+	ProjectSlug          string
+	ActiveStates         []string
+	TerminalStates       []string
 }
 
 // PollingConfig configures the orchestrator poll cadence.

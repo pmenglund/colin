@@ -31,11 +31,11 @@ type FunnelSetupProvider func(context.Context) (domain.FunnelSetupStatus, error)
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil)
 }
 
 // NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
@@ -190,8 +190,8 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 	}
 	mux.HandleFunc("/webhooks/readyz", readyzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)
-	mux.HandleFunc("/webhooks/linear", reservedWebhookHandler)
-	mux.HandleFunc("/linear", reservedWebhookHandler)
+	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearSecretProvider, logger))
+	mux.HandleFunc("/linear", linearWebhookHandler(linearSecretProvider, logger))
 	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
 	mux.HandleFunc("/github", reservedWebhookHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

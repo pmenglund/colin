@@ -554,6 +554,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.kind`: string, required, currently `linear`
 - `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
 - `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
+- `tracker.webhook_signing_secret`: string or `$VAR`, recommended canonical env `LINEAR_WEBHOOK_SECRET`
 - `tracker.project_slug`: string, required when `tracker.kind=linear`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`

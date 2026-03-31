@@ -221,6 +221,9 @@ func applyTrackerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	if value, ok := readString(raw, "api_key"); ok {
 		cfg.Tracker.APIKey = resolveEnvToken(value)
 	}
+	if value, ok := readString(raw, "webhook_signing_secret"); ok {
+		cfg.Tracker.WebhookSigningSecret = resolveEnvToken(value)
+	}
 	if value, ok := readString(raw, "project_slug"); ok {
 		cfg.Tracker.ProjectSlug = value
 	}

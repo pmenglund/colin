@@ -220,6 +220,10 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 			}
 			return s.logBuffer.Snapshot(minLevel), nil
 		},
+		func(context.Context) string {
+			return s.currentRuntime().Config.Tracker.WebhookSigningSecret
+		},
+		s.logger,
 	)
 	if err != nil {
 		return fmt.Errorf("create dashboard server: %w", err)

@@ -304,6 +304,269 @@ func TestCreateCommentReply(t *testing.T) {
 	}
 }
 
+func TestEnsureProjectIssueWebhookCreatesMissingWebhook(t *testing.T) {
+	t.Parallel()
+
+	var createdInput map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamInfo"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{{
+									"id":   "team-1",
+									"name": "Colin",
+								}},
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "OrganizationWebhooks"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhooks": map[string]any{
+						"nodes": []map[string]any{},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "CreateWebhook"):
+			createdInput, _ = request.Variables["input"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhookCreate": map[string]any{
+						"success": true,
+						"webhook": map[string]any{
+							"id":      "webhook-1",
+							"enabled": true,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
+	if err != nil {
+		t.Fatalf("EnsureProjectIssueWebhook() error = %v", err)
+	}
+	if result.Action != "created" {
+		t.Fatalf("Action = %q, want %q", result.Action, "created")
+	}
+	if got, _ := createdInput["url"].(string); got != "https://hooks.colin.example.test/webhooks/linear" {
+		t.Fatalf("create input url = %q", got)
+	}
+	if got, _ := createdInput["teamId"].(string); got != "team-1" {
+		t.Fatalf("create input teamId = %q", got)
+	}
+	if got, _ := createdInput["label"].(string); got != "colin" {
+		t.Fatalf("create input label = %q", got)
+	}
+	resourceTypes, _ := createdInput["resourceTypes"].([]any)
+	if len(resourceTypes) != 1 || resourceTypes[0] != linearWebhookResourceTypeIssue {
+		t.Fatalf("resourceTypes = %#v, want [%q]", resourceTypes, linearWebhookResourceTypeIssue)
+	}
+}
+
+func TestEnsureProjectIssueWebhookLeavesMatchingWebhookUnchanged(t *testing.T) {
+	t.Parallel()
+
+	createCalls := 0
+	deleteCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamInfo"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{{
+									"id":   "team-1",
+									"name": "Colin",
+								}},
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "OrganizationWebhooks"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhooks": map[string]any{
+						"nodes": []map[string]any{{
+							"id":      "webhook-1",
+							"label":   "colin",
+							"url":     "https://hooks.colin.example.test/webhooks/linear",
+							"enabled": true,
+							"team": map[string]any{
+								"id":   "team-1",
+								"name": "Colin",
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "CreateWebhook"):
+			createCalls++
+			t.Fatalf("CreateWebhook should not be called")
+		case strings.Contains(request.Query, "DeleteWebhook"):
+			deleteCalls++
+			t.Fatalf("DeleteWebhook should not be called")
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
+	if err != nil {
+		t.Fatalf("EnsureProjectIssueWebhook() error = %v", err)
+	}
+	if result.Action != "unchanged" {
+		t.Fatalf("Action = %q, want %q", result.Action, "unchanged")
+	}
+	if createCalls != 0 || deleteCalls != 0 {
+		t.Fatalf("createCalls=%d deleteCalls=%d, want 0", createCalls, deleteCalls)
+	}
+}
+
+func TestEnsureProjectIssueWebhookReplacesManagedWebhookAtOldURL(t *testing.T) {
+	t.Parallel()
+
+	deletedIDs := []string{}
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamInfo"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{{
+									"id":   "team-1",
+									"name": "Colin",
+								}},
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "OrganizationWebhooks"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhooks": map[string]any{
+						"nodes": []map[string]any{{
+							"id":      "webhook-old",
+							"label":   "colin",
+							"url":     "https://old.colin.example.test/webhooks/linear",
+							"enabled": true,
+							"team": map[string]any{
+								"id":   "team-1",
+								"name": "Colin",
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "DeleteWebhook"):
+			id, _ := request.Variables["id"].(string)
+			deletedIDs = append(deletedIDs, id)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhookDelete": map[string]any{
+						"success": true,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "CreateWebhook"):
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"webhookCreate": map[string]any{
+						"success": true,
+						"webhook": map[string]any{
+							"id":      "webhook-new",
+							"enabled": true,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
+	if err != nil {
+		t.Fatalf("EnsureProjectIssueWebhook() error = %v", err)
+	}
+	if result.Action != "replaced" {
+		t.Fatalf("Action = %q, want %q", result.Action, "replaced")
+	}
+	if createCalls != 1 {
+		t.Fatalf("createCalls = %d, want 1", createCalls)
+	}
+	if len(deletedIDs) != 1 || deletedIDs[0] != "webhook-old" {
+		t.Fatalf("deletedIDs = %#v, want [webhook-old]", deletedIDs)
+	}
+}
+
 func TestUpsertIssueMetadata(t *testing.T) {
 	t.Parallel()
 

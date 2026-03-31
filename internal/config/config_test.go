@@ -80,6 +80,29 @@ func TestBuildReadsServerWebhookAndUIURLs(t *testing.T) {
 	}
 }
 
+func TestBuildReadsTrackerWebhookSigningSecretFromEnv(t *testing.T) {
+	t.Setenv("LINEAR_WEBHOOK_SECRET", "secret-from-env")
+
+	def := domain.WorkflowDefinition{
+		Config: map[string]any{
+			"tracker": map[string]any{
+				"kind":                   "linear",
+				"project_slug":           "project-1",
+				"api_key":                "token",
+				"webhook_signing_secret": "$LINEAR_WEBHOOK_SECRET",
+			},
+		},
+	}
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Tracker.WebhookSigningSecret; got != "secret-from-env" {
+		t.Fatalf("cfg.Tracker.WebhookSigningSecret = %q, want %q", got, "secret-from-env")
+	}
+}
+
 func TestBuildReadsDeprecatedServerPublicURLFallback(t *testing.T) {
 	t.Parallel()
 

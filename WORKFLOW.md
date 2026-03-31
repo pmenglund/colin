@@ -2,6 +2,8 @@
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
+  # Optional once you create a Linear webhook with `colin setup linear`.
+  webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
   project_slug: 0ece25450f8d
   active_states:
     - Todo

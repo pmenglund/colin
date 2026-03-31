@@ -118,7 +118,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Count:    len(filtered),
 			Entries:  filtered,
 		}, nil
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -367,8 +367,21 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 	})
 
-	t.Run("reserved webhook endpoints", func(t *testing.T) {
-		for _, path := range []string{"/webhooks/linear", "/webhooks/github", "/linear", "/github"} {
+	t.Run("linear webhook endpoints acknowledge posts", func(t *testing.T) {
+		for _, path := range []string{"/webhooks/linear", "/linear"} {
+			resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(`{"webhookTimestamp":1735689600000}`))
+			if err != nil {
+				t.Fatalf("POST %s error = %v", path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200", path, resp.StatusCode)
+			}
+		}
+	})
+
+	t.Run("reserved github webhook endpoints", func(t *testing.T) {
+		for _, path := range []string{"/webhooks/github", "/github"} {
 			resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(`{}`))
 			if err != nil {
 				t.Fatalf("POST %s error = %v", path, err)
@@ -384,7 +397,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -404,6 +417,72 @@ func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T)
 	}
 	if snapshot.Count != 0 {
 		t.Fatalf("Count = %d, want 0", snapshot.Count)
+	}
+}
+
+func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(context.Context) string {
+		return "secret"
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/webhooks/linear", "application/json", strings.NewReader(`{"webhookTimestamp":1735689600000}`))
+	if err != nil {
+		t.Fatalf("POST /webhooks/linear error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestObservabilityServerLinearWebhookLogsRequests(t *testing.T) {
+	t.Parallel()
+
+	var output strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, logger)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/linear", strings.NewReader(`{"webhookTimestamp":1735689600000}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Linear-Delivery", "delivery-1")
+	req.Header.Set("Linear-Event", "Issue")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/linear error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	logText := output.String()
+	if !strings.Contains(logText, "received linear webhook request") {
+		t.Fatalf("log output = %q, want received message", logText)
+	}
+	if !strings.Contains(logText, "delivery-1") {
+		t.Fatalf("log output = %q, want delivery id", logText)
+	}
+	if !strings.Contains(logText, "\"linear_event\":\"Issue\"") {
+		t.Fatalf("log output = %q, want linear event", logText)
+	}
+	if strings.Contains(logText, "accepted linear webhook request") {
+		t.Fatalf("log output = %q, want accepted message at debug only", logText)
 	}
 }
 
