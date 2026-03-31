@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -189,6 +190,24 @@ func (i *Inspector) Check(ctx context.Context, opts Options) domain.FunnelSetupS
 	return finalizeStatus(status)
 }
 
+// ResolveUIBaseURL returns a Tailscale HTTPS base URL for the Colin UI when Serve proxies Colin from `/`.
+func (i *Inspector) ResolveUIBaseURL(ctx context.Context, localPort *int) string {
+	if localPort == nil || *localPort <= 0 {
+		return ""
+	}
+	if i == nil {
+		i = NewInspector()
+	}
+	if i.localClient == nil {
+		i.localClient = &local.Client{}
+	}
+	cfg, err := i.readFunnelStatus(ctx)
+	if err != nil {
+		return ""
+	}
+	return serveUIBaseURL(cfg, *localPort)
+}
+
 type funnelMatchInfo struct {
 	URL      string
 	HostPort string
@@ -369,6 +388,45 @@ func splitHostPort(value string) (string, int, bool) {
 		return "", 0, false
 	}
 	return strings.TrimSuffix(strings.TrimSpace(value[:idx]), "."), port, true
+}
+
+func serveUIBaseURL(cfg *ipn.ServeConfig, localPort int) string {
+	if cfg == nil || localPort <= 0 {
+		return ""
+	}
+
+	type candidate struct {
+		host string
+		port int
+	}
+	matches := make([]candidate, 0, len(cfg.Web))
+	for hostPort, server := range cfg.Web {
+		if server == nil {
+			continue
+		}
+		handler, ok := server.Handlers["/"]
+		if !ok || handler == nil || !proxyTargetsPort(handler.Proxy, localPort) {
+			continue
+		}
+		host, port, ok := splitHostPort(string(hostPort))
+		if !ok {
+			continue
+		}
+		matches = append(matches, candidate{host: host, port: port})
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].port != matches[j].port {
+			return matches[i].port < matches[j].port
+		}
+		return matches[i].host < matches[j].host
+	})
+	if matches[0].port == 443 {
+		return "https://" + matches[0].host
+	}
+	return fmt.Sprintf("https://%s:%d", matches[0].host, matches[0].port)
 }
 
 func parseHostPortPort(value string) (int, bool) {

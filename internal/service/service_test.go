@@ -16,6 +16,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
+	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 )
 
@@ -290,6 +291,74 @@ Work on {{ .issue.identifier }}.
 	if got, _ := createdInput["label"].(string); got != "colin" {
 		t.Fatalf("create input label = %q", got)
 	}
+}
+
+func TestEffectiveUIBaseURLPrefersExplicitUIURL(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		inspector: serviceInspectorStub{
+			uiBaseURL: "https://colin.tail.example.ts.net",
+		},
+	}
+
+	got := svc.effectiveUIBaseURL(context.Background(), domain.ServerConfig{
+		Port:  intPtr(8888),
+		UIURL: "https://ui.colin.example.test",
+	})
+	if got != "https://ui.colin.example.test" {
+		t.Fatalf("effectiveUIBaseURL() = %q", got)
+	}
+}
+
+func TestEffectiveUIBaseURLUsesTailscaleServeURLWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		inspector: serviceInspectorStub{
+			uiBaseURL: "https://colin.tail.example.ts.net",
+		},
+	}
+
+	got := svc.effectiveUIBaseURL(context.Background(), domain.ServerConfig{
+		Port: intPtr(8888),
+	})
+	if got != "https://colin.tail.example.ts.net" {
+		t.Fatalf("effectiveUIBaseURL() = %q", got)
+	}
+}
+
+func TestEffectiveUIBaseURLFallsBackToLocalDashboard(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		inspector: serviceInspectorStub{},
+		serverURL: "http://127.0.0.1:9999",
+	}
+
+	got := svc.effectiveUIBaseURL(context.Background(), domain.ServerConfig{
+		Port: intPtr(8888),
+	})
+	if got != "http://127.0.0.1:9999" {
+		t.Fatalf("effectiveUIBaseURL() = %q", got)
+	}
+}
+
+type serviceInspectorStub struct {
+	status    domain.FunnelSetupStatus
+	uiBaseURL string
+}
+
+func (s serviceInspectorStub) Check(context.Context, tsdiag.Options) domain.FunnelSetupStatus {
+	return s.status
+}
+
+func (s serviceInspectorStub) Resolve(context.Context, tsdiag.Options) domain.FunnelSetupStatus {
+	return s.status
+}
+
+func (s serviceInspectorStub) ResolveUIBaseURL(context.Context, *int) string {
+	return s.uiBaseURL
 }
 
 type serviceTrackerStub struct {

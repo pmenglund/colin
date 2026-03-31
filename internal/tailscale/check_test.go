@@ -208,6 +208,51 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 	}
 }
 
+func TestResolveUIBaseURLDetectsServeRootProxy(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/":         {Proxy: "http://127.0.0.1:8888"},
+							"/webhooks": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if got := inspector.ResolveUIBaseURL(context.Background(), intPtr(8888)); got != "https://colin.tail.example.ts.net" {
+		t.Fatalf("ResolveUIBaseURL() = %q", got)
+	}
+}
+
+func TestResolveUIBaseURLIgnoresWebhookOnlyProxy(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/webhooks": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if got := inspector.ResolveUIBaseURL(context.Background(), intPtr(8888)); got != "" {
+		t.Fatalf("ResolveUIBaseURL() = %q, want empty", got)
+	}
+}
+
 func TestResolveHandlesMissingCurrentTailnet(t *testing.T) {
 	t.Parallel()
 

@@ -88,6 +88,8 @@ go run . setup linear
 
 Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses relevant `Issue` deliveries to queue best-effort immediate reconciliation. Polling remains the fallback path if a webhook is delayed or dropped.
 
+Linear metadata attachments point at `server.ui_url` when configured. If that is unset but Tailscale Serve proxies Colin from `/`, Colin uses that Tailscale HTTPS URL for metadata links; otherwise it falls back to the local loopback dashboard URL.
+
 ## Further Reading
 
 The root README stays intentionally short. For the full operational reference, use:
