@@ -29,10 +29,24 @@ By default Colin is started with:
 go run .
 ```
 
-This uses `--workflow WORKFLOW.md` implicitly. To point Colin at a different workflow file, pass the shared `--workflow` flag:
+This uses `--workflow WORKFLOW.md` implicitly. If that default file is missing, Colin now starts an interactive first-run setup that writes `WORKFLOW.md` and then continues into normal startup. To create or refresh the workflow file explicitly without starting the service, run:
+
+```bash
+go run . config
+```
+
+That setup flow asks for the Linear project slug, repository URL, base branch, workspace root, and server port. It deliberately keeps secrets out of `WORKFLOW.md`: the generated file still references `$LINEAR_API_KEY` and `$LINEAR_WEBHOOK_SECRET`, so operators should export those variables in their shell or environment manager.
+
+To point Colin at a different workflow file, pass the shared `--workflow` flag:
 
 ```bash
 go run . --workflow /path/to/WORKFLOW.md
+```
+
+The same override also applies to the explicit config command:
+
+```bash
+go run . --workflow /path/to/WORKFLOW.md config
 ```
 
 By default Colin prints a single startup line with both the local dashboard URL and the local Funnel setup page, for example `Colin is running. Web UI: http://127.0.0.1:8888 Setup: http://127.0.0.1:8888/setup/funnel`.
@@ -61,7 +75,7 @@ Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale rea
 go run . setup tailscale
 ```
 
-That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept.
+That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept. The interactive `go run . config` flow asks whether you want webhook setup and, if you answer yes, points you back to this Tailscale step before creating the Linear webhook.
 
 To create or repair the watched project's Linear webhook after public ingress is ready, run:
 

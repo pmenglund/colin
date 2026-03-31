@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,10 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 )
+
+func emptyInput() *strings.Reader {
+	return strings.NewReader("")
+}
 
 func TestAnnounceStartupPrintsDashboardURL(t *testing.T) {
 	t.Parallel()
@@ -106,13 +112,16 @@ func TestRunHelp(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"--help"}, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+	if code := run([]string{"--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
 		t.Fatalf("run(--help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 	got := stdout.String()
+	if !strings.Contains(got, "config") {
+		t.Fatalf("help output = %q, want to mention config", got)
+	}
 	if !strings.Contains(got, "setup") {
 		t.Fatalf("help output = %q, want to mention setup", got)
 	}
@@ -133,7 +142,7 @@ func TestRunRejectsExtraRootArgs(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"one", "two"}, &stdout, &stderr, defaultCommandDeps()); code != 2 {
+	if code := run([]string{"one", "two"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
 		t.Fatalf("run(extra root args) exit code = %d, want 2", code)
 	}
 	if stdout.Len() != 0 {
@@ -154,7 +163,7 @@ func TestRunRejectsSetupWithoutSubcommand(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup"}, &stdout, &stderr, defaultCommandDeps()); code != 2 {
+	if code := run([]string{"setup"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
 		t.Fatalf("run(setup) exit code = %d, want 2", code)
 	}
 	if stdout.Len() != 0 {
@@ -171,7 +180,7 @@ func TestRunRejectsExtraSetupTailscaleArgs(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "tailscale", "one"}, &stdout, &stderr, defaultCommandDeps()); code != 2 {
+	if code := run([]string{"setup", "tailscale", "one"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
 		t.Fatalf("run(setup tailscale extra args) exit code = %d, want 2", code)
 	}
 	if stdout.Len() != 0 {
@@ -187,7 +196,11 @@ func TestRunRejectsExtraSetupTailscaleArgs(t *testing.T) {
 }
 
 func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
-	t.Parallel()
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	if err := os.WriteFile(filepath.Join(tempDir, "WORKFLOW.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -196,6 +209,10 @@ func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 	deps := commandDeps{
 		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
 			gotWorkflow = opts.workflowPath
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
 			return 0
 		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
@@ -208,7 +225,7 @@ func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 		},
 	}
 
-	if code := run(nil, &stdout, &stderr, deps); code != 0 {
+	if code := run(nil, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
 	if gotWorkflow != "WORKFLOW.md" {
@@ -228,6 +245,10 @@ func TestRunPassesWorkflowFlagToRootCommand(t *testing.T) {
 			gotWorkflow = opts.workflowPath
 			return 0
 		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
 			t.Fatal("runSetupTailscale should not be called")
 			return 0
@@ -238,7 +259,7 @@ func TestRunPassesWorkflowFlagToRootCommand(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"--workflow", "/tmp/custom.md"}, &stdout, &stderr, deps); code != 0 {
+	if code := run([]string{"--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run(--workflow) exit code = %d, want 0", code)
 	}
 	if gotWorkflow != "/tmp/custom.md" {
@@ -258,6 +279,10 @@ func TestRunPassesWorkflowFlagToSetupTailscale(t *testing.T) {
 			t.Fatal("runRoot should not be called")
 			return 0
 		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
 			gotWorkflow = workflowPath
 			return 0
@@ -268,7 +293,7 @@ func TestRunPassesWorkflowFlagToSetupTailscale(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"setup", "tailscale", "--workflow", "/tmp/custom.md"}, &stdout, &stderr, deps); code != 0 {
+	if code := run([]string{"setup", "tailscale", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run(setup tailscale --workflow) exit code = %d, want 0", code)
 	}
 	if gotWorkflow != "/tmp/custom.md" {
@@ -282,7 +307,7 @@ func TestSetupTailscaleHelpExplainsPurpose(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "tailscale", "--help"}, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+	if code := run([]string{"setup", "tailscale", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
 		t.Fatalf("run(setup tailscale --help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
@@ -317,6 +342,10 @@ func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 			t.Fatal("runRoot should not be called")
 			return 0
 		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
 			t.Fatal("runSetupTailscale should not be called")
 			return 0
@@ -328,7 +357,7 @@ func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"setup", "linear", "--workflow", "/tmp/custom.md"}, &stdout, &stderr, deps); code != 0 {
+	if code := run([]string{"setup", "linear", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run(setup linear --workflow) exit code = %d, want 0", code)
 	}
 	if gotWorkflow != "/tmp/custom.md" {
@@ -351,6 +380,10 @@ func TestRunPassesWebhookNameToSetupLinearWebhook(t *testing.T) {
 			t.Fatal("runRoot should not be called")
 			return 0
 		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
 		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
 			t.Fatal("runSetupTailscale should not be called")
 			return 0
@@ -361,7 +394,7 @@ func TestRunPassesWebhookNameToSetupLinearWebhook(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"setup", "linear", "--name", "colin-dev"}, &stdout, &stderr, deps); code != 0 {
+	if code := run([]string{"setup", "linear", "--name", "colin-dev"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("run(setup linear --name) exit code = %d, want 0", code)
 	}
 	if gotName != "colin-dev" {
@@ -375,7 +408,7 @@ func TestSetupLinearWebhookHelpExplainsPurpose(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "linear", "--help"}, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+	if code := run([]string{"setup", "linear", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
 		t.Fatalf("run(setup linear --help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
@@ -403,7 +436,7 @@ func TestRunRejectsRemovedSetupFunnelCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "funnel"}, &stdout, &stderr, defaultCommandDeps()); code != 2 {
+	if code := run([]string{"setup", "funnel"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
 		t.Fatalf("run(setup funnel) exit code = %d, want 2", code)
 	}
 	if stdout.Len() != 0 {
@@ -434,5 +467,172 @@ func TestRenderSetupStatusColorizesCheckLabels(t *testing.T) {
 	}
 	if !strings.Contains(got, setupStatusErrorStyle.Render("[ERROR]")) {
 		t.Fatalf("output = %q, want colored ERROR label", got)
+	}
+}
+
+func TestRunConfigCommandWritesWorkflow(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := strings.NewReader(strings.Join([]string{
+		"project-1",
+		"git@github.com:acme/repo.git",
+		"main",
+		"",
+		"8888",
+		"n",
+		"y",
+		"",
+	}, "\n"))
+
+	if code := run([]string{"config"}, input, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(config) exit code = %d, want 0, stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(tempDir, "WORKFLOW.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	gotFile := string(data)
+	if !strings.Contains(gotFile, `project_slug: "project-1"`) {
+		t.Fatalf("workflow file = %q, want project slug", gotFile)
+	}
+	if !strings.Contains(gotFile, "api_key: $LINEAR_API_KEY") {
+		t.Fatalf("workflow file = %q, want env token", gotFile)
+	}
+	if got := stdout.String(); !strings.Contains(got, "Wrote WORKFLOW.md") {
+		t.Fatalf("stdout = %q, want written message", got)
+	}
+}
+
+func TestRunWithoutWorkflowInvokesConfigFlow(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var configCalls int
+	var rootCalls int
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			rootCalls++
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			configCalls++
+			if !opts.autoStart {
+				t.Fatal("runConfig autoStart = false, want true")
+			}
+			if err := os.WriteFile(filepath.Join(tempDir, "WORKFLOW.md"), []byte("seed\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run(nil, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run() exit code = %d, want 0, stderr=%q", code, stderr.String())
+	}
+	if configCalls != 1 {
+		t.Fatalf("runConfig calls = %d, want 1", configCalls)
+	}
+	if rootCalls != 1 {
+		t.Fatalf("runRoot calls = %d, want 1", rootCalls)
+	}
+	if got := stdout.String(); !strings.Contains(got, "WORKFLOW.md was not found. Starting first-run setup.") {
+		t.Fatalf("stdout = %q, want first-run message", got)
+	}
+}
+
+func TestRunWithExplicitMissingWorkflowDoesNotInvokeConfigFlow(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var rootCalls int
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			rootCalls++
+			if opts.workflowPath != filepath.Join(tempDir, "custom.md") {
+				t.Fatalf("workflow path = %q, want %q", opts.workflowPath, filepath.Join(tempDir, "custom.md"))
+			}
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	customPath := filepath.Join(tempDir, "custom.md")
+	if code := run([]string{"--workflow", customPath}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(--workflow missing) exit code = %d, want 0", code)
+	}
+	if rootCalls != 1 {
+		t.Fatalf("runRoot calls = %d, want 1", rootCalls)
+	}
+	if got := stdout.String(); strings.Contains(got, "Starting first-run setup") {
+		t.Fatalf("stdout = %q, want no first-run message", got)
+	}
+}
+
+func TestConfigCommandDeclinesOverwrite(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	if err := os.WriteFile(filepath.Join(tempDir, "WORKFLOW.md"), []byte("original\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := strings.NewReader(strings.Join([]string{
+		"project-1",
+		"git@github.com:acme/repo.git",
+		"main",
+		"",
+		"8888",
+		"n",
+		"y",
+		"n",
+		"",
+	}, "\n"))
+
+	if code := run([]string{"config"}, input, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(config overwrite decline) exit code = %d, want 0, stderr=%q", code, stderr.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(tempDir, "WORKFLOW.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := string(data); got != "original\n" {
+		t.Fatalf("workflow file = %q, want original content", got)
+	}
+	if got := stdout.String(); !strings.Contains(got, "Setup canceled. No workflow file was written.") {
+		t.Fatalf("stdout = %q, want canceled message", got)
 	}
 }

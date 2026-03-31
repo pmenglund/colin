@@ -63,7 +63,15 @@ Relevant Linear `Issue` webhooks can also trigger a best-effort immediate reconc
 
 ## Getting Started
 
-Start Colin with the checked-in workflow:
+If `WORKFLOW.md` is missing, Colin now starts an interactive first-run setup instead of failing immediately. To create or refresh the workflow file explicitly, run:
+
+```bash
+go run . config
+```
+
+That flow asks for the minimum runtime settings Colin needs, keeps secrets as environment-variable references such as `$LINEAR_API_KEY`, and asks whether you also want webhook setup guidance.
+
+Start Colin with the checked-in or newly generated workflow:
 
 ```bash
 go run .
@@ -74,8 +82,9 @@ Useful flags:
 - `go run . --verbose` restores the structured service log stream in the terminal.
 - `go run . --workflow /path/to/WORKFLOW.md` points Colin at a different workflow file.
 - `go run . --port 9999` overrides the dashboard port.
+- `go run . config --workflow /path/to/WORKFLOW.md` generates or refreshes a workflow file at a custom path.
 
-Before configuring webhooks, make sure public ingress is ready:
+If you opted into webhooks during setup, Colin will remind you that webhook exposure requires Tailscale. Before configuring webhooks, make sure public ingress is ready:
 
 ```bash
 go run . setup tailscale

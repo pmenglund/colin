@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSetupCmd(stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "setup",
 		Short:         "Run setup helpers",
@@ -23,14 +23,14 @@ func newSetupCmd(stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) 
 			return &usageError{Command: cmd}
 		},
 	}
-	configureCommand(cmd, stdout, stderr)
-	cmd.AddCommand(newSetupTailscaleCmd(stdout, stderr, opts, deps))
-	cmd.AddCommand(newSetupLinearWebhookCmd(stdout, stderr, opts, deps))
+	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
+	cmd.AddCommand(newSetupLinearWebhookCmd(stdin, stdout, stderr, opts, deps))
 
 	return cmd
 }
 
-func newSetupTailscaleCmd(stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+func newSetupTailscaleCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
 	var jsonOutput bool
 
 	cmd := &cobra.Command{
@@ -45,14 +45,14 @@ func newSetupTailscaleCmd(stdout, stderr io.Writer, opts *rootOptions, deps comm
 			return exitCode(deps.runSetupTailscale(cmd, opts.workflowPath, jsonOutput))
 		},
 	}
-	configureCommand(cmd, stdout, stderr)
+	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.Example = "  colin setup tailscale\n  colin --workflow /path/to/WORKFLOW.md setup tailscale"
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
 
 	return cmd
 }
 
-func newSetupLinearWebhookCmd(stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+func newSetupLinearWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
 	var webhookName string
 
 	cmd := &cobra.Command{
@@ -67,7 +67,7 @@ func newSetupLinearWebhookCmd(stdout, stderr io.Writer, opts *rootOptions, deps 
 			return exitCode(deps.runSetupLinearWebhook(cmd, opts.workflowPath, webhookName))
 		},
 	}
-	configureCommand(cmd, stdout, stderr)
+	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.Example = "  colin setup linear\n  colin --workflow /path/to/WORKFLOW.md setup linear"
 	cmd.Flags().StringVar(&webhookName, "name", "colin", "Linear webhook label to create or repair")
 	return cmd
