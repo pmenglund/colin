@@ -220,6 +220,10 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 			}
 			return s.logBuffer.Snapshot(minLevel), nil
 		},
+		func(_ context.Context, event app.LinearWebhookEvent) (bool, bool) {
+			reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
+			return s.orch.RequestRefresh(reason)
+		},
 		func(context.Context) string {
 			return s.currentRuntime().Config.Tracker.WebhookSigningSecret
 		},

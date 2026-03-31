@@ -30,6 +30,23 @@ func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 	}
 }
 
+// RequestRefresh queues an immediate reconciliation cycle without waiting for the next poll interval.
+func (o *Orchestrator) RequestRefresh(reason string) (queued bool, coalesced bool) {
+	if o == nil {
+		return false, false
+	}
+	if !o.refreshPending.CompareAndSwap(false, true) {
+		return true, true
+	}
+	select {
+	case o.eventCh <- refreshRequestedEvent{reason: strings.TrimSpace(reason)}:
+		return true, false
+	default:
+		o.refreshPending.Store(false)
+		return false, false
+	}
+}
+
 // UpdateRuntime swaps in a reloaded runtime configuration for future scheduling decisions.
 func (o *Orchestrator) UpdateRuntime(runtime Runtime) {
 	o.eventCh <- configUpdatedEvent{runtime: runtime}
@@ -67,6 +84,17 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 					"poll_interval", o.runtime.Config.Polling.Interval.String(),
 					"max_concurrent_agents", o.runtime.Config.Agent.MaxConcurrentAgents,
 				)
+				if !tick.Stop() {
+					select {
+					case <-tick.C:
+					default:
+					}
+				}
+				tick.Reset(o.runtime.Config.Polling.Interval)
+			case refreshRequestedEvent:
+				o.refreshPending.Store(false)
+				o.logger.Info("processing immediate refresh request", "reason", event.reason)
+				o.handleTick(ctx)
 				if !tick.Stop() {
 					select {
 					case <-tick.C:
