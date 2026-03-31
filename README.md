@@ -35,7 +35,6 @@ Colin uses these handoff states:
 - `Review`: Colin prepares the branch and pull request for human review. Human action is required to review the PR and then move the issue either back to `Todo` for more work or forward to `Merge`.
 - `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`.
 - `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
-
 Colin treats these as terminal states and stops work when an issue enters them:
 
 - `Done`
@@ -59,6 +58,8 @@ Colin runs as a long-lived orchestrator:
 2. It creates or reuses a per-issue workspace so work can continue cleanly across retries and follow-up turns.
 3. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
 4. It posts progress back to Linear and exposes a local dashboard for operators.
+
+Relevant Linear `Issue` webhooks can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react.
 
 ## Getting Started
 
@@ -86,10 +87,11 @@ After public ingress is available, create or repair the watched project's Linear
 go run . setup linear
 ```
 
+Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses relevant `Issue` deliveries to queue best-effort immediate reconciliation. Polling remains the fallback path if a webhook is delayed or dropped.
+
 ## Further Reading
 
 The root README stays intentionally short. For the full operational reference, use:
-
 - [OPERATIONS.md](OPERATIONS.md) for setup details, workflow defaults, detailed Linear state handling, webhook readiness, and operational notes
 - [WORKFLOW.md](WORKFLOW.md) for runtime configuration and the Codex prompt template
 - [APP.md](APP.md) for repository architecture

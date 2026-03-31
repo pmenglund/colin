@@ -211,13 +211,13 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
 		Threads: []map[string]any{
-			reviewThreadNode("thread-1", "chatgpt-codex-connector[bot]", "Please fix this.", false, false),
+			reviewThreadNode("thread-1", "chatgpt-codex-connector", "Please fix this.", false, false),
 		},
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{
 		Reactions: []repoops.GitHubReaction{
-			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector[bot]"},
-			{Content: "THUMBS_UP", CreatedAt: &approvedAt, UserLogin: "chatgpt-codex-connector[bot]"},
+			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector"},
+			{Content: "THUMBS_UP", CreatedAt: &approvedAt, UserLogin: "chatgpt-codex-connector"},
 		},
 	}, nil)
 
@@ -257,7 +257,7 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}, nil)
 	fakeGitHub.ReviewThreadCommentsReturns(repoops.GitHubReviewThreadCommentPage{
 		Comments: []map[string]any{
-			{"author": map[string]any{"login": "chatgpt-codex-connector[bot]"}},
+			{"author": map[string]any{"login": "chatgpt-codex-connector"}},
 		},
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
@@ -276,6 +276,41 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}
 	if fakeGitHub.ReviewThreadCommentsCallCount() != 1 {
 		t.Fatalf("ReviewThreadCommentsCallCount() = %d, want 1", fakeGitHub.ReviewThreadCommentsCallCount())
+	}
+}
+
+func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	requestedAt := time.Date(2026, 3, 28, 18, 1, 0, 0, time.UTC)
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []map[string]any{
+			reviewThreadNode("thread-1", "chatgpt-codex-connector[bot]", "Please fix this.", false, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector[bot]"},
+		},
+	}, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address Codex bot review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if len(reviewContext.CodexReviewThreads) != 1 {
+		t.Fatalf("codex review threads length = %d, want 1", len(reviewContext.CodexReviewThreads))
+	}
+	if reviewContext.CodexReviewRequestedAt == nil {
+		t.Fatal("CodexReviewRequestedAt = nil, want timestamp")
 	}
 }
 

@@ -18,6 +18,7 @@ type trackerStub struct {
 	candidateIssues     []domain.Issue
 	candidateCalls      int
 	candidateInvoked    chan struct{}
+	candidateCallCh     chan int
 	issuesByState       []domain.Issue
 	issuesByStateCalls  int
 	issuesByID          []domain.Issue
@@ -40,6 +41,12 @@ func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, err
 		case <-s.candidateInvoked:
 		default:
 			close(s.candidateInvoked)
+		}
+	}
+	if s.candidateCallCh != nil {
+		select {
+		case s.candidateCallCh <- s.candidateCalls:
+		default:
 		}
 	}
 	return s.candidateIssues, nil
@@ -1042,6 +1049,42 @@ func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T)
 	}
 }
 
+func TestRequestRefreshCoalescesPendingRequests(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+	}
+
+	queued, coalesced := orch.RequestRefresh("first")
+	if !queued || coalesced {
+		t.Fatalf("first RequestRefresh() = (%t, %t), want (true, false)", queued, coalesced)
+	}
+
+	queued, coalesced = orch.RequestRefresh("second")
+	if !queued || !coalesced {
+		t.Fatalf("second RequestRefresh() = (%t, %t), want (true, true)", queued, coalesced)
+	}
+
+	select {
+	case raw := <-orch.eventCh:
+		event, ok := raw.(refreshRequestedEvent)
+		if !ok {
+			t.Fatalf("event type = %T, want refreshRequestedEvent", raw)
+		}
+		if event.reason != "first" {
+			t.Fatalf("event reason = %q, want %q", event.reason, "first")
+		}
+	default:
+		t.Fatal("expected queued refresh event")
+	}
+
+	if !orch.refreshPending.Load() {
+		t.Fatal("refreshPending = false, want true until the refresh event is processed")
+	}
+}
+
 func TestRunFetchesCandidatesImmediatelyBeforeFirstPollInterval(t *testing.T) {
 	t.Parallel()
 
@@ -1100,6 +1143,78 @@ func TestRunFetchesCandidatesImmediatelyBeforeFirstPollInterval(t *testing.T) {
 
 	if tracker.candidateCalls != 1 {
 		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+	}
+}
+
+func TestRunProcessesRefreshRequestsImmediately(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{
+		candidateCallCh: make(chan int, 4),
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Polling: domain.PollingConfig{Interval: time.Hour},
+			Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+			Tracker: domain.TrackerConfig{
+				Kind:         "linear",
+				APIKey:       "test-key",
+				ProjectSlug:  "test-project",
+				ActiveStates: []string{"Todo"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}, Tracker: tracker},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+		eventCh:           make(chan any, 4),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.Run(ctx)
+	}()
+
+	select {
+	case got := <-tracker.candidateCallCh:
+		if got != 1 {
+			t.Fatalf("first candidate call = %d, want 1", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("startup candidate fetch did not happen")
+	}
+
+	queued, coalesced := orch.RequestRefresh("test refresh")
+	if !queued || coalesced {
+		t.Fatalf("RequestRefresh() = (%t, %t), want (true, false)", queued, coalesced)
+	}
+
+	select {
+	case got := <-tracker.candidateCallCh:
+		if got != 2 {
+			t.Fatalf("second candidate call = %d, want 2", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("refresh-triggered candidate fetch did not happen")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not stop after cancellation")
 	}
 }
 

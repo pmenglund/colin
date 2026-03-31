@@ -25,7 +25,10 @@ var (
 	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
 )
 
-const codexReviewBotLogin = "chatgpt-codex-connector[bot]"
+var codexReviewLogins = []string{
+	"chatgpt-codex-connector",
+	"chatgpt-codex-connector[bot]",
+}
 
 // Result captures the outcome of a publish or merge operation.
 type Result struct {
@@ -640,7 +643,7 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 				continue
 			}
 			threads = append(threads, thread)
-			containsAuthor, err := m.reviewThreadContainsAuthor(ctx, node, codexReviewBotLogin)
+			containsAuthor, err := m.reviewThreadContainsCodexAuthor(ctx, workspacePath, node)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -659,8 +662,8 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 	return threads, codexThreads, nil
 }
 
-func (m *Manager) reviewThreadContainsAuthor(ctx context.Context, node map[string]any, login string) (bool, error) {
-	if reviewThreadPageContainsAuthor(node, login) {
+func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node map[string]any) (bool, error) {
+	if reviewThreadPageContainsCodexAuthor(node) {
 		return true, nil
 	}
 	if !reviewThreadCommentsHasNextPage(node) {
@@ -670,10 +673,10 @@ func (m *Manager) reviewThreadContainsAuthor(ctx context.Context, node map[strin
 	if strings.TrimSpace(threadID) == "" {
 		return false, nil
 	}
-	return m.fetchReviewThreadCommentAuthor(ctx, threadID, login)
+	return m.fetchReviewThreadCommentAuthor(ctx, workspacePath, threadID)
 }
 
-func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, threadID, login string) (bool, error) {
+func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID string) (bool, error) {
 	client, err := m.githubClient()
 	if err != nil {
 		return false, err
@@ -686,7 +689,7 @@ func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, threadID, 
 		}
 		for _, node := range resp.Comments {
 			author, _ := nestedString(node, "author", "login")
-			if strings.EqualFold(strings.TrimSpace(author), login) {
+			if isCodexReviewAuthor(author) {
 				return true, nil
 			}
 		}
@@ -721,7 +724,7 @@ func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, 
 		}
 		for _, node := range resp.Reactions {
 			login := node.UserLogin
-			if !strings.EqualFold(strings.TrimSpace(login), codexReviewBotLogin) {
+			if !isCodexReviewAuthor(login) {
 				continue
 			}
 			if node.CreatedAt == nil {
@@ -785,14 +788,23 @@ func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
 	return thread, true
 }
 
-func reviewThreadPageContainsAuthor(node map[string]any, login string) bool {
+func reviewThreadPageContainsCodexAuthor(node map[string]any) bool {
 	comments, ok := nestedSlice(node, "comments", "nodes")
 	if !ok {
 		return false
 	}
 	for _, comment := range comments {
 		author, _ := nestedString(comment, "author", "login")
-		if strings.EqualFold(strings.TrimSpace(author), login) {
+		if isCodexReviewAuthor(author) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCodexReviewAuthor(login string) bool {
+	for _, candidate := range codexReviewLogins {
+		if strings.EqualFold(strings.TrimSpace(login), candidate) {
 			return true
 		}
 	}

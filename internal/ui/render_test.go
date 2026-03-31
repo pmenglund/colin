@@ -258,8 +258,45 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`Last run type`,
 		`ready_for_review`,
 		`comment-12`,
+		`href="/linear/issues/issue-1/metadata"`,
+		`href="/linear/issues/issue-1/exec-plan"`,
 		`href="https://linear.app/example/issue/COLIN-111"`,
 		`Updated the metadata link.`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestExecPlanPageRendersStoredPlan(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.app/example/issue/COLIN-135"
+	updatedAt := time.Date(2026, 3, 30, 10, 15, 0, 0, time.UTC)
+	html := renderNode(t, ExecPlanPage(domain.Issue{
+		ID:         "issue-135",
+		Identifier: "COLIN-135",
+		Title:      "ExecPlan attachment",
+		State:      "In Progress",
+		URL:        &issueURL,
+		ExecPlan: &domain.ExecPlan{
+			AttachmentID: "attachment-99",
+			Body:         "# Plan\n\nInspect the stored exec plan body.",
+			UpdatedAt:    &updatedAt,
+		},
+	}, updatedAt))
+
+	for _, want := range []string{
+		`data-testid="issue-exec-plan-panel"`,
+		`data-testid="issue-exec-plan-body"`,
+		`COLIN-135 - ExecPlan attachment`,
+		`attachment-99`,
+		`# Plan`,
+		`Inspect the stored exec plan body.`,
+		`href="/linear/issues/issue-135/metadata"`,
+		`href="/linear/issues/issue-135/exec-plan"`,
+		`href="https://linear.app/example/issue/COLIN-135"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)
@@ -281,10 +318,10 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		SuggestedCommand: "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
 		Checks: []domain.SetupCheck{
 			{
-				ID:        "tailscale_cli",
-				Label:     "Tailscale CLI is installed",
+				ID:        "tailscale_local_api",
+				Label:     "Colin can reach the local Tailscale daemon",
 				Status:    "ok",
-				Detail:    "Using `/usr/local/bin/tailscale`.",
+				Detail:    "Connected to the local Tailscale daemon.",
 				CheckedAt: now,
 			},
 		},
@@ -296,7 +333,7 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		`Ready for webhooks`,
 		`https://colin.tail.example.ts.net/webhooks/github`,
 		`tailscale funnel --bg --https=443 --set-path=/webhooks 8888`,
-		`data-testid="funnel-check-tailscale_cli"`,
+		`data-testid="funnel-check-tailscale_local_api"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)

@@ -28,14 +28,25 @@ type LogProvider func(context.Context, *slog.Level) (domain.BufferedLogSnapshot,
 // FunnelSetupProvider returns the current Funnel readiness snapshot.
 type FunnelSetupProvider func(context.Context) (domain.FunnelSetupStatus, error)
 
+// LinearWebhookEvent captures the minimal webhook context needed to trigger orchestration.
+type LinearWebhookEvent struct {
+	DeliveryID   string
+	Event        string
+	Action       string
+	ResourceType string
+}
+
+// LinearWebhookTrigger queues any follow-up work for a validated webhook delivery.
+type LinearWebhookTrigger func(context.Context, LinearWebhookEvent) (queued bool, coalesced bool)
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil, nil)
 }
 
 // NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
@@ -148,14 +159,17 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		issueID, ok := domain.ParseColinMetadataPath(r.URL.EscapedPath())
-		if !ok || issueProvider == nil {
-			http.NotFound(w, r)
-			return
+		issueID, execPlanPage := domain.ParseColinExecPlanPath(r.URL.EscapedPath())
+		if !execPlanPage {
+			var ok bool
+			issueID, ok = domain.ParseColinMetadataPath(r.URL.EscapedPath())
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
 		}
-		snapshot, err := provider(r.Context())
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err)
+		if issueProvider == nil {
+			http.NotFound(w, r)
 			return
 		}
 		issue, err := issueProvider(r.Context(), issueID)
@@ -163,13 +177,25 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		mergeLiveIssueOutput(&issue, snapshot)
 
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if r.Method == http.MethodHead {
 			return
 		}
+		if execPlanPage {
+			if err := ui.ExecPlanPage(issue, time.Now().UTC()).Render(w); err != nil && !errors.Is(err, context.Canceled) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		snapshot, err := provider(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		mergeLiveIssueOutput(&issue, snapshot)
 		if err := ui.IssueMetadataPage(issue, time.Now().UTC()).Render(w); err != nil && !errors.Is(err, context.Canceled) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -190,8 +216,8 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 	}
 	mux.HandleFunc("/webhooks/readyz", readyzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)
-	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearSecretProvider, logger))
-	mux.HandleFunc("/linear", linearWebhookHandler(linearSecretProvider, logger))
+	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
+	mux.HandleFunc("/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
 	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
 	mux.HandleFunc("/github", reservedWebhookHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -437,10 +463,10 @@ func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupSta
 		GitHubWebhookURL:  baseURL + "/webhooks/github",
 		Checks: []domain.SetupCheck{
 			{
-				ID:        "tailscale_cli",
-				Label:     "Tailscale CLI is installed",
+				ID:        "tailscale_local_api",
+				Label:     "Colin can reach the local Tailscale daemon",
 				Status:    "ok",
-				Detail:    "Using `/usr/local/bin/tailscale`.",
+				Detail:    "Connected to the local Tailscale daemon.",
 				CheckedAt: now,
 			},
 			{
