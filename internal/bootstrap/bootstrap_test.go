@@ -254,6 +254,13 @@ func TestDetectPrerequisitesRequiresExpectedTokenPrefixes(t *testing.T) {
 	if !prereqs.GitHubTokenConfigured {
 		t.Fatal("GitHubTokenConfigured = false, want true for github_pat_ token")
 	}
+
+	t.Setenv("GITHUB_TOKEN", "ghp_valid")
+
+	prereqs = detectPrerequisites()
+	if !prereqs.GitHubTokenConfigured {
+		t.Fatal("GitHubTokenConfigured = false, want true for ghp_ token")
+	}
 }
 
 func TestBuildConfigFromAnswersUsesSessionTokens(t *testing.T) {

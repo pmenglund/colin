@@ -65,7 +65,8 @@ func validateOptionalLinearAPIKey(value string) string {
 }
 
 func isValidGitHubToken(value string) bool {
-	return strings.HasPrefix(strings.TrimSpace(value), "github_pat_")
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "github_pat_") || strings.HasPrefix(trimmed, "ghp_")
 }
 
 func validateOptionalGitHubToken(value string) string {
@@ -74,7 +75,7 @@ func validateOptionalGitHubToken(value string) string {
 		return ""
 	}
 	if !isValidGitHubToken(trimmed) {
-		return "GITHUB_TOKEN should start with github_pat_."
+		return "GITHUB_TOKEN should start with github_pat_ or ghp_."
 	}
 	return ""
 }

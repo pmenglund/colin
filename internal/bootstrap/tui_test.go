@@ -358,7 +358,7 @@ func TestTUIGitHubTokenStepRejectsInvalidPrefix(t *testing.T) {
 
 	model := tuiModel{
 		step:        tuiStepGitHubToken,
-		githubToken: "ghp_old",
+		githubToken: "ghx_old",
 	}
 
 	next, cmd := model.updateGitHubTokenKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -367,7 +367,28 @@ func TestTUIGitHubTokenStepRejectsInvalidPrefix(t *testing.T) {
 		t.Fatal("updateGitHubTokenKey() command != nil, want nil on invalid token")
 	}
 	if !strings.Contains(updated.inlineError, "github_pat_") {
-		t.Fatalf("inlineError = %q, want github_pat_ guidance", updated.inlineError)
+		t.Fatalf("inlineError = %q, want GitHub token prefix guidance", updated.inlineError)
+	}
+}
+
+func TestTUIGitHubTokenStepAcceptsClassicPATPrefix(t *testing.T) {
+	t.Parallel()
+
+	model := tuiModel{
+		step:        tuiStepGitHubToken,
+		githubToken: "ghp_classic",
+	}
+
+	next, cmd := model.updateGitHubTokenKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	updated := next.(tuiModel)
+	if cmd != nil {
+		t.Fatal("updateGitHubTokenKey() command != nil, want nil after advancing")
+	}
+	if updated.step != tuiStepProjectSlug {
+		t.Fatalf("step = %d, want %d", updated.step, tuiStepProjectSlug)
+	}
+	if updated.inlineError != "" {
+		t.Fatalf("inlineError = %q, want empty", updated.inlineError)
 	}
 }
 

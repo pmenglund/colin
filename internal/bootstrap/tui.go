@@ -890,7 +890,7 @@ func (m tuiModel) renderGitHubTokenStep() string {
 		tuiSubtitleStyle.Render("Enter GITHUB_TOKEN for this setup session. It is not written to WORKFLOW.md."),
 		"",
 		m.renderMaskedInput(m.githubToken, "Leave blank to skip"),
-		tuiHintStyle.Render("When provided, GITHUB_TOKEN should start with github_pat_."),
+		tuiHintStyle.Render("When provided, GITHUB_TOKEN should start with github_pat_ or ghp_."),
 	}
 	if m.inlineError != "" {
 		lines = append(lines, "", tuiErrorStyle.Render(m.inlineError))

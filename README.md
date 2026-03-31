@@ -89,7 +89,7 @@ In an interactive terminal, `colin config` launches a Bubble Tea wizard that:
 
 ![`colin config` starting the interactive setup wizard before guiding the operator through project selection, validation, and workflow creation](docs/wizard.gif)
 
-The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. Valid Linear keys must start with `lin_api_`, and valid GitHub fine-grained personal access tokens must start with `github_pat_`. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
+The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. Valid Linear keys must start with `lin_api_`, and GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
 
 ### 1. Export the required secrets
 
@@ -100,7 +100,7 @@ export LINEAR_API_KEY=lin_api_...
 export GITHUB_TOKEN=github_pat_...
 ```
 
-`GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`.
+`GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`. Fine-grained `github_pat_...` tokens are preferred, but classic `ghp_...` PATs also work.
 
 ### 2. Generate or refresh `WORKFLOW.md`
 
