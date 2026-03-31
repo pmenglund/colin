@@ -72,6 +72,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			}},
 		}, nil
 	}, func(context.Context, string) (domain.Issue, error) {
+		execPlanUpdatedAt := time.Date(2026, 3, 28, 12, 34, 54, 0, time.UTC)
 		return domain.Issue{
 			ID:         "issue-1",
 			Identifier: "COLIN-93",
@@ -83,6 +84,11 @@ func TestObservabilityServerRoutes(t *testing.T) {
 				LastOutcome:      "ready_for_review",
 				CodexOutput:      nil,
 				UpdatedAt:        ptr(time.Date(2026, 3, 28, 12, 34, 55, 0, time.UTC)),
+			},
+			ExecPlan: &domain.ExecPlan{
+				AttachmentID: "attachment-1",
+				Body:         "# Fake ExecPlan\n\nPlan details.",
+				UpdatedAt:    &execPlanUpdatedAt,
 			},
 		}, nil
 	}, func(context.Context) (domain.FunnelSetupStatus, error) {
@@ -323,6 +329,31 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("metadata page missing %q: %s", want, text)
+			}
+		}
+	})
+
+	t.Run("issue exec plan page", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/linear/issues/issue-1/exec-plan")
+		if err != nil {
+			t.Fatalf("GET exec plan page error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		text := string(body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		for _, want := range []string{
+			`data-testid="issue-exec-plan-panel"`,
+			`data-testid="issue-exec-plan-body"`,
+			`COLIN-93 - Add dashboard`,
+			`attachment-1`,
+			`# Fake ExecPlan`,
+			`Plan details.`,
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("exec plan page missing %q: %s", want, text)
 			}
 		}
 	})

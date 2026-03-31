@@ -149,6 +149,81 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 	))
 }
 
+// ExecPlanPage renders a standalone page for one issue's stored ExecPlan.
+func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
+	title := strings.TrimSpace(issue.Identifier)
+	if title == "" {
+		title = "ExecPlan"
+	}
+	if strings.TrimSpace(issue.Title) != "" {
+		title += " - " + issue.Title
+	}
+
+	plan := issue.ExecPlan
+	return h.Doctype(h.HTML(
+		h.Lang("en"),
+		h.Head(
+			h.Meta(h.Charset("utf-8")),
+			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
+			h.Title("Colin ExecPlan: "+title),
+			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
+		),
+		h.Body(
+			h.Class("page-shell"),
+			h.Div(
+				h.Class("page-inner"),
+				h.Header(
+					h.Class("hero"),
+					h.Div(
+						h.Class("hero-grid"),
+						h.Div(
+							h.Span(h.Class("hero-label"), g.Text("Linear Issue ExecPlan")),
+							h.H1(g.Text(title)),
+							h.P(g.Text("Stored ExecPlan attachment content for this issue.")),
+						),
+						h.Div(
+							h.Class("shell-meta"),
+							h.Div(
+								h.Class("card"),
+								h.Data("testid", "exec-plan-rendered-at"),
+								h.Span(h.Class("badge badge-info"), g.Text("Rendered")),
+								h.Div(h.Class("issue-title"), g.Text(shellRenderedAt.UTC().Format(time.RFC3339))),
+							),
+						),
+					),
+				),
+				h.Main(
+					h.Class("dashboard-root"),
+					h.Section(
+						h.Class("table-card"),
+						h.Data("testid", "issue-exec-plan-panel"),
+						h.H3(g.Text("Issue")),
+						h.Div(
+							h.Class("worker-grid"),
+							metadataStatCard("Identifier", fallback(issue.Identifier, "unknown")),
+							metadataStatCard("State", fallback(issue.State, "unknown")),
+							metadataStatCard("Attachment", fallback(execPlanValue(plan, func(value *domain.ExecPlan) string { return value.AttachmentID }), "not recorded")),
+							metadataStatCard("Updated", fallback(execPlanTimestamp(plan), "not recorded")),
+						),
+						issueLinks(issue),
+					),
+					h.Section(
+						h.Class("table-card"),
+						h.Data("testid", "issue-exec-plan-body"),
+						h.H3(g.Text("ExecPlan")),
+						h.P(g.Text("This is the canonical plan Colin stored on the Linear issue.")),
+						renderExecPlanBody(plan),
+					),
+				),
+				h.Footer(
+					h.Class("footnote"),
+					h.A(h.Href("/"), g.Text("Back to dashboard")),
+				),
+			),
+		),
+	))
+}
+
 // FunnelSetupPage renders the Tailscale webhook ingress readiness page.
 func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time) g.Node {
 	stateText := "Needs setup"
@@ -402,6 +477,10 @@ func issueLinks(issue domain.Issue) g.Node {
 	items := g.Group{
 		h.A(h.Href("/"), g.Text("Dashboard")),
 	}
+	if strings.TrimSpace(issue.ID) != "" {
+		items = append(items, g.Text(" | "), h.A(h.Href(domain.ColinMetadataPath(issue.ID)), g.Text("Metadata")))
+		items = append(items, g.Text(" | "), h.A(h.Href(domain.ColinExecPlanPath(issue.ID)), g.Text("ExecPlan")))
+	}
 	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
 		items = append(items, g.Text(" | "), h.A(h.Href(*issue.URL), g.Text("Linear issue")))
 	}
@@ -427,6 +506,33 @@ func metadataOutput(value *domain.ColinMetadata) []domain.OutputLog {
 		return nil
 	}
 	return value.CodexOutput
+}
+
+func execPlanValue(value *domain.ExecPlan, field func(*domain.ExecPlan) string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(field(value))
+}
+
+func execPlanTimestamp(value *domain.ExecPlan) string {
+	if value == nil || value.UpdatedAt == nil {
+		return ""
+	}
+	return value.UpdatedAt.UTC().Format(time.RFC3339)
+}
+
+func renderExecPlanBody(value *domain.ExecPlan) g.Node {
+	if value == nil || strings.TrimSpace(value.Body) == "" {
+		return h.Pre(
+			h.Class("mockup-code"),
+			g.Text("No ExecPlan is currently recorded for this issue."),
+		)
+	}
+	return h.Pre(
+		h.Class("mockup-code"),
+		g.Text(strings.TrimSpace(value.Body)),
+	)
 }
 
 func runningPanel(snapshot domain.Snapshot) g.Node {
