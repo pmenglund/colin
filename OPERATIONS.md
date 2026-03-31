@@ -51,6 +51,8 @@ To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pas
 go run . --port 9999
 ```
 
+GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`.
+
 If operators need explicit URLs instead of Colin's defaults, set `server.webhook_public_url` for externally reachable webhook URLs and `server.ui_url` for operator-facing dashboard or metadata links. `server.public_url` remains as a deprecated fallback for the webhook public URL.
 
 Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the webhook endpoints are publicly reachable:

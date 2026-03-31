@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repoops"
 	lineartracker "github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/workspace"
 )
@@ -39,9 +40,8 @@ func TestServiceRunsRealIssueWorkflowEndToEnd(t *testing.T) {
 		t.Skip("LINEAR_API_KEY is required for real_e2e")
 	}
 	requireRealE2ECommand(t, "git", "git is required for real_e2e")
-	requireRealE2ECommand(t, "gh", "gh is required for real_e2e")
 	requireRealE2ECommand(t, "codex", "codex is required for real_e2e")
-	requireGHAuth(t)
+	requireGitHubToken(t)
 
 	runID := fmt.Sprintf("real-e2e-%d", time.Now().UTC().UnixNano())
 	tempDir := t.TempDir()
@@ -335,13 +335,6 @@ type realE2EComment struct {
 	ID       string
 	Body     string
 	ParentID string
-}
-
-type realE2EGitHubPR struct {
-	Number int    `json:"number"`
-	URL    string `json:"url"`
-	State  string `json:"state"`
-	Body   string `json:"body"`
 }
 
 type realE2ELinearClient struct {
@@ -831,34 +824,22 @@ func isPublishOrPostPublishState(state string) bool {
 	}
 }
 
-func githubPullRequestByHead(ctx context.Context, branch string) (*realE2EGitHubPR, error) {
-	out, err := runCommand(ctx, "gh", "pr", "list", "--repo", realE2ERepoFullName, "--head", branch, "--state", "all", "--json", "number,url,state,body")
+func githubPullRequestByHead(ctx context.Context, branch string) (*repoops.GitHubPullRequest, error) {
+	client, err := realE2EGitHubClient()
 	if err != nil {
 		return nil, err
 	}
-	var prs []realE2EGitHubPR
-	if err := json.Unmarshal([]byte(out), &prs); err != nil {
-		return nil, err
-	}
-	if len(prs) == 0 {
-		return nil, nil
-	}
-	return &prs[0], nil
+	owner, repo := realE2ERepoOwnerAndName()
+	return client.PullRequestByHead(ctx, owner, repo, branch, "")
 }
 
 func githubBranchExists(ctx context.Context, branch string) (bool, error) {
-	out, err := runCommand(ctx, "gh", "api", fmt.Sprintf("repos/%s/git/matching-refs/heads/%s", realE2ERepoFullName, branch))
+	client, err := realE2EGitHubClient()
 	if err != nil {
-		if strings.Contains(err.Error(), "404") {
-			return false, nil
-		}
 		return false, err
 	}
-	var refs []map[string]any
-	if err := json.Unmarshal([]byte(out), &refs); err != nil {
-		return false, err
-	}
-	return len(refs) > 0, nil
+	owner, repo := realE2ERepoOwnerAndName()
+	return client.BranchExists(ctx, owner, repo, branch)
 }
 
 func waitForRealCondition(t *testing.T, label string, timeout time.Duration, condition func() (bool, error)) {
@@ -919,13 +900,37 @@ func requireRealE2ECommand(t *testing.T, name string, reason string) {
 	}
 }
 
-func requireGHAuth(t *testing.T) {
+func requireGitHubToken(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if _, err := runCommand(ctx, "gh", "auth", "status"); err != nil {
-		t.Skipf("gh auth status failed: %v", err)
+	if strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) == "" && strings.TrimSpace(os.Getenv("GH_TOKEN")) == "" {
+		t.Skip("GITHUB_TOKEN or GH_TOKEN is required for real_e2e")
 	}
+}
+
+func realE2EGitHubClient() (repoops.GitHubClient, error) {
+	return repoops.NewGitHubClientFromConfig(domain.ServiceConfig{
+		Repo: domain.RepoConfig{
+			APIToken: firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func realE2ERepoOwnerAndName() (string, string) {
+	parts := strings.SplitN(realE2ERepoFullName, "/", 2)
+	if len(parts) != 2 {
+		return realE2ERepoFullName, ""
+	}
+	return parts[0], parts[1]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func realE2EWorkflowPath(t *testing.T) string {
