@@ -190,7 +190,7 @@ func (i *Inspector) Check(ctx context.Context, opts Options) domain.FunnelSetupS
 	return finalizeStatus(status)
 }
 
-// ResolveUIBaseURL returns a Tailscale HTTPS base URL for the Colin UI when Serve proxies Colin from `/`.
+// ResolveUIBaseURL returns the preferred Tailscale Serve base URL for the Colin UI when Serve proxies Colin from `/`.
 func (i *Inspector) ResolveUIBaseURL(ctx context.Context, localPort *int) string {
 	if localPort == nil || *localPort <= 0 {
 		return ""
@@ -396,8 +396,9 @@ func serveUIBaseURL(cfg *ipn.ServeConfig, localPort int) string {
 	}
 
 	type candidate struct {
-		host string
-		port int
+		host   string
+		port   int
+		scheme string
 	}
 	matches := make([]candidate, 0, len(cfg.Web))
 	for hostPort, server := range cfg.Web {
@@ -412,26 +413,48 @@ func serveUIBaseURL(cfg *ipn.ServeConfig, localPort int) string {
 		if !ok {
 			continue
 		}
-		matches = append(matches, candidate{host: host, port: port})
+		scheme, ok := serveURLScheme(port)
+		if !ok {
+			continue
+		}
+		matches = append(matches, candidate{host: host, port: port, scheme: scheme})
 	}
 	if len(matches) == 0 {
 		return ""
 	}
 	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].scheme != matches[j].scheme {
+			return matches[i].scheme == "https"
+		}
 		if matches[i].port != matches[j].port {
 			return matches[i].port < matches[j].port
 		}
 		return matches[i].host < matches[j].host
 	})
-	if matches[0].port == 443 {
-		return "https://" + matches[0].host
+	if isServeDefaultPort(matches[0].scheme, matches[0].port) {
+		return matches[0].scheme + "://" + matches[0].host
 	}
-	return fmt.Sprintf("https://%s:%d", matches[0].host, matches[0].port)
+	return fmt.Sprintf("%s://%s:%d", matches[0].scheme, matches[0].host, matches[0].port)
 }
 
 func parseHostPortPort(value string) (int, bool) {
 	_, port, ok := splitHostPort(value)
 	return port, ok
+}
+
+func serveURLScheme(port int) (string, bool) {
+	switch port {
+	case 80:
+		return "http", true
+	case 443, 8443, 10000:
+		return "https", true
+	default:
+		return "", false
+	}
+}
+
+func isServeDefaultPort(scheme string, port int) bool {
+	return (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
 }
 
 func proxyTargetsPort(proxy string, localPort int) bool {

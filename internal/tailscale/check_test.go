@@ -231,6 +231,55 @@ func TestResolveUIBaseURLDetectsServeRootProxy(t *testing.T) {
 	}
 }
 
+func TestResolveUIBaseURLPrefersHTTPSServePort(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:80": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if got := inspector.ResolveUIBaseURL(context.Background(), intPtr(8888)); got != "https://colin.tail.example.ts.net" {
+		t.Fatalf("ResolveUIBaseURL() = %q", got)
+	}
+}
+
+func TestResolveUIBaseURLPreservesHTTPServeScheme(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:80": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if got := inspector.ResolveUIBaseURL(context.Background(), intPtr(8888)); got != "http://colin.tail.example.ts.net" {
+		t.Fatalf("ResolveUIBaseURL() = %q", got)
+	}
+}
+
 func TestResolveUIBaseURLIgnoresWebhookOnlyProxy(t *testing.T) {
 	t.Parallel()
 
