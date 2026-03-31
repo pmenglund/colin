@@ -1119,12 +1119,12 @@ func mergeReviewBlockDisposition(cfg domain.ServiceConfig, reviewContext repoops
 	block := mergeReviewBlock{
 		ThreadCount: len(reviewContext.CodexReviewThreads),
 	}
+	if !cfg.Repo.CodexPRReviewsEnabled {
+		return block
+	}
 	if block.ThreadCount > 0 {
 		block.Blocked = true
 		block.MoveToReview = true
-		return block
-	}
-	if !cfg.Repo.CodexPRReviewsEnabled {
 		return block
 	}
 	if reviewContext.CodexReviewRequestedAt == nil {

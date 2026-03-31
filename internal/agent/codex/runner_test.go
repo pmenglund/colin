@@ -362,6 +362,45 @@ func TestBlockMergeForCodexReviewSkipsPickupWaitWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestBlockMergeForCodexReviewIgnoresThreadsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{PublishStates: []string{"Review"}},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-134",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest: domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
+		CodexReviewThreads: []domain.GitHubReviewThread{
+			{ID: "thread-1", Path: "internal/foo.go", Body: "Please fix this."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if blocked {
+		t.Fatal("blocked = true, want false")
+	}
+	if summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
+	}
+	if len(issue.ReviewThreads) != 0 {
+		t.Fatalf("issue.ReviewThreads length = %d, want 0", len(issue.ReviewThreads))
+	}
+}
+
 func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenThreadsRemain(t *testing.T) {
 	t.Parallel()
 
