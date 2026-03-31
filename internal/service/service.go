@@ -27,6 +27,12 @@ import (
 	"github.com/pmenglund/colin/internal/workspace"
 )
 
+type tailscaleInspector interface {
+	Check(context.Context, tsdiag.Options) domain.FunnelSetupStatus
+	Resolve(context.Context, tsdiag.Options) domain.FunnelSetupStatus
+	ResolveUIBaseURL(context.Context, *int) string
+}
+
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
 type Service struct {
 	logger       *slog.Logger
@@ -40,7 +46,7 @@ type Service struct {
 	runtimeMu    sync.RWMutex
 	runtime      orchestrator.Runtime
 	orch         *orchestrator.Orchestrator
-	inspector    *tsdiag.Inspector
+	inspector    tailscaleInspector
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
@@ -328,8 +334,15 @@ func (s *Service) effectiveWebhookPublicBaseURL(ctx context.Context, cfg domain.
 	return strings.TrimSpace(status.PublicBaseURL)
 }
 
-func (s *Service) effectiveUIBaseURL(cfg domain.ServerConfig) string {
+func (s *Service) effectiveUIBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
 	if value := strings.TrimSpace(cfg.UIURL); value != "" {
+		return value
+	}
+	inspector := s.inspector
+	if inspector == nil {
+		inspector = tsdiag.NewInspector()
+	}
+	if value := strings.TrimSpace(inspector.ResolveUIBaseURL(ctx, cfg.Port)); value != "" {
 		return value
 	}
 	if value := strings.TrimSpace(s.DashboardURL()); value != "" {
@@ -353,8 +366,8 @@ func (s *Service) applyUIBaseURLResolver(runtime orchestrator.Runtime) {
 	if !ok || client == nil {
 		return
 	}
-	client.SetUIBaseURLResolver(func(context.Context) string {
-		return s.effectiveUIBaseURL(runtime.Config.Server)
+	client.SetUIBaseURLResolver(func(ctx context.Context) string {
+		return s.effectiveUIBaseURL(ctx, runtime.Config.Server)
 	})
 }
 

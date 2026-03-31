@@ -233,7 +233,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - base publish and merge automation on branch `symphony`
 - decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
-- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set for an alternate operator-facing address
+- serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set or Tailscale Serve exposes Colin from `/`
 - keep the last `1000` internal log lines in memory by default, configurable with `server.log_buffer_lines`
 
 ## Operational Notes
@@ -248,7 +248,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
 - The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
-- Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links point at the local Colin UI address.
+- Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for the Colin port and derives the public webhook base URL from that Funnel. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
 - Relevant Linear `Issue` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals so Colin can react faster to state changes such as `Todo` and `Merge`.
