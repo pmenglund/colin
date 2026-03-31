@@ -477,45 +477,80 @@ func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *test
 func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t *testing.T) {
 	t.Parallel()
 
-	var events []LinearWebhookEvent
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) (bool, bool) {
-		events = append(events, event)
-		return true, false
-	}, nil, nil)
-	if err != nil {
-		t.Fatalf("NewObservabilityServer() error = %v", err)
+	cases := []struct {
+		name          string
+		body          string
+		action        string
+		projectID     string
+		changedFields []string
+	}{
+		{
+			name:      "create",
+			body:      `{"action":"create","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"}}`,
+			action:    "create",
+			projectID: "project-1",
+		},
+		{
+			name:          "update",
+			body:          `{"action":"update","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"},"updatedFrom":{"stateId":"old-state","updatedAt":"2026-03-31T00:00:00.000Z"}}`,
+			action:        "update",
+			projectID:     "project-1",
+			changedFields: []string{"stateid", "updatedat"},
+		},
 	}
 
-	server := httptest.NewServer(handler)
-	defer server.Close()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []LinearWebhookEvent
+			handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
+				events = append(events, event)
+				return LinearWebhookTriggerResult{Relevant: true, Queued: true}
+			}, nil, nil)
+			if err != nil {
+				t.Fatalf("NewObservabilityServer() error = %v", err)
+			}
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/linear", strings.NewReader(`{"action":"update","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1"}}`))
-	if err != nil {
-		t.Fatalf("NewRequest() error = %v", err)
-	}
-	req.Header.Set("Linear-Delivery", "delivery-1")
-	req.Header.Set("Linear-Event", "Issue")
+			server := httptest.NewServer(handler)
+			defer server.Close()
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST /webhooks/linear error = %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
+			req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/linear", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			req.Header.Set("Linear-Delivery", "delivery-1")
+			req.Header.Set("Linear-Event", "Issue")
 
-	if len(events) != 1 {
-		t.Fatalf("trigger calls = %d, want 1", len(events))
-	}
-	if events[0].DeliveryID != "delivery-1" {
-		t.Fatalf("DeliveryID = %q, want %q", events[0].DeliveryID, "delivery-1")
-	}
-	if events[0].Action != "update" {
-		t.Fatalf("Action = %q, want %q", events[0].Action, "update")
-	}
-	if events[0].ResourceType != "Issue" {
-		t.Fatalf("ResourceType = %q, want %q", events[0].ResourceType, "Issue")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("POST /webhooks/linear error = %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+
+			if len(events) != 1 {
+				t.Fatalf("trigger calls = %d, want 1", len(events))
+			}
+			if events[0].DeliveryID != "delivery-1" {
+				t.Fatalf("DeliveryID = %q, want %q", events[0].DeliveryID, "delivery-1")
+			}
+			if events[0].Action != tc.action {
+				t.Fatalf("Action = %q, want %q", events[0].Action, tc.action)
+			}
+			if events[0].ResourceType != "Issue" {
+				t.Fatalf("ResourceType = %q, want %q", events[0].ResourceType, "Issue")
+			}
+			if events[0].IssueID != "issue-1" {
+				t.Fatalf("IssueID = %q, want %q", events[0].IssueID, "issue-1")
+			}
+			if events[0].ProjectID != tc.projectID {
+				t.Fatalf("ProjectID = %q, want %q", events[0].ProjectID, tc.projectID)
+			}
+			if got, want := strings.Join(events[0].ChangedFields, ","), strings.Join(tc.changedFields, ","); got != want {
+				t.Fatalf("ChangedFields = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -523,9 +558,9 @@ func TestObservabilityServerLinearWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	t.Parallel()
 
 	triggerCalls := 0
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) (bool, bool) {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		triggerCalls++
-		return true, false
+		return LinearWebhookTriggerResult{Relevant: true, Queued: true}
 	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
@@ -550,8 +585,8 @@ func TestObservabilityServerLinearWebhookIgnoresIrrelevantEvents(t *testing.T) {
 func TestObservabilityServerLinearWebhookAcknowledgesCoalescedRefresh(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) (bool, bool) {
-		return true, true
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
+		return LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
 	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
@@ -560,7 +595,7 @@ func TestObservabilityServerLinearWebhookAcknowledgesCoalescedRefresh(t *testing
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	resp, err := http.Post(server.URL+"/webhooks/linear", "application/json", strings.NewReader(`{"action":"update","type":"Issue","webhookTimestamp":1735689600000}`))
+	resp, err := http.Post(server.URL+"/webhooks/linear", "application/json", strings.NewReader(`{"action":"update","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"}}`))
 	if err != nil {
 		t.Fatalf("POST /webhooks/linear error = %v", err)
 	}

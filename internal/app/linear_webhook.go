@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -22,6 +23,7 @@ type linearWebhookEnvelope struct {
 	Action           string          `json:"action"`
 	Type             string          `json:"type"`
 	Data             json.RawMessage `json:"data"`
+	UpdatedFrom      json.RawMessage `json:"updatedFrom"`
 }
 
 func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWebhookSecretProvider, logger *slog.Logger) http.HandlerFunc {
@@ -67,26 +69,37 @@ func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWeb
 
 		event := linearWebhookEventFromRequest(r, envelope)
 		if shouldTriggerLinearWebhook(event) {
-			queued := false
-			coalesced := false
+			result := LinearWebhookTriggerResult{}
 			if trigger != nil {
-				queued, coalesced = trigger(r.Context(), event)
+				result = trigger(r.Context(), event)
 			}
-			level := slog.LevelInfo
-			message := "queued immediate orchestrator refresh from linear webhook"
 			extra := []any{
 				"action", event.Action,
 				"resource_type", event.ResourceType,
-				"queued", queued,
-				"coalesced", coalesced,
+				"issue_id", event.IssueID,
+				"project_id", event.ProjectID,
+				"changed_fields", event.ChangedFields,
+				"queued", result.Queued,
+				"coalesced", result.Coalesced,
 			}
-			if trigger == nil || !queued {
-				level = slog.LevelWarn
-				message = "could not queue immediate orchestrator refresh from linear webhook"
+			switch {
+			case !result.Relevant:
+				logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secret) > 0, extra)
+			case result.Queued:
+				logLinearWebhookRequest(logger, slog.LevelInfo, "queued immediate orchestrator refresh from linear webhook", r, len(secret) > 0, extra)
+			case result.Suppressed:
+				logLinearWebhookRequest(logger, slog.LevelDebug, "suppressed immediate orchestrator refresh from linear webhook; polling fallback remains active", r, len(secret) > 0, extra)
+			default:
+				logLinearWebhookRequest(logger, slog.LevelWarn, "could not queue immediate orchestrator refresh from linear webhook", r, len(secret) > 0, extra)
 			}
-			logLinearWebhookRequest(logger, level, message, r, len(secret) > 0, extra)
 		} else {
-			logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secret) > 0, []any{"action", event.Action, "resource_type", event.ResourceType})
+			logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secret) > 0, []any{
+				"action", event.Action,
+				"resource_type", event.ResourceType,
+				"issue_id", event.IssueID,
+				"project_id", event.ProjectID,
+				"changed_fields", event.ChangedFields,
+			})
 		}
 
 		w.Header().Set("Cache-Control", "no-store")
@@ -172,16 +185,20 @@ func linearWebhookEventFromRequest(r *http.Request, envelope linearWebhookEnvelo
 	if r != nil {
 		deliveryID = strings.TrimSpace(r.Header.Get("Linear-Delivery"))
 	}
+	issueID, projectID := parseLinearWebhookIssueData(envelope.Data)
 	return LinearWebhookEvent{
-		DeliveryID:   deliveryID,
-		Event:        eventName,
-		Action:       strings.TrimSpace(envelope.Action),
-		ResourceType: resourceType,
+		DeliveryID:    deliveryID,
+		Event:         eventName,
+		Action:        strings.TrimSpace(envelope.Action),
+		ResourceType:  resourceType,
+		IssueID:       issueID,
+		ProjectID:     projectID,
+		ChangedFields: parseLinearWebhookChangedFields(envelope.UpdatedFrom),
 	}
 }
 
 func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
-	if !strings.EqualFold(strings.TrimSpace(event.ResourceType), "Issue") {
+	if !strings.EqualFold(strings.TrimSpace(event.ResourceType), "Issue") || strings.TrimSpace(event.ProjectID) == "" {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(event.Action)) {
@@ -190,6 +207,40 @@ func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
 	default:
 		return false
 	}
+}
+
+func parseLinearWebhookIssueData(raw json.RawMessage) (issueID string, projectID string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var payload struct {
+		ID        string `json:"id"`
+		ProjectID string `json:"projectId"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(payload.ID), strings.TrimSpace(payload.ProjectID)
+}
+
+func parseLinearWebhookChangedFields(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	fields := make([]string, 0, len(payload))
+	for key := range payload {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			continue
+		}
+		fields = append(fields, key)
+	}
+	sort.Strings(fields)
+	return fields
 }
 
 func ioReadAll(body interface {

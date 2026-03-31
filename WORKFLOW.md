@@ -25,6 +25,7 @@ workspace:
   base_ref: main
 
 repo:
+  api_token: $GITHUB_TOKEN
   publish_states:
     - Review
   merge_states:

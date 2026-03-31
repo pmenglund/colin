@@ -24,9 +24,28 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.AddCommand(newSetupGitHubCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupLinearWebhookCmd(stdin, stdout, stderr, opts, deps))
 
+	return cmd
+}
+
+func newSetupGitHubCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "github",
+		Short: "Print the easiest GitHub token setup for this workflow",
+		Long: "Inspect the watched repository from WORKFLOW.md or the current checkout and print the recommended GitHub token settings for Colin.\n\n" +
+			"This command prefers a fine-grained personal access token scoped to the watched repository, with `Contents` and `Pull requests` set to `Read and write`, and prints a pre-filled GitHub token creation URL that you can open directly. Export the resulting token as `GITHUB_TOKEN` for the generated workflow.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(deps.runSetupGitHub(cmd, opts.workflowPath))
+		},
+	}
+	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.Example = "  colin setup github\n  colin --workflow /path/to/WORKFLOW.md setup github"
 	return cmd
 }
 

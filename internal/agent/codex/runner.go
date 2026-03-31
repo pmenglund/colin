@@ -112,6 +112,16 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	if err != nil {
 		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 	}
+	if previousState := strings.TrimSpace(issue.State); previousState != "" && !strings.EqualFold(previousState, strings.TrimSpace(current.State)) {
+		emit(Event{
+			Event:     EventIssueStateRefreshed,
+			Timestamp: time.Now().UTC(),
+			Workspace: ws.Path,
+			State:     current.State,
+			PrevState: previousState,
+			Message:   fmt.Sprintf("Issue moved from %s to %s before coding started", previousState, current.State),
+		})
+	}
 
 	client := &appServerClient{
 		cfg:       r.cfg,

@@ -9,6 +9,17 @@ import (
 )
 
 type FakeGitHubClient struct {
+	ValidateAuthStub        func(context.Context) error
+	validateAuthMutex       sync.RWMutex
+	validateAuthArgsForCall []struct {
+		arg1 context.Context
+	}
+	validateAuthReturns struct {
+		result1 error
+	}
+	validateAuthReturnsOnCall map[int]struct {
+		result1 error
+	}
 	BranchExistsStub        func(context.Context, string, string, string) (bool, error)
 	branchExistsMutex       sync.RWMutex
 	branchExistsArgsForCall []struct {
@@ -826,6 +837,67 @@ func (fake *FakeGitHubClient) ReviewThreadsReturnsOnCall(i int, result1 repoops.
 		result1 repoops.GitHubReviewThreadPage
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *FakeGitHubClient) ValidateAuth(arg1 context.Context) error {
+	fake.validateAuthMutex.Lock()
+	ret, specificReturn := fake.validateAuthReturnsOnCall[len(fake.validateAuthArgsForCall)]
+	fake.validateAuthArgsForCall = append(fake.validateAuthArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.ValidateAuthStub
+	fakeReturns := fake.validateAuthReturns
+	fake.recordInvocation("ValidateAuth", []interface{}{arg1})
+	fake.validateAuthMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGitHubClient) ValidateAuthCallCount() int {
+	fake.validateAuthMutex.RLock()
+	defer fake.validateAuthMutex.RUnlock()
+	return len(fake.validateAuthArgsForCall)
+}
+
+func (fake *FakeGitHubClient) ValidateAuthCalls(stub func(context.Context) error) {
+	fake.validateAuthMutex.Lock()
+	defer fake.validateAuthMutex.Unlock()
+	fake.ValidateAuthStub = stub
+}
+
+func (fake *FakeGitHubClient) ValidateAuthArgsForCall(i int) context.Context {
+	fake.validateAuthMutex.RLock()
+	defer fake.validateAuthMutex.RUnlock()
+	argsForCall := fake.validateAuthArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGitHubClient) ValidateAuthReturns(result1 error) {
+	fake.validateAuthMutex.Lock()
+	defer fake.validateAuthMutex.Unlock()
+	fake.ValidateAuthStub = nil
+	fake.validateAuthReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGitHubClient) ValidateAuthReturnsOnCall(i int, result1 error) {
+	fake.validateAuthMutex.Lock()
+	defer fake.validateAuthMutex.Unlock()
+	fake.ValidateAuthStub = nil
+	if fake.validateAuthReturnsOnCall == nil {
+		fake.validateAuthReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.validateAuthReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *FakeGitHubClient) Invocations() map[string][][]interface{} {

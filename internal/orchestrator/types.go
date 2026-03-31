@@ -34,6 +34,7 @@ type Orchestrator struct {
 	eventCh           chan any
 	runtime           Runtime
 	loopStarted       atomic.Bool
+	refreshReady      atomic.Bool
 	refreshPending    atomic.Bool
 	running           map[string]*runningEntry
 	claimed           map[string]struct{}

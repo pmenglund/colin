@@ -46,6 +46,7 @@ type Client struct {
 	endpoint          string
 	apiKey            string
 	project           string
+	watchedProjectID  string
 	active            []string
 	client            *http.Client
 	uiBaseURL         string
@@ -72,9 +73,11 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 			Timeout: 30 * time.Second,
 		},
 	}
-	if err := client.validateWorkflowStates(context.Background(), cfg); err != nil {
+	projectID, err := client.validateWorkflowStates(context.Background(), cfg)
+	if err != nil {
 		return nil, err
 	}
+	client.watchedProjectID = projectID
 	return client, nil
 }
 
@@ -84,6 +87,14 @@ func (c *Client) SetUIBaseURLResolver(resolver func(context.Context) string) {
 		return
 	}
 	c.uiBaseURLResolver = resolver
+}
+
+// WatchedProjectID returns the stable Linear project ID resolved from the configured project slug.
+func (c *Client) WatchedProjectID() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.watchedProjectID)
 }
 
 // FetchCandidateIssues returns the current active issues for the configured Linear project.
@@ -643,11 +654,8 @@ query IssueTeamStates($id: String!) {
 	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
 }
 
-func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) error {
+func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) (string, error) {
 	requiredStates := requiredWorkflowStates(cfg)
-	if len(requiredStates) == 0 {
-		return nil
-	}
 
 	const query = `
 query ProjectTeamStates($slug: String!) {
@@ -671,15 +679,19 @@ query ProjectTeamStates($slug: String!) {
 `
 	resp, err := c.doQuery(ctx, query, map[string]any{"slug": c.project})
 	if err != nil {
-		return err
+		return "", err
 	}
 	projects, ok := nestedSlice(resp, "data", "projects", "nodes")
 	if !ok || len(projects) == 0 {
-		return fmt.Errorf("%w: project %q not found", ErrUnknownPayload, c.project)
+		return "", fmt.Errorf("%w: project %q not found", ErrUnknownPayload, c.project)
+	}
+	projectID, _ := stringValue(projects[0]["id"])
+	if strings.TrimSpace(projectID) == "" {
+		return "", fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, c.project)
 	}
 	teamNodes, ok := nestedSlice(projects[0], "teams", "nodes")
 	if !ok || len(teamNodes) == 0 {
-		return fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, c.project)
+		return "", fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, c.project)
 	}
 
 	var missing []string
@@ -717,9 +729,9 @@ query ProjectTeamStates($slug: String!) {
 		missing = append(missing, fmt.Sprintf("team %q missing [%s]", teamName, strings.Join(missingForTeam, ", ")))
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, c.project, strings.Join(missing, "; "))
+		return "", fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, c.project, strings.Join(missing, "; "))
 	}
-	return nil
+	return strings.TrimSpace(projectID), nil
 }
 
 type workflowStateRequirement struct {

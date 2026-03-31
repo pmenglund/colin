@@ -55,6 +55,7 @@ type GitHubReactionPage struct {
 
 // GitHubClient wraps the GitHub operations Colin needs for publish, review, and merge automation.
 type GitHubClient interface {
+	ValidateAuth(ctx context.Context) error
 	PullRequestByHead(ctx context.Context, owner, repo, head, base string) (*GitHubPullRequest, error)
 	PullRequestByNumber(ctx context.Context, owner, repo string, number int) (*GitHubPullRequest, error)
 	CreatePullRequest(ctx context.Context, owner, repo string, input CreatePullRequestInput) (*GitHubPullRequest, error)

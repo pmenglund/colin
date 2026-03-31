@@ -10,12 +10,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pmenglund/colin/internal/app"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
+	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 )
@@ -125,6 +128,21 @@ Work on {{ .issue.identifier }}.
 	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if !errors.Is(err, linear.ErrMissingWorkflowState) {
 		t.Fatalf("New() error = %v, want linear.ErrMissingWorkflowState", err)
+	}
+}
+
+func TestValidateGitHubAccessReturnsManagerError(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.ServiceConfig{Repo: domain.RepoConfig{APIToken: "test-token"}}
+	manager := repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
+
+	err := validateGitHubAccess(cfg, manager)
+	if err == nil {
+		t.Fatal("validateGitHubAccess() error = nil, want bad credentials")
+	}
+	if !strings.Contains(err.Error(), "bad credentials") {
+		t.Fatalf("validateGitHubAccess() error = %v, want bad credentials", err)
 	}
 }
 
@@ -293,6 +311,80 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
+func TestLoadGitHubTokenSetupUsesWorkflowRepositoryURL(t *testing.T) {
+	t.Parallel()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  project_slug: test-project
+workspace:
+  repo_url: git@github.com:acme/widgets.git
+  base_ref: main
+codex:
+  command: codex app-server
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := LoadGitHubTokenSetup(workflowPath, t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadGitHubTokenSetup() error = %v", err)
+	}
+	if result.RepositoryOwner != "acme" || result.RepositoryName != "widgets" {
+		t.Fatalf("repository = %s/%s, want acme/widgets", result.RepositoryOwner, result.RepositoryName)
+	}
+	if result.RepositorySource != workflowPath {
+		t.Fatalf("RepositorySource = %q, want %q", result.RepositorySource, workflowPath)
+	}
+	if !strings.Contains(result.FineGrainedTokenURL, "pull_requests=write") {
+		t.Fatalf("FineGrainedTokenURL = %q, want pull_requests=write", result.FineGrainedTokenURL)
+	}
+}
+
+func TestLoadGitHubTokenSetupFallsBackToGitRemote(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+
+	result, err := LoadGitHubTokenSetup(filepath.Join(repoDir, "missing.md"), repoDir)
+	if err != nil {
+		t.Fatalf("LoadGitHubTokenSetup() error = %v", err)
+	}
+	if result.RepositorySource != "git remote origin" {
+		t.Fatalf("RepositorySource = %q, want git remote origin", result.RepositorySource)
+	}
+	if result.RepositoryURL != "git@github.com:acme/widgets.git" {
+		t.Fatalf("RepositoryURL = %q, want git@github.com:acme/widgets.git", result.RepositoryURL)
+	}
+}
+
+func TestLoadGitHubTokenSetupFailsWithoutRepositorySource(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadGitHubTokenSetup(filepath.Join(t.TempDir(), "missing.md"), t.TempDir())
+	if !errors.Is(err, ErrMissingGitHubRepository) {
+		t.Fatalf("LoadGitHubTokenSetup() error = %v, want ErrMissingGitHubRepository", err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
 func TestEffectiveUIBaseURLPrefersExplicitUIURL(t *testing.T) {
 	t.Parallel()
 
@@ -344,9 +436,92 @@ func TestEffectiveUIBaseURLFallsBackToLocalDashboard(t *testing.T) {
 	}
 }
 
+func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		event     app.LinearWebhookEvent
+		projectID string
+		want      bool
+	}{
+		{
+			name: "create in watched project",
+			event: app.LinearWebhookEvent{
+				Action:    "create",
+				ProjectID: "project-1",
+			},
+			projectID: "project-1",
+			want:      true,
+		},
+		{
+			name: "update with relevant field in watched project",
+			event: app.LinearWebhookEvent{
+				Action:        "update",
+				ProjectID:     "project-1",
+				ChangedFields: []string{"stateid", "updatedat"},
+			},
+			projectID: "project-1",
+			want:      true,
+		},
+		{
+			name: "update with irrelevant field in watched project",
+			event: app.LinearWebhookEvent{
+				Action:        "update",
+				ProjectID:     "project-1",
+				ChangedFields: []string{"updatedat"},
+			},
+			projectID: "project-1",
+			want:      false,
+		},
+		{
+			name: "update in different project",
+			event: app.LinearWebhookEvent{
+				Action:        "update",
+				ProjectID:     "project-2",
+				ChangedFields: []string{"stateid"},
+			},
+			projectID: "project-1",
+			want:      false,
+		},
+		{
+			name: "missing watched project id",
+			event: app.LinearWebhookEvent{
+				Action:        "update",
+				ProjectID:     "project-1",
+				ChangedFields: []string{"stateid"},
+			},
+			projectID: "",
+			want:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldQueueImmediateLinearRefresh(tc.event, tc.projectID); got != tc.want {
+				t.Fatalf("shouldQueueImmediateLinearRefresh() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWatchedProjectIDUsesProviderWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	if got := watchedProjectID(providerStub{}); got != "project-1" {
+		t.Fatalf("watchedProjectID() = %q, want %q", got, "project-1")
+	}
+}
+
 type serviceInspectorStub struct {
 	status    domain.FunnelSetupStatus
 	uiBaseURL string
+}
+
+type providerStub struct{}
+
+func (providerStub) WatchedProjectID() string {
+	return "project-1"
 }
 
 func (s serviceInspectorStub) Check(context.Context, tsdiag.Options) domain.FunnelSetupStatus {
@@ -363,6 +538,54 @@ func (s serviceInspectorStub) ResolveUIBaseURL(context.Context, *int) string {
 
 type serviceTrackerStub struct {
 	ensuredLabels []string
+}
+
+type serviceGitHubStub struct {
+	validateErr error
+}
+
+func (s *serviceGitHubStub) ValidateAuth(context.Context) error {
+	return s.validateErr
+}
+
+func (s *serviceGitHubStub) PullRequestByHead(context.Context, string, string, string, string) (*repoops.GitHubPullRequest, error) {
+	return nil, nil
+}
+
+func (s *serviceGitHubStub) PullRequestByNumber(context.Context, string, string, int) (*repoops.GitHubPullRequest, error) {
+	return nil, nil
+}
+
+func (s *serviceGitHubStub) CreatePullRequest(context.Context, string, string, repoops.CreatePullRequestInput) (*repoops.GitHubPullRequest, error) {
+	return nil, nil
+}
+
+func (s *serviceGitHubStub) MergePullRequest(context.Context, string, string, int, string) error {
+	return nil
+}
+
+func (s *serviceGitHubStub) BranchExists(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (s *serviceGitHubStub) ReviewThreads(context.Context, string, string, int, string) (repoops.GitHubReviewThreadPage, error) {
+	return repoops.GitHubReviewThreadPage{}, nil
+}
+
+func (s *serviceGitHubStub) ReviewThreadComments(context.Context, string, string) (repoops.GitHubReviewThreadCommentPage, error) {
+	return repoops.GitHubReviewThreadCommentPage{}, nil
+}
+
+func (s *serviceGitHubStub) PullRequestReactions(context.Context, string, string, int, string) (repoops.GitHubReactionPage, error) {
+	return repoops.GitHubReactionPage{}, nil
+}
+
+func (s *serviceGitHubStub) ReplyToReviewThread(context.Context, string, string) error {
+	return nil
+}
+
+func (s *serviceGitHubStub) ResolveReviewThread(context.Context, string) error {
+	return nil
 }
 
 func (s *serviceTrackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {

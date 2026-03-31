@@ -81,6 +81,50 @@ func TestNewGitHubClientFromConfigAppliesDefaultHTTPTimeout(t *testing.T) {
 	}
 }
 
+func TestGoGitHubClientValidateAuth(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+
+		var gotAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/user" {
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+			gotAuth = r.Header.Get("Authorization")
+			writeJSON(t, w, map[string]any{"login": "colin-bot"})
+		}))
+		defer server.Close()
+
+		client := newTestGoGitHubClient(t, server)
+		if err := client.ValidateAuth(context.Background()); err != nil {
+			t.Fatalf("ValidateAuth() error = %v", err)
+		}
+		if gotAuth != "Bearer test-token" {
+			t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer test-token")
+		}
+	})
+
+	t.Run("unauthorized", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/user" {
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(t, w, map[string]any{"message": "Bad credentials"})
+		}))
+		defer server.Close()
+
+		client := newTestGoGitHubClient(t, server)
+		if err := client.ValidateAuth(context.Background()); err == nil {
+			t.Fatal("ValidateAuth() error = nil, want unauthorized error")
+		}
+	})
+}
+
 func TestGoGitHubClientPullRequestByHeadSupportsForkQualifiedBranch(t *testing.T) {
 	t.Parallel()
 

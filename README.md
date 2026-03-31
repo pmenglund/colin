@@ -9,7 +9,7 @@ The value is operational leverage: more tasks advancing at once, less branch and
 Before you run Colin, make sure you have:
 
 - access to [Codex](https://platform.openai.com/docs/codex/overview) and a GitHub account or organization connected to it
-- a GitHub token available to Colin via `repo.api_token`, `GITHUB_TOKEN`, or `GH_TOKEN` so publish and merge automation can talk to the GitHub API
+- a GitHub token available to Colin via `repo.api_token`, `GITHUB_TOKEN`, or `GH_TOKEN` so publish and merge automation can talk to the GitHub API; `GITHUB_TOKEN` is the recommended env var, and when a token is configured Colin validates it during startup and workflow reload so broken credentials fail fast
 - a Linear project and workflow with the states Colin uses for active work and handoffs
 
 Optional but encouraged:
@@ -35,6 +35,7 @@ Colin uses these handoff states:
 - `Review`: Colin prepares the branch and pull request for human review. Human action is required to review the PR and then move the issue either back to `Todo` for more work or forward to `Merge`.
 - `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`.
 - `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
+
 Colin treats these as terminal states and stops work when an issue enters them:
 
 - `Done`
@@ -59,7 +60,7 @@ Colin runs as a long-lived orchestrator:
 3. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
 4. It posts progress back to Linear and exposes a local dashboard for operators.
 
-Relevant Linear `Issue` webhooks can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react.
+Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `update` webhooks that change scheduling-relevant fields such as `stateId`, can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react.
 
 ## Getting Started
 
@@ -70,6 +71,22 @@ go run . config
 ```
 
 That flow asks for the minimum runtime settings Colin needs, keeps secrets as environment-variable references such as `$LINEAR_API_KEY`, and asks whether you also want webhook setup guidance.
+
+For the GitHub token itself, the fastest path is:
+
+```bash
+go run . setup github
+```
+
+That command prints a pre-filled GitHub fine-grained token link for the watched repo and the exact settings Colin expects:
+
+- resource owner: the repo owner or org
+- repository access: `Only select repositories`
+- selected repository: the watched repo
+- repository permissions: `Contents: Read and write` and `Pull requests: Read and write`
+- export target: `GITHUB_TOKEN`
+
+If fine-grained personal access tokens are blocked by org policy or approval flow, fall back to a classic personal access token with the `repo` scope. Classic tokens may also require `Configure SSO` after creation in orgs that use SAML SSO.
 
 Start Colin with the checked-in or newly generated workflow:
 
@@ -96,7 +113,7 @@ After public ingress is available, create or repair the watched project's Linear
 go run . setup linear
 ```
 
-Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses relevant `Issue` deliveries to queue best-effort immediate reconciliation. Polling remains the fallback path if a webhook is delayed or dropped.
+Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses watched-project Linear `Issue` `create` deliveries plus watched-project `Issue` `update` deliveries with scheduling-relevant field changes to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
 
 Linear metadata attachments point at `server.ui_url` when configured. If that is unset but Tailscale Serve proxies Colin from `/`, Colin uses the preferred Tailscale Serve URL for metadata links, favoring HTTPS when available; otherwise it falls back to the local loopback dashboard URL.
 

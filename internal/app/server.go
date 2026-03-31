@@ -30,14 +30,25 @@ type FunnelSetupProvider func(context.Context) (domain.FunnelSetupStatus, error)
 
 // LinearWebhookEvent captures the minimal webhook context needed to trigger orchestration.
 type LinearWebhookEvent struct {
-	DeliveryID   string
-	Event        string
-	Action       string
-	ResourceType string
+	DeliveryID    string
+	Event         string
+	Action        string
+	ResourceType  string
+	IssueID       string
+	ProjectID     string
+	ChangedFields []string
+}
+
+// LinearWebhookTriggerResult describes how the service handled a validated webhook delivery.
+type LinearWebhookTriggerResult struct {
+	Relevant   bool
+	Queued     bool
+	Coalesced  bool
+	Suppressed bool
 }
 
 // LinearWebhookTrigger queues any follow-up work for a validated webhook delivery.
-type LinearWebhookTrigger func(context.Context, LinearWebhookEvent) (queued bool, coalesced bool)
+type LinearWebhookTrigger func(context.Context, LinearWebhookEvent) LinearWebhookTriggerResult
 
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {

@@ -71,6 +71,18 @@ func NewManagerWithGitHubClient(cfg domain.ServiceConfig, logger *slog.Logger, c
 	return &Manager{cfg: cfg, logger: logger, github: client}
 }
 
+// ValidateGitHubAccess verifies that a configured GitHub token can authenticate before startup continues.
+func (m *Manager) ValidateGitHubAccess(ctx context.Context) error {
+	if m == nil || strings.TrimSpace(m.cfg.Repo.APIToken) == "" {
+		return nil
+	}
+	client, err := m.githubClient()
+	if err != nil {
+		return err
+	}
+	return client.ValidateAuth(ctx)
+}
+
 // Publish commits workspace changes, pushes the issue branch, and creates or reuses a PR.
 func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath string) (Result, error) {
 	branch, err := m.currentBranch(ctx, workspacePath)

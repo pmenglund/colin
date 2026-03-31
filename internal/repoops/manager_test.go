@@ -56,6 +56,35 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	}
 }
 
+func TestValidateGitHubAccessSkipsWhenTokenMissing(t *testing.T) {
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+
+	if err := manager.ValidateGitHubAccess(context.Background()); err != nil {
+		t.Fatalf("ValidateGitHubAccess() error = %v", err)
+	}
+	if fakeGitHub.ValidateAuthCallCount() != 0 {
+		t.Fatalf("ValidateAuthCallCount() = %d, want 0", fakeGitHub.ValidateAuthCallCount())
+	}
+}
+
+func TestValidateGitHubAccessChecksConfiguredToken(t *testing.T) {
+	cfg := testConfig()
+	cfg.Repo.APIToken = "test-token"
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.ValidateAuthReturns(errors.New("unauthorized"))
+	manager := repoops.NewManagerWithGitHubClient(cfg, testLogger(), fakeGitHub)
+
+	err := manager.ValidateGitHubAccess(context.Background())
+	if err == nil {
+		t.Fatal("ValidateGitHubAccess() error = nil, want unauthorized")
+	}
+	if fakeGitHub.ValidateAuthCallCount() != 1 {
+		t.Fatalf("ValidateAuthCallCount() = %d, want 1", fakeGitHub.ValidateAuthCallCount())
+	}
+}
+
 func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")

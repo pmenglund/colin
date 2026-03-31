@@ -329,6 +329,70 @@ func TestSetupTailscaleHelpExplainsPurpose(t *testing.T) {
 	}
 }
 
+func TestRunPassesWorkflowFlagToSetupGitHub(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupGitHub: func(cmd *cobra.Command, workflowPath string) int {
+			gotWorkflow = workflowPath
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "github", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup github --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+}
+
+func TestSetupGitHubHelpExplainsPurpose(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "github", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup github --help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	got := stdout.String()
+	for _, want := range []string{
+		"fine-grained personal access token",
+		"GITHUB_TOKEN",
+		"Pull requests",
+		"Contents",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help output = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 	t.Parallel()
 

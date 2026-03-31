@@ -328,9 +328,11 @@ type runnerStub struct {
 	attempt *int
 	issue   domain.Issue
 	result  codex.Result
+	runs    int
 }
 
 func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ func(codex.Event)) codex.Result {
+	s.runs++
 	s.issue = issue
 	if attempt != nil {
 		value := *attempt
@@ -478,6 +480,55 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	}
 	if _, ok := orch.pausedIssueStates["Todo"]; ok {
 		t.Fatalf("unexpected paused summary for Todo: %+v", orch.pausedIssueStates["Todo"])
+	}
+}
+
+func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo", "In Progress"},
+				TerminalStates: []string{"Done"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}},
+		running: map[string]*runningEntry{
+			"issue-1": {
+				issue: domain.Issue{
+					ID:         "issue-1",
+					Identifier: "COLIN-1",
+					Title:      "Wake fast",
+					State:      "Todo",
+				},
+			},
+		},
+		issueStates: map[string]int{
+			"Todo":        1,
+			"In Progress": 0,
+			"Done":        0,
+		},
+	}
+
+	orch.handleCodexEvent(context.Background(), codex.Event{
+		Event:      codex.EventIssueStateRefreshed,
+		IssueID:    "issue-1",
+		Identifier: "COLIN-1",
+		Timestamp:  time.Now().UTC(),
+		PrevState:  "Todo",
+		State:      "In Progress",
+	})
+
+	if got := orch.issueStates["Todo"]; got != 0 {
+		t.Fatalf("Todo count = %d, want 0", got)
+	}
+	if got := orch.issueStates["In Progress"]; got != 1 {
+		t.Fatalf("In Progress count = %d, want 1", got)
+	}
+	if got := orch.running["issue-1"].issue.State; got != "In Progress" {
+		t.Fatalf("running issue state = %q, want %q", got, "In Progress")
 	}
 }
 
@@ -1056,6 +1107,7 @@ func TestRequestRefreshCoalescesPendingRequests(t *testing.T) {
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		eventCh: make(chan any, 1),
 	}
+	orch.refreshReady.Store(true)
 
 	queued, coalesced := orch.RequestRefresh("first")
 	if !queued || coalesced {
@@ -1082,6 +1134,28 @@ func TestRequestRefreshCoalescesPendingRequests(t *testing.T) {
 
 	if !orch.refreshPending.Load() {
 		t.Fatal("refreshPending = false, want true until the refresh event is processed")
+	}
+}
+
+func TestRequestRefreshBeforeLoopReadyDoesNotQueue(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+	}
+
+	queued, coalesced := orch.RequestRefresh("before-start")
+	if queued || coalesced {
+		t.Fatalf("RequestRefresh() = (%t, %t), want (false, false)", queued, coalesced)
+	}
+	if orch.RefreshReady() {
+		t.Fatal("RefreshReady() = true, want false")
+	}
+	select {
+	case raw := <-orch.eventCh:
+		t.Fatalf("unexpected queued event: %T", raw)
+	default:
 	}
 }
 
@@ -1114,6 +1188,70 @@ func TestRunFetchesCandidatesImmediatelyBeforeFirstPollInterval(t *testing.T) {
 		issueStates:       map[string]int{},
 		pausedIssueStates: map[string]domain.PausedStateSummary{},
 		eventCh:           make(chan any, 4),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.Run(ctx)
+	}()
+
+	select {
+	case <-tracker.candidateInvoked:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("FetchCandidateIssues was not called immediately at startup")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not stop after cancellation")
+	}
+
+	if tracker.candidateCalls != 1 {
+		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+	}
+}
+
+func TestRunDoesNotDoubleFetchWhenRefreshWasRequestedBeforeLoopReady(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{
+		candidateInvoked: make(chan struct{}),
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Polling: domain.PollingConfig{Interval: time.Hour},
+			Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+			Tracker: domain.TrackerConfig{
+				Kind:         "linear",
+				APIKey:       "test-key",
+				ProjectSlug:  "test-project",
+				ActiveStates: []string{"Todo"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}, Tracker: tracker},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+		eventCh:           make(chan any, 4),
+	}
+
+	queued, coalesced := orch.RequestRefresh("before-start")
+	if queued || coalesced {
+		t.Fatalf("RequestRefresh() = (%t, %t), want (false, false)", queued, coalesced)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1206,6 +1344,107 @@ func TestRunProcessesRefreshRequestsImmediately(t *testing.T) {
 		t.Fatal("refresh-triggered candidate fetch did not happen")
 	}
 
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not stop after cancellation")
+	}
+}
+
+func TestRefreshDoesNotDispatchDuplicateWorkerForClaimedIssue(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Wake quickly",
+		State:      "Todo",
+	}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+		candidateCallCh: make(chan int, 4),
+	}
+	runner := &runnerStub{
+		invoked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Polling: domain.PollingConfig{Interval: time.Hour},
+				Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+				Tracker: domain.TrackerConfig{
+					Kind:         "linear",
+					APIKey:       "test-key",
+					ProjectSlug:  "test-project",
+					ActiveStates: []string{"Todo"},
+				},
+				Codex: domain.CodexConfig{Command: "codex"},
+			},
+			Tracker: tracker,
+			Runner:  runner,
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+		eventCh:           make(chan any, 8),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.Run(ctx)
+	}()
+
+	select {
+	case <-runner.invoked:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("initial dispatch did not start")
+	}
+
+	queued, coalesced := orch.RequestRefresh("webhook update")
+	if !queued || coalesced {
+		t.Fatalf("RequestRefresh() = (%t, %t), want (true, false)", queued, coalesced)
+	}
+
+	select {
+	case got := <-tracker.candidateCallCh:
+		if got != 1 {
+			t.Fatalf("first candidate call = %d, want 1", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("startup candidate fetch did not happen")
+	}
+
+	select {
+	case got := <-tracker.candidateCallCh:
+		if got != 2 {
+			t.Fatalf("second candidate call = %d, want 2", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("refresh-triggered candidate fetch did not happen")
+	}
+
+	if runner.runs != 1 {
+		t.Fatalf("runner runs = %d, want 1", runner.runs)
+	}
+	if len(orch.running) != 1 {
+		t.Fatalf("running count = %d, want 1", len(orch.running))
+	}
+
+	close(runner.release)
 	cancel()
 
 	select {

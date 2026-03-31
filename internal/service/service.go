@@ -18,6 +18,7 @@ import (
 	"github.com/pmenglund/colin/internal/app"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/githubauth"
 	"github.com/pmenglund/colin/internal/logbuffer"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/repoops"
@@ -32,6 +33,12 @@ type tailscaleInspector interface {
 	Resolve(context.Context, tsdiag.Options) domain.FunnelSetupStatus
 	ResolveUIBaseURL(context.Context, *int) string
 }
+
+type watchedProjectIDProvider interface {
+	WatchedProjectID() string
+}
+
+const githubStartupValidationTimeout = 10 * time.Second
 
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
 type Service struct {
@@ -133,6 +140,9 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	}
 	manager := workspace.NewManager(cfg, logger)
 	repoManager := repoops.NewManager(cfg, logger)
+	if err := validateGitHubAccess(cfg, repoManager); err != nil {
+		return orchestrator.Runtime{}, fmt.Errorf("validate github access: %w", err)
+	}
 	runner := codex.NewRunner(cfg, def, trackerClient, manager, logger)
 	logger.Info(
 		"runtime loaded",
@@ -201,6 +211,15 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 	}
 }
 
+func validateGitHubAccess(cfg domain.ServiceConfig, manager *repoops.Manager) error {
+	if strings.TrimSpace(cfg.Repo.APIToken) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), githubStartupValidationTimeout)
+	defer cancel()
+	return manager.ValidateGitHubAccess(ctx)
+}
+
 func (s *Service) startHTTPServer(ctx context.Context) error {
 	if s.serverPort == nil {
 		return nil
@@ -226,9 +245,26 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 			}
 			return s.logBuffer.Snapshot(minLevel), nil
 		},
-		func(_ context.Context, event app.LinearWebhookEvent) (bool, bool) {
+		func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
+			runtime := s.currentRuntime()
+			if !shouldQueueImmediateLinearRefresh(event, watchedProjectID(runtime.Tracker)) {
+				return app.LinearWebhookTriggerResult{}
+			}
 			reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
-			return s.orch.RequestRefresh(reason)
+			if event.IssueID != "" {
+				reason += " issue_id=" + event.IssueID
+			}
+			if event.ProjectID != "" {
+				reason += " project_id=" + event.ProjectID
+			}
+			queued, coalesced := s.orch.RequestRefresh(reason)
+			if queued {
+				return app.LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: coalesced}
+			}
+			if !s.orch.RefreshReady() {
+				return app.LinearWebhookTriggerResult{Relevant: true, Suppressed: true}
+			}
+			return app.LinearWebhookTriggerResult{Relevant: true}
 		},
 		func(context.Context) string {
 			return s.currentRuntime().Config.Tracker.WebhookSigningSecret
@@ -361,6 +397,41 @@ func webhookPublicURL(cfg domain.ServerConfig) string {
 	return strings.TrimSpace(cfg.PublicURL)
 }
 
+func watchedProjectID(client any) string {
+	provider, ok := client.(watchedProjectIDProvider)
+	if !ok || provider == nil {
+		return ""
+	}
+	return strings.TrimSpace(provider.WatchedProjectID())
+}
+
+func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProjectID string) bool {
+	if strings.TrimSpace(watchedProjectID) == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.ProjectID), watchedProjectID) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(event.Action)) {
+	case "create":
+		return true
+	case "update":
+		return hasRelevantIssueChange(event.ChangedFields)
+	default:
+		return false
+	}
+}
+
+func hasRelevantIssueChange(changedFields []string) bool {
+	for _, field := range changedFields {
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "stateid", "projectid", "teamid", "priority", "title", "description", "branchname", "labelids":
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) applyUIBaseURLResolver(runtime orchestrator.Runtime) {
 	client, ok := runtime.Tracker.(*linear.Client)
 	if !ok || client == nil {
@@ -399,6 +470,10 @@ func DescribeStartupError(err error) string {
 	switch {
 	case errors.Is(err, workflow.ErrMissingWorkflowFile):
 		return fmt.Sprintf("workflow file not found: %v", err)
+	case errors.Is(err, ErrMissingGitHubRepository):
+		return fmt.Sprintf("github repository not found: %v", err)
+	case errors.Is(err, githubauth.ErrUnsupportedRepositoryURL):
+		return fmt.Sprintf("unsupported GitHub repository URL: %v", err)
 	default:
 		return err.Error()
 	}

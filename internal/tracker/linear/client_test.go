@@ -85,6 +85,9 @@ func TestNewValidatesWorkflowStates(t *testing.T) {
 	if client == nil {
 		t.Fatal("New() returned nil client")
 	}
+	if got := client.WatchedProjectID(); got != "project-1" {
+		t.Fatalf("WatchedProjectID() = %q, want %q", got, "project-1")
+	}
 }
 
 func TestNewFailsWhenWorkflowStateMissing(t *testing.T) {

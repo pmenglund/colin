@@ -47,6 +47,11 @@ func newGoGitHubClient(token string, httpClient *http.Client, baseURL string, lo
 	return &goGitHubClient{client: client, logger: logger}, nil
 }
 
+func (c *goGitHubClient) ValidateAuth(ctx context.Context) error {
+	_, _, err := c.client.Users.Get(ctx, "")
+	return err
+}
+
 func (c *goGitHubClient) PullRequestByHead(ctx context.Context, owner, repo, head, base string) (*GitHubPullRequest, error) {
 	for _, queryHead := range pullRequestHeadQueries(owner, head) {
 		prs, _, err := c.client.PullRequests.List(ctx, owner, repo, &githubapi.PullRequestListOptions{

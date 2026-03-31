@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/pmenglund/colin/internal/githubauth"
 )
 
 var ErrAborted = errors.New("bootstrap_aborted")
@@ -34,6 +36,7 @@ type Answers struct {
 // Prerequisites summarizes the local environment checks shown during setup.
 type Prerequisites struct {
 	LinearAPIKeyConfigured bool
+	GitHubTokenConfigured  bool
 	GitAvailable           bool
 	CodexAvailable         bool
 }
@@ -76,6 +79,9 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 	repoURL, err := promptRequiredString(reader, out, "Repository URL", defaults.RepoURL)
 	if err != nil {
 		return Result{}, err
+	}
+	if !prereqs.GitHubTokenConfigured {
+		printGitHubSetupGuidance(out, repoURL)
 	}
 	baseRef, err := promptRequiredString(reader, out, "Base branch", defaults.BaseRef)
 	if err != nil {
@@ -164,6 +170,7 @@ type detectedDefaults struct {
 func detectPrerequisites() Prerequisites {
 	return Prerequisites{
 		LinearAPIKeyConfigured: strings.TrimSpace(os.Getenv("LINEAR_API_KEY")) != "",
+		GitHubTokenConfigured:  firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")) != "",
 		GitAvailable:           commandExists("git"),
 		CodexAvailable:         commandExists("codex"),
 	}
@@ -205,6 +212,7 @@ func commandExists(name string) bool {
 func printPrerequisiteSummary(out io.Writer, prereqs Prerequisites) {
 	fmt.Fprintln(out, "Prerequisite check:")
 	fmt.Fprintf(out, "- LINEAR_API_KEY configured: %s\n", yesNo(prereqs.LinearAPIKeyConfigured))
+	fmt.Fprintf(out, "- GITHUB_TOKEN or GH_TOKEN configured: %s\n", yesNo(prereqs.GitHubTokenConfigured))
 	fmt.Fprintf(out, "- git available: %s\n", yesNo(prereqs.GitAvailable))
 	fmt.Fprintf(out, "- codex available: %s\n", yesNo(prereqs.CodexAvailable))
 	fmt.Fprintln(out)
@@ -216,6 +224,11 @@ func printCompletion(out io.Writer, result Result, autoStart bool) {
 		fmt.Fprintln(out, "LINEAR_API_KEY is already configured in this shell.")
 	} else {
 		fmt.Fprintln(out, "Next step: export LINEAR_API_KEY in your shell before running Colin.")
+	}
+	if result.Prereqs.GitHubTokenConfigured {
+		fmt.Fprintln(out, "GITHUB_TOKEN or GH_TOKEN is already configured in this shell.")
+	} else {
+		fmt.Fprintln(out, "Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`. Run `colin setup github` for the exact token settings.")
 	}
 	if !result.Prereqs.CodexAvailable {
 		fmt.Fprintln(out, "Warning: `codex` was not found in PATH. Install or expose Codex before expecting Colin to launch coding runs.")
@@ -232,6 +245,27 @@ func printCompletion(out io.Writer, result Result, autoStart bool) {
 	} else {
 		fmt.Fprintln(out, "Webhook setup skipped.")
 	}
+}
+
+func printGitHubSetupGuidance(out io.Writer, repoURL string) {
+	details, err := githubSetupDetails(repoURL)
+	if err != nil {
+		fmt.Fprintln(out, "GitHub token setup:")
+		fmt.Fprintln(out, "- Colin recommends exporting GITHUB_TOKEN before moving issues into `Review` or `Merge`.")
+		fmt.Fprintln(out, "- Run `colin setup github` after configuration for the exact token settings.")
+		fmt.Fprintln(out)
+		return
+	}
+	fmt.Fprintln(out, githubauth.RenderInstructions(details, "colin setup github"))
+	fmt.Fprintln(out)
+}
+
+func githubSetupDetails(repoURL string) (githubauth.SetupDetails, error) {
+	repo, err := githubauth.ParseRepositoryURL(repoURL)
+	if err != nil {
+		return githubauth.SetupDetails{}, err
+	}
+	return githubauth.BuildSetupDetails(repo), nil
 }
 
 func confirmOverwrite(reader *bufio.Reader, out io.Writer, workflowPath string) (bool, error) {

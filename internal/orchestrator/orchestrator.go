@@ -35,6 +35,9 @@ func (o *Orchestrator) RequestRefresh(reason string) (queued bool, coalesced boo
 	if o == nil {
 		return false, false
 	}
+	if !o.refreshReady.Load() {
+		return false, false
+	}
 	if !o.refreshPending.CompareAndSwap(false, true) {
 		return true, true
 	}
@@ -47,6 +50,14 @@ func (o *Orchestrator) RequestRefresh(reason string) (queued bool, coalesced boo
 	}
 }
 
+// RefreshReady reports whether the orchestrator loop is ready to accept immediate refresh requests.
+func (o *Orchestrator) RefreshReady() bool {
+	if o == nil {
+		return false
+	}
+	return o.refreshReady.Load()
+}
+
 // UpdateRuntime swaps in a reloaded runtime configuration for future scheduling decisions.
 func (o *Orchestrator) UpdateRuntime(runtime Runtime) {
 	o.eventCh <- configUpdatedEvent{runtime: runtime}
@@ -56,6 +67,7 @@ func (o *Orchestrator) UpdateRuntime(runtime Runtime) {
 func (o *Orchestrator) Run(ctx context.Context) error {
 	o.loopStarted.Store(true)
 	defer o.loopStarted.Store(false)
+	defer o.refreshReady.Store(false)
 
 	o.logger.Info(
 		"orchestrator started",
@@ -66,6 +78,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 	tick := time.NewTimer(o.runtime.Config.Polling.Interval)
 	defer tick.Stop()
+	o.refreshReady.Store(true)
 	for {
 		select {
 		case <-ctx.Done():
@@ -408,6 +421,9 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 	entry.session.LastCodexEvent = event.Event
 	entry.session.LastCodexMessage = event.Message
 	entry.session.LastCodexTimestamp = &event.Timestamp
+	if event.Event == codex.EventIssueStateRefreshed {
+		o.applyObservedIssueStateTransition(event.PrevState, event.State)
+	}
 	if event.State != "" {
 		entry.issue.State = event.State
 	}
@@ -455,6 +471,43 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 			"total_tokens", entry.session.CodexTotalTokens,
 		)
 	}
+}
+
+func (o *Orchestrator) applyObservedIssueStateTransition(previousState string, currentState string) {
+	previousKey := config.StateKey(previousState)
+	currentKey := config.StateKey(currentState)
+	if previousKey == "" || currentKey == "" || previousKey == currentKey {
+		return
+	}
+
+	trackedStates := trackedStateNames(o.runtime.Config)
+	if len(trackedStates) == 0 {
+		return
+	}
+	if !config.ContainsState(trackedStates, previousState) || !config.ContainsState(trackedStates, currentState) {
+		return
+	}
+
+	if o.issueStates == nil {
+		o.issueStates = map[string]int{}
+	}
+	for state, count := range o.issueStates {
+		if config.StateKey(state) != previousKey {
+			continue
+		}
+		if count > 0 {
+			o.issueStates[state] = count - 1
+		}
+		break
+	}
+	for state := range o.issueStates {
+		if config.StateKey(state) != currentKey {
+			continue
+		}
+		o.issueStates[state]++
+		return
+	}
+	o.issueStates[currentState]++
 }
 
 func (o *Orchestrator) appendOutput(entry *runningEntry, event codex.Event) {

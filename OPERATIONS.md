@@ -13,7 +13,7 @@ Colin is this repository's Go implementation of the service model described by [
 Colin runs as a long-lived process:
 
 1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
-2. It polls Linear for candidate issues in the configured project and tracked states, and it also uses relevant Linear issue webhooks to trigger a best-effort immediate reconciliation between poll intervals.
+2. It polls Linear for candidate issues in the configured project and tracked states, and it also uses watched-project Linear issue webhooks to trigger a best-effort immediate reconciliation between poll intervals.
 3. It creates or reuses a workspace for each issue under the configured workspace root.
 4. When ExecPlan support is enabled, it decides whether each issue should be handled as a one-shot change or should get a stored ExecPlan, persists that decision on the issue, and only creates a plan for the second case.
 5. It runs Codex for issues in coding states.
@@ -35,7 +35,7 @@ This uses `--workflow WORKFLOW.md` implicitly. If that default file is missing, 
 go run . config
 ```
 
-That setup flow asks for the Linear project slug, repository URL, base branch, workspace root, and server port. It deliberately keeps secrets out of `WORKFLOW.md`: the generated file still references `$LINEAR_API_KEY` and `$LINEAR_WEBHOOK_SECRET`, so operators should export those variables in their shell or environment manager.
+That setup flow asks for the Linear project slug, repository URL, base branch, workspace root, and server port. It deliberately keeps secrets out of `WORKFLOW.md`: the generated file references `$LINEAR_API_KEY`, `$LINEAR_WEBHOOK_SECRET`, and `$GITHUB_TOKEN`, so operators should export those variables in their shell or environment manager.
 
 To point Colin at a different workflow file, pass the shared `--workflow` flag:
 
@@ -65,7 +65,26 @@ To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pas
 go run . --port 9999
 ```
 
-GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`.
+GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`. When a token is configured, Colin validates it during startup and workflow reload with an authenticated GitHub API call so invalid or expired credentials fail before publish or merge work begins.
+
+The easiest way to create the right token is:
+
+```bash
+go run . setup github
+```
+
+That command inspects the watched repo and prints a pre-filled GitHub fine-grained token URL plus the exact settings Colin expects:
+
+- token type: fine-grained personal access token
+- resource owner: the watched repo owner or org
+- repository access: `Only select repositories`
+- selected repository: the watched repo
+- repository permissions: `Contents: Read and write` and `Pull requests: Read and write`
+- recommended export target: `GITHUB_TOKEN`
+
+GitHub still requires you to choose the repository in the UI before generating the token. Colin also accepts `GH_TOKEN` and `repo.api_token`, but `GITHUB_TOKEN` is the primary documented path because the generated workflow already references it.
+
+If fine-grained personal access tokens are blocked by org policy, require approval you do not want to wait on, or are unavailable for your repository access model, fall back to a classic personal access token with the `repo` scope. In organizations that use SAML SSO, classic tokens may need `Configure SSO` after creation before Colin can use them.
 
 If operators need explicit URLs instead of Colin's defaults, set `server.webhook_public_url` for externally reachable webhook URLs and `server.ui_url` for operator-facing dashboard or metadata links. `server.public_url` remains as a deprecated fallback for the webhook public URL.
 
@@ -90,6 +109,8 @@ Because `--workflow` is a persistent root flag, the same override also applies t
 ```bash
 go run . --workflow /path/to/WORKFLOW.md setup tailscale
 ```
+
+`setup github` accepts the same `--workflow` override. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
 
 ## Detailed Workflow Behavior
 
@@ -139,7 +160,7 @@ Colin does not recompute the planning strategy when an issue returns from `Revie
 
 Additional `Todo` rule:
 
-- Moving an issue into `Todo` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval. Polling still remains the fallback if a webhook is delayed or dropped.
+- Moving an issue into `Todo` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval when that issue belongs to the watched project and the webhook delivery includes the scheduling-relevant change. Polling still remains the fallback if a webhook is delayed or dropped.
 - Colin will not dispatch a `Todo` issue if any blocker is not in a terminal state.
 - Colin will not dispatch any issue carrying the `paused` label.
 - If the issue is returning from `Review` and already has an associated PR, Colin first polls that GitHub PR for unresolved review threads. Because GitHub review feedback can appear late, Colin keeps the issue in `Todo` and posts `[colin]` status updates in Linear until those threads appear or the sync window times out.
@@ -203,7 +224,7 @@ This is configured in `WORKFLOW.md` under `repo.merge_states` and currently is:
 
 When an issue is moved to `Merge`, Colin:
 
-- Moving an issue into `Merge` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval. Polling still remains the fallback if a webhook is delayed or dropped.
+- Moving an issue into `Merge` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval when that issue belongs to the watched project and the webhook delivery includes the scheduling-relevant change. Polling still remains the fallback if a webhook is delayed or dropped.
 - ensures the branch and PR exist
 - if `repo.codex_pr_reviews_enabled` is `true`, waits in `Merge` until Codex has picked up the PR review and then checks the PR for Codex web review status before merging
 - if `repo.codex_pr_reviews_enabled` is `true`, keeps the issue in `Merge` while `chatgpt-codex-connector` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that reviewer remain
@@ -266,7 +287,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for the Colin port and derives the public webhook base URL from that Funnel. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
-- Relevant Linear `Issue` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals so Colin can react faster to state changes such as `Todo` and `Merge`.
+- Watched-project Linear `Issue` `create` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals, and watched-project `Issue` `update` deliveries can do the same when they include scheduling-relevant field changes such as `stateId`, `projectId`, `teamId`, `priority`, `title`, `description`, `branchName`, or `labelIds`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
 - `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
 - The dashboard shows current running issues, queued retries, token totals, the latest rate-limit snapshot, and paused issue indicators inside the `Linear issues` card. Clicking a paused indicator opens a Linear search for the paused issues in that state. The embedded browser refresh keeps the task fragment current without reloading the full page shell, and if a refresh fails the toolbar marks the dashboard as stale so operators know they are looking at the last successful snapshot.
@@ -328,4 +349,4 @@ The setup page and CLI both show the final URLs you will paste into provider web
 - GitHub: `<public-base-url>/webhooks/github`
 - Linear: `<public-base-url>/webhooks/linear`
 
-Colin now acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and queues an immediate best-effort reconciliation for relevant Linear `Issue` webhook deliveries. Polling remains active as the fallback path when a webhook is delayed or dropped. GitHub webhook paths remain reserved and still return `501 Not Implemented`. The readiness endpoint is live today at `/webhooks/readyz`.
+Colin now acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and queues an immediate best-effort reconciliation only for watched-project Linear `Issue` `create` deliveries and watched-project `Issue` `update` deliveries that include scheduling-relevant field changes. The webhook never dispatches a worker directly; it only wakes the orchestrator's normal event loop, which still applies the usual `running` and `claimed` duplicate-work guards. If a webhook arrives before the orchestrator is ready to accept immediate refreshes, Colin suppresses the fast path and relies on the normal startup or polling reconciliation instead. Polling remains active as the fallback path when a webhook is delayed or dropped. GitHub webhook paths remain reserved and still return `501 Not Implemented`. The readiness endpoint is live today at `/webhooks/readyz`.

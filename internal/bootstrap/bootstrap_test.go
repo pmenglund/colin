@@ -28,6 +28,7 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		"api_key: $LINEAR_API_KEY",
 		"webhook_signing_secret: $LINEAR_WEBHOOK_SECRET",
 		"codex_pr_reviews_enabled: false",
+		"api_token: $GITHUB_TOKEN",
 		`repo_url: "git@github.com:acme/repo.git"`,
 		`base_ref: "main"`,
 		"port: 7777",
@@ -158,5 +159,74 @@ func TestRunPrintsAutoStartWebhookGuidance(t *testing.T) {
 	}
 	if !strings.Contains(got, "run `colin setup linear`") {
 		t.Fatalf("output = %q, want setup linear guidance", got)
+	}
+}
+
+func TestRunPrintsGitHubSetupGuidanceWhenTokenMissing(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	tempDir := t.TempDir()
+	var output bytes.Buffer
+	input := strings.NewReader(strings.Join([]string{
+		"project-1",
+		"git@github.com:acme/repo.git",
+		"main",
+		"",
+		"8888",
+		"n",
+		"y",
+		"",
+	}, "\n"))
+
+	_, err := Run(input, &output, Options{
+		WorkflowPath: filepath.Join(tempDir, "WORKFLOW.md"),
+		WorkingDir:   tempDir,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got := output.String()
+	for _, want := range []string{
+		"GITHUB_TOKEN or GH_TOKEN configured: no",
+		"fine-grained personal access token",
+		"Contents: Read and write; Pull requests: Read and write",
+		"colin setup github",
+		"Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRunPrintsGitHubTokenConfiguredWhenPresent(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+
+	tempDir := t.TempDir()
+	var output bytes.Buffer
+	input := strings.NewReader(strings.Join([]string{
+		"project-1",
+		"git@github.com:acme/repo.git",
+		"main",
+		"",
+		"8888",
+		"n",
+		"y",
+		"",
+	}, "\n"))
+
+	_, err := Run(input, &output, Options{
+		WorkflowPath: filepath.Join(tempDir, "WORKFLOW.md"),
+		WorkingDir:   tempDir,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "GITHUB_TOKEN or GH_TOKEN is already configured in this shell.") {
+		t.Fatalf("output = %q, want configured token message", got)
 	}
 }
