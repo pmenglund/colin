@@ -2,6 +2,12 @@
 
 This document holds the detailed operational and workflow reference that used to live in the root [README.md](README.md).
 
+## Colin and Symphony
+
+Colin is this repository's Go implementation of the service model described by [openai/symphony](https://github.com/openai/symphony). The upstream Symphony project defines the language-agnostic orchestration model and also ships an experimental reference implementation; Colin applies that model to this repository's current Linear, GitHub, and Codex workflow.
+
+`SPEC.md` is the local copy of the Symphony service specification that Colin uses as a design reference and conformance checklist when the service is changed. It is not loaded at runtime. The file Colin actually reads at startup and on reload is `WORKFLOW.md`, whose front matter provides typed runtime configuration and whose Markdown body provides the prompt template for coding runs.
+
 ## High-Level Flow
 
 Colin runs as a long-lived process:

@@ -1,12 +1,60 @@
 # Colin
 
-Colin is a Go service that watches a Linear project, prepares a per-issue workspace, runs Codex against issues in active states, hands successful runs to either `Review` or `Refine`, and handles publish and merge automation from there.
+Colin turns a Linear board into a managed delivery pipeline for coding work. Instead of manually driving one task at a time, you can keep many issues moving in parallel while Colin picks up ready work, hands implementation off to [Codex](https://platform.openai.com/docs/codex/overview), maintains a dedicated workspace for each issue, and pushes each task toward the next useful outcome.
 
-## Colin and Symphony
+The value is operational leverage: more tasks advancing at once, less branch and PR babysitting, and clearer handoffs for the moments where human judgment actually matters. Colin also works best with [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled on your GitHub repos so reviewable PRs get an additional automated pass before merge; OpenAI's setup instructions are [here](https://help.openai.com/en/articles/11369540/).
 
-Colin is this repository's Go implementation of the service model described by [openai/symphony](https://github.com/openai/symphony). The upstream Symphony project defines the language-agnostic orchestration model and also ships an experimental reference implementation; Colin applies that model to this repository's current Linear, GitHub, and Codex workflow.
+## Prerequisites
 
-`SPEC.md` is the local copy of the Symphony service specification that Colin uses as a design reference and conformance checklist when the service is changed. It is not loaded at runtime. The file Colin actually reads at startup and on reload is `WORKFLOW.md`, whose front matter provides typed runtime configuration and whose Markdown body provides the prompt template for coding runs.
+Before you run Colin, make sure you have:
+
+- access to [Codex](https://platform.openai.com/docs/codex/overview) and a GitHub account or organization connected to it
+- [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests
+- a Linear project and workflow with the states Colin uses for active work and handoffs
+- public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md)
+
+## What Using Colin Looks Like
+
+Put work into `Todo`, let Colin pull it into `In Progress`, and let the board tell you what needs attention. Colin can keep multiple issues moving at the same time, route ready work to review, route unclear work to clarification, and finish merges once a PR is approved.
+
+![Linear board showing Colin-managed issues moving through active and handoff states](docs/board.png)
+
+Colin actively works issues in these coding states:
+
+- `Todo`
+- `In Progress`
+
+When Colin starts a `Todo` issue, it moves it to `In Progress`, keeps retrying while the issue remains active, and stops work if the issue leaves the active state set.
+
+Colin uses these handoff states:
+
+- `Review`: Colin prepares the branch and pull request for human review. Human action is required to review the PR and then move the issue either back to `Todo` for more work or forward to `Merge`.
+- `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`.
+- `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
+
+Colin treats these as terminal states and stops work when an issue enters them:
+
+- `Done`
+- `Merged`
+- `Closed`
+- `Cancelled`
+- `Canceled`
+- `Duplicate`
+
+## Operate Many Tasks At Once
+
+Colin is built to supervise a queue, not a single foreground session. It keeps one workspace per issue, tracks retries and rate limits, and gives operators a live dashboard so they can monitor fleet-level progress instead of watching individual coding runs.
+
+![Colin dashboard showing active runs, workspace status, and API snapshot](docs/ui.png)
+
+## How Colin Works
+
+Colin runs as a long-lived orchestrator:
+
+1. It watches the configured Linear project for issues in active states.
+2. It creates or reuses a per-issue workspace so work can continue cleanly across retries and follow-up turns.
+3. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
+4. It posts progress back to Linear and exposes a local dashboard for operators.
 
 ## Getting Started
 
@@ -33,43 +81,6 @@ After public ingress is available, create or repair the watched project's Linear
 ```bash
 go run . setup linear
 ```
-
-## How Colin Works
-
-Colin runs as a long-lived orchestrator:
-
-1. It loads `WORKFLOW.md` for runtime configuration and the prompt template.
-2. It polls Linear for issues in the configured project and tracked states.
-3. It creates or reuses one workspace per issue under the configured workspace root.
-4. When ExecPlan support is enabled, it decides once whether the issue is a one-shot change or needs a stored ExecPlan and reuses that decision on later turns.
-5. It runs Codex for issues in active coding states.
-6. It moves successful coding work into `Review`, or into `Refine` when human clarification is still needed.
-7. It performs publish and merge automation for issues in the configured handoff states.
-8. It logs progress locally and posts high-level progress updates back to Linear.
-
-## Linear State Handling
-
-Colin actively works issues in these coding states:
-
-- `Todo`
-- `In Progress`
-
-When Colin starts a `Todo` issue, it moves it to `In Progress`, keeps retrying while the issue remains active, and stops work if the issue leaves the active state set.
-
-Colin uses these handoff states:
-
-- `Review`: Colin prepares the branch and pull request for human review. Human action is required to review the PR and then move the issue either back to `Todo` for more work or forward to `Merge`.
-- `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`.
-- `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
-
-Colin treats these as terminal states and stops work when an issue enters them:
-
-- `Done`
-- `Merged`
-- `Closed`
-- `Cancelled`
-- `Canceled`
-- `Duplicate`
 
 ## Further Reading
 
