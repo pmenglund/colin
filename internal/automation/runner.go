@@ -1050,12 +1050,8 @@ func (r *Runner) finalizeReviewThreads(ctx context.Context, issue domain.Issue, 
 	return issue, pr, handled, 0, buildReviewReadySummary(summary, pr, handled, 0), false
 }
 
-func buildReviewThreadReplyBody(summary string) string {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return "[colin] Addressed in the latest update."
-	}
-	return "[colin] Addressed in the latest update.\n\n" + summary
+func buildReviewThreadReplyBody(_ string) string {
+	return "[colin] Addressed in the latest update. See the Linear issue comment for the before/after summary and verification details."
 }
 
 func buildReviewReadySummary(summary string, pr *domain.PullRequestRef, handled int, remaining int) string {
