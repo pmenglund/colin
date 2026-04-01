@@ -46,6 +46,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 
 - `main.go` - process entrypoint
 - `internal/service/` - service startup, logging, workflow loading, and runtime wiring
+- `internal/tui/` - Bubble Tea runtime dashboard for interactive `colin` sessions
 - `internal/workflow/` - `WORKFLOW.md` loader and prompt rendering
 - `internal/config/` - typed runtime config and validation
 - `internal/tracker/` - tracker interface

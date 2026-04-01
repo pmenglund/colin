@@ -134,6 +134,24 @@ func (s *Service) webhookBaseURL() string {
 	return s.webhookURL
 }
 
+// Snapshot returns the current in-memory orchestrator snapshot.
+func (s *Service) Snapshot(ctx context.Context) (domain.Snapshot, error) {
+	return s.orch.Snapshot(ctx)
+}
+
+// BufferedLogs returns the current in-memory structured log buffer.
+func (s *Service) BufferedLogs(_ context.Context, minLevel *slog.Level) (domain.BufferedLogSnapshot, error) {
+	if s.logBuffer == nil {
+		return domain.BufferedLogSnapshot{}, nil
+	}
+	return s.logBuffer.Snapshot(minLevel), nil
+}
+
+// FunnelSetupStatus returns the current Funnel readiness snapshot.
+func (s *Service) FunnelSetupStatus(ctx context.Context) domain.FunnelSetupStatus {
+	return s.funnelSetupStatus(ctx)
+}
+
 func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.Runtime, error) {
 	loader := workflow.Loader{}
 	def, err := loader.Load(path)

@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,12 +13,33 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/service"
+	"github.com/pmenglund/colin/internal/tui"
 )
 
 var (
 	setupStatusOKStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	setupStatusErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	setupStatusWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+)
+
+type runtimeService interface {
+	Run(context.Context) error
+	DashboardEnabled() bool
+	DashboardURL() string
+	FunnelSetupURL() string
+	Snapshot(context.Context) (domain.Snapshot, error)
+	BufferedLogs(context.Context, *slog.Level) (domain.BufferedLogSnapshot, error)
+	FunnelSetupStatus(context.Context) domain.FunnelSetupStatus
+}
+
+var (
+	newRuntimeService = func(logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+		return service.New(logger, workflowPath, options...)
+	}
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, stop func()) error {
+		return tui.Run(ctx, in, out, source, serviceErrCh, stop)
+	}
+	runtimeIsInteractiveTerminal = isInteractiveTerminal
 )
 
 func runRoot(cmd *cobra.Command, opts rootOptions) int {
@@ -26,7 +49,7 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 	}
 
 	logger := service.NewDefaultLogger(opts.verbose)
-	svc, err := service.New(logger, opts.workflowPath, options...)
+	svc, err := newRuntimeService(logger, opts.workflowPath, options...)
 	if err != nil {
 		logger.Error("startup failed", "error", service.DescribeStartupError(err))
 		return 1
@@ -40,15 +63,29 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 		runErrCh <- svc.Run(ctx)
 	}()
 
-	if !opts.verbose {
-		exited, err := announceStartup(cmd, svc.DashboardEnabled(), svc.DashboardURL, svc.FunnelSetupURL, runErrCh)
-		if exited {
-			if err != nil {
-				logger.Error("service exited abnormally", "error", err)
-				return 1
-			}
-			return 0
+	if opts.verbose {
+		if err := <-runErrCh; err != nil {
+			logger.Error("service exited abnormally", "error", err)
+			return 1
 		}
+		return 0
+	}
+
+	if runtimeIsInteractiveTerminal(cmd.InOrStdin(), cmd.OutOrStdout()) {
+		if err := runRuntimeTUI(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), svc, runErrCh, stop); err != nil {
+			logger.Error("service exited abnormally", "error", err)
+			return 1
+		}
+		return 0
+	}
+
+	exited, err := announceStartup(cmd, svc.DashboardEnabled(), svc.DashboardURL, svc.FunnelSetupURL, runErrCh)
+	if exited {
+		if err != nil {
+			logger.Error("service exited abnormally", "error", err)
+			return 1
+		}
+		return 0
 	}
 
 	if err := <-runErrCh; err != nil {
