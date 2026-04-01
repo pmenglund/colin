@@ -36,6 +36,7 @@ type Orchestrator struct {
 	loopStarted       atomic.Bool
 	refreshReady      atomic.Bool
 	refreshPending    atomic.Bool
+	snapshot          atomic.Value
 	running           map[string]*runningEntry
 	claimed           map[string]struct{}
 	retrying          map[string]*retryState
@@ -88,4 +89,3 @@ type workerExitedEvent struct {
 }
 type refreshRequestedEvent struct{ reason string }
 type retryFiredEvent struct{ issueID string }
-type snapshotRequestEvent struct{ response chan domain.Snapshot }

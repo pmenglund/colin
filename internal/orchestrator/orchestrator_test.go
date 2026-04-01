@@ -565,6 +565,102 @@ func TestSnapshotClonesPausedIssueStates(t *testing.T) {
 	}
 }
 
+func TestSnapshotReturnsCachedSnapshotWithoutEventLoopRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{Tracker: &trackerStub{}},
+		issueStates: map[string]int{
+			"Review": 2,
+		},
+		pausedIssueStates: map[string]domain.PausedStateSummary{
+			"Review": {
+				Count: 1,
+				URL:   "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+			},
+		},
+	}
+	orch.publishSnapshot(time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC))
+	orch.loopStarted.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	snapshot, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v, want nil", err)
+	}
+	if got := snapshot.IssueStates["Review"]; got != 2 {
+		t.Fatalf("Snapshot().IssueStates[Review] = %d, want 2", got)
+	}
+	if got := snapshot.PausedIssueStates["Review"].Count; got != 1 {
+		t.Fatalf("Snapshot().PausedIssueStates[Review].Count = %d, want 1", got)
+	}
+}
+
+func TestSnapshotClonesCachedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	lastEventAt := time.Date(2026, 3, 30, 12, 1, 0, 0, time.UTC)
+	url := "https://linear.app/example/issue/COLIN-2/waiting-on-review"
+	orch := &Orchestrator{
+		runtime: Runtime{Tracker: &trackerStub{}},
+		running: map[string]*runningEntry{
+			"issue-1": {
+				issue: domain.Issue{
+					ID:         "issue-1",
+					Identifier: "COLIN-2",
+					Title:      "Review issue",
+					URL:        &url,
+					State:      "Review",
+				},
+				identifier: "COLIN-2",
+				startedAt:  time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC),
+				session:    domain.LiveSession{},
+				outputLog: []domain.OutputLog{{
+					Timestamp: time.Date(2026, 3, 30, 12, 0, 30, 0, time.UTC),
+					Event:     "other_message",
+					Message:   "hello",
+				}},
+			},
+		},
+		issueStates: map[string]int{"Review": 1},
+	}
+	orch.running["issue-1"].session.LastCodexTimestamp = &lastEventAt
+	orch.publishSnapshot(time.Date(2026, 3, 30, 12, 2, 0, 0, time.UTC))
+	orch.loopStarted.Store(true)
+
+	first, err := orch.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v, want nil", err)
+	}
+	first.Running[0].Identifier = "MUTATED"
+	*first.Running[0].URL = "https://example.invalid"
+	*first.Running[0].LastEventAt = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	first.Running[0].OutputLog[0].Message = "changed"
+	first.IssueStates["Review"] = 99
+
+	second, err := orch.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() second error = %v, want nil", err)
+	}
+	if got := second.Running[0].Identifier; got != "COLIN-2" {
+		t.Fatalf("cached Identifier = %q, want COLIN-2", got)
+	}
+	if got := *second.Running[0].URL; got != url {
+		t.Fatalf("cached URL = %q, want %q", got, url)
+	}
+	if got := *second.Running[0].LastEventAt; !got.Equal(lastEventAt) {
+		t.Fatalf("cached LastEventAt = %v, want %v", got, lastEventAt)
+	}
+	if got := second.Running[0].OutputLog[0].Message; got != "hello" {
+		t.Fatalf("cached OutputLog message = %q, want hello", got)
+	}
+	if got := second.IssueStates["Review"]; got != 1 {
+		t.Fatalf("cached IssueStates[Review] = %d, want 1", got)
+	}
+}
+
 func TestBuildPausedIssueSearchURL(t *testing.T) {
 	t.Parallel()
 

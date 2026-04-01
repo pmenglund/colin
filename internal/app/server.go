@@ -16,6 +16,8 @@ import (
 	"github.com/pmenglund/colin/internal/ui"
 )
 
+const projectURL = "https://github.com/pmenglund/colin"
+
 // SnapshotProvider returns the current dashboard snapshot for the request.
 type SnapshotProvider func(context.Context) (domain.Snapshot, error)
 
@@ -301,6 +303,17 @@ func newReadyzHandler() http.HandlerFunc {
 // NewWebhookHandler returns only the webhook and readiness routes.
 func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		http.Redirect(w, r, projectURL, http.StatusFound)
+	})
 	readyzHandler := newReadyzHandler()
 	mux.HandleFunc("/webhooks/readyz", readyzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)

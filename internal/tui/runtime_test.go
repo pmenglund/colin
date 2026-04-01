@@ -56,6 +56,9 @@ func TestModelTogglesBetweenOverviewAndLogs(t *testing.T) {
 	if updated.mode != modeLogs {
 		t.Fatalf("mode = %v, want modeLogs", updated.mode)
 	}
+	if updated.selectedLog != len(updated.logs.Entries)-1 {
+		t.Fatalf("selectedLog = %d, want %d", updated.selectedLog, len(updated.logs.Entries)-1)
+	}
 
 	next, _ = updated.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
 	updated = next.(model)
@@ -64,44 +67,70 @@ func TestModelTogglesBetweenOverviewAndLogs(t *testing.T) {
 	}
 }
 
-func TestModelLogScrollClampsWithinBounds(t *testing.T) {
+func TestModelLogSelectionClampsWithinBounds(t *testing.T) {
 	t.Parallel()
 
 	m := newModel(context.Background(), fakeSource{}, nil, nil)
 	m.mode = modeLogs
 	m.height = 12
 	m.logs = sampleLogs(20)
-	m.pinLogsToBottom()
+	m.selectLastLog()
 
 	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
 	updated := next.(model)
-	if updated.logOffset >= len(updated.logs.Entries) {
-		t.Fatalf("logOffset = %d, want within bounds", updated.logOffset)
+	if updated.selectedLog >= len(updated.logs.Entries) {
+		t.Fatalf("selectedLog = %d, want within bounds", updated.selectedLog)
 	}
 
 	next, _ = updated.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}))
 	updated = next.(model)
-	if updated.logOffset != 0 {
-		t.Fatalf("logOffset = %d, want 0", updated.logOffset)
+	if updated.selectedLog != 0 {
+		t.Fatalf("selectedLog = %d, want 0", updated.selectedLog)
 	}
 
 	next, _ = updated.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	updated = next.(model)
-	if updated.logOffset != 0 {
-		t.Fatalf("logOffset after up = %d, want 0", updated.logOffset)
+	if updated.selectedLog != 0 {
+		t.Fatalf("selectedLog after up = %d, want 0", updated.selectedLog)
 	}
 
 	next, _ = updated.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
 	updated = next.(model)
-	maxOffset := maxInt(len(updated.logs.Entries)-updated.visibleLogLines(), 0)
-	if updated.logOffset != maxOffset {
-		t.Fatalf("logOffset after end = %d, want %d", updated.logOffset, maxOffset)
+	lastIndex := len(updated.logs.Entries) - 1
+	if updated.selectedLog != lastIndex {
+		t.Fatalf("selectedLog after end = %d, want %d", updated.selectedLog, lastIndex)
 	}
 
 	next, _ = updated.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	updated = next.(model)
-	if updated.logOffset != maxOffset {
-		t.Fatalf("logOffset after down = %d, want %d", updated.logOffset, maxOffset)
+	if updated.selectedLog != lastIndex {
+		t.Fatalf("selectedLog after down = %d, want %d", updated.selectedLog, lastIndex)
+	}
+}
+
+func TestModelLogSelectionAutoScrollsIntoView(t *testing.T) {
+	t.Parallel()
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil)
+	m.mode = modeLogs
+	m.height = 12
+	m.logs = sampleLogs(20)
+	m.selectedLog = 0
+	m.logOffset = 0
+
+	for i := 0; i < 10; i++ {
+		next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		m = next.(model)
+	}
+
+	if m.selectedLog != 10 {
+		t.Fatalf("selectedLog = %d, want 10", m.selectedLog)
+	}
+	if m.logOffset == 0 {
+		t.Fatal("logOffset = 0, want auto-scroll once selection moves below the visible list")
+	}
+	if m.selectedLog < m.logOffset || m.selectedLog >= m.logOffset+m.visibleLogLines() {
+		t.Fatalf("selectedLog = %d should remain visible within [%d,%d)", m.selectedLog, m.logOffset, m.logOffset+m.visibleLogLines())
 	}
 }
 
@@ -121,6 +150,25 @@ func TestModelEscStopsAndWaitsForServiceExit(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatal("esc should not quit before the service exits")
+	}
+}
+
+func TestModelQStopsAndWaitsForServiceExit(t *testing.T) {
+	t.Parallel()
+
+	var stops int
+	m := newModel(context.Background(), fakeSource{}, nil, func() { stops++ })
+
+	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	updated := next.(model)
+	if !updated.quitting {
+		t.Fatal("quitting = false, want true")
+	}
+	if stops != 1 {
+		t.Fatalf("stop count = %d, want 1", stops)
+	}
+	if cmd != nil {
+		t.Fatal("q should not quit before the service exits")
 	}
 }
 
@@ -144,6 +192,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 			TailnetUIBaseURL: "https://colin.tail.example.ts.net",
 			PublicBaseURL:    "https://colin.example.test",
 			LinearWebhookURL: "https://colin.example.test/webhooks/linear",
+			GitHubWebhookURL: "https://colin.example.test/webhooks/github",
 		},
 	}
 	msg := refreshRuntime(context.Background(), source)()
@@ -161,14 +210,83 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	for _, want := range []string{
 		"COLIN-147",
 		"In Progress",
-		"http://127.0.0.1:7777",
 		"https://colin.tail.example.ts.net",
 		"linear hook https://colin.example.test/webhooks/linear",
 		"https://colin.example.test/webhooks/linear",
+		"github hook https://colin.example.test/webhooks/github",
+		"https://colin.example.test/webhooks/github",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q", view, want)
 		}
+	}
+	for _, unwanted := range []string{
+		"setup http://127.0.0.1:7777/setup/funnel",
+		"setup      ",
+		"public     ",
+		"tailnet    ",
+	} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("view = %q, want to omit %q", view, unwanted)
+		}
+	}
+}
+
+func TestModelRefreshFallsBackToLocalDashboardWhenTailnetMissing(t *testing.T) {
+	t.Parallel()
+
+	source := fakeSource{
+		dashboardURL: "http://127.0.0.1:7777",
+		snapshot:     domain.Snapshot{},
+		logs:         sampleLogs(1),
+		setup: domain.FunnelSetupStatus{
+			LinearWebhookURL: "https://colin.example.test/webhooks/linear",
+		},
+	}
+	msg := refreshRuntime(context.Background(), source)()
+	m := newModel(context.Background(), source, nil, nil)
+
+	next, _ := m.Update(msg)
+	view := stripANSI(next.(model).View().Content)
+	if !strings.Contains(view, "http://127.0.0.1:7777") {
+		t.Fatalf("view = %q, want local dashboard URL fallback", view)
+	}
+}
+
+func TestLogsViewShowsSelectedFullLineBelowList(t *testing.T) {
+	t.Parallel()
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil)
+	m.mode = modeLogs
+	m.width = 40
+	m.height = 18
+	m.logs = domain.BufferedLogSnapshot{
+		Entries: []domain.BufferedLogEntry{
+			{
+				Timestamp: time.Unix(0, 0).UTC(),
+				Level:     "INFO",
+				Message:   "short line",
+			},
+			{
+				Timestamp: time.Unix(1, 0).UTC(),
+				Level:     "WARN",
+				Message:   "this is a deliberately long log line that should be visible in full below the list of entries",
+				Fields:    []string{"issue=COLIN-200", "state=Review"},
+			},
+		},
+		Count:    2,
+		Capacity: 2,
+	}
+	m.selectedLog = 1
+	m.ensureSelectedLogVisible()
+
+	view := stripANSI(m.View().Content)
+	normalized := strings.Join(strings.Fields(view), " ")
+	if !strings.Contains(view, "Selected log 2/2") {
+		t.Fatalf("view = %q, want selected log label", view)
+	}
+	if !strings.Contains(normalized, "this is a deliberately long log line that should be visible in full below the list of entries issue=COLIN-200 state=Review") {
+		t.Fatalf("view = %q, want full selected log line in detail pane", view)
 	}
 }
 

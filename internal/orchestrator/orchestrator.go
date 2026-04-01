@@ -16,7 +16,7 @@ import (
 
 // New constructs an Orchestrator for the supplied runtime dependencies.
 func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
-	return &Orchestrator{
+	orch := &Orchestrator{
 		logger:            logger,
 		eventCh:           make(chan any, 256),
 		runtime:           runtime,
@@ -28,6 +28,8 @@ func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 		issueStates:       map[string]int{},
 		pausedIssueStates: map[string]domain.PausedStateSummary{},
 	}
+	orch.publishSnapshot(time.Now().UTC())
+	return orch
 }
 
 // RequestRefresh queues an immediate reconciliation cycle without waiting for the next poll interval.
@@ -121,14 +123,15 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				o.handleWorkerExit(ctx, event)
 			case retryFiredEvent:
 				o.handleRetry(ctx, event.issueID)
-			case snapshotRequestEvent:
-				event.response <- o.snapshotAt(time.Now().UTC())
 			}
+			o.publishSnapshot(time.Now().UTC())
 		}
 	}
 }
 
 func (o *Orchestrator) handleTick(ctx context.Context) {
+	defer o.publishSnapshot(time.Now().UTC())
+
 	args := []any{
 		"running", len(o.running),
 		"retrying", len(o.retrying),

@@ -25,6 +25,7 @@ var (
 	runningStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	logTimestampStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	logFieldStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
+	selectedLogStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("4"))
 )
 
 func renderOverviewView(m model) string {
@@ -33,11 +34,9 @@ func renderOverviewView(m model) string {
 		renderHeaderStatus(m),
 		"",
 		labelStyle.Render("URLs"),
-		renderURLLine("dashboard", m.dashboardURL),
-		renderURLLine("tailnet", m.setup.TailnetUIBaseURL),
-		renderURLLine("setup", m.setupURL),
-		renderURLLine("public", m.setup.PublicBaseURL),
+		renderURLLine("dashboard", dashboardDisplayURL(m)),
 		renderURLLine("linear hook", m.setup.LinearWebhookURL),
+		renderURLLine("github hook", m.setup.GitHubWebhookURL),
 	}
 
 	if m.refreshErr != nil {
@@ -80,19 +79,24 @@ func renderLogsView(m model) string {
 		lines = append(lines, subtleStyle.Render("No buffered logs yet."))
 	} else {
 		contentWidth := maxInt(m.width-4, 20)
-		for _, entry := range m.logs.Entries[start:end] {
-			lines = append(lines, truncateRunes(renderLogLine(entry), contentWidth))
+		for idx := start; idx < end; idx++ {
+			line := truncateRunes(renderLogLine(m.logs.Entries[idx]), contentWidth)
+			if idx == m.selectedLog {
+				line = selectedLogStyle.Render(line)
+			}
+			lines = append(lines, line)
 		}
 	}
 
-	lines = append(lines, "", subtleStyle.Render(fmt.Sprintf("Showing %d-%d of %d  |  ↑/↓ scroll  PgUp/PgDn page  Home/End jump", minInt(start+1, len(m.logs.Entries)), end, len(m.logs.Entries))))
+	lines = append(lines, "", renderSelectedLogDetails(m))
+	lines = append(lines, "", subtleStyle.Render(fmt.Sprintf("Showing %d-%d of %d  |  selected %s  |  ↑/↓ select  PgUp/PgDn page  Home/End jump", minInt(start+1, len(m.logs.Entries)), end, len(m.logs.Entries), renderSelectedLogPosition(m))))
 	return pageStyle.Width(maxInt(m.width, defaultWidth)).Render(strings.Join(lines, "\n"))
 }
 
 func renderHeaderStatus(m model) string {
 	parts := []string{
 		subtleStyle.Render("l logs"),
-		subtleStyle.Render("esc quit"),
+		subtleStyle.Render("q/esc quit"),
 	}
 	if m.quitting {
 		parts = append(parts, warnStyle.Render("shutting down"))
@@ -100,6 +104,13 @@ func renderHeaderStatus(m model) string {
 		parts = append(parts, subtleStyle.Render("refreshed "+humanizeAge(m.lastRefresh)))
 	}
 	return strings.Join(parts, "  ")
+}
+
+func dashboardDisplayURL(m model) string {
+	if strings.TrimSpace(m.setup.TailnetUIBaseURL) != "" {
+		return m.setup.TailnetUIBaseURL
+	}
+	return m.dashboardURL
 }
 
 func renderURLLine(label string, value string) string {
@@ -162,6 +173,24 @@ func renderLogLine(entry domain.BufferedLogEntry) string {
 		line = append(line, logFieldStyle.Render(strings.Join(entry.Fields, " ")))
 	}
 	return strings.Join(line, "  ")
+}
+
+func renderSelectedLogDetails(m model) string {
+	if len(m.logs.Entries) == 0 || m.selectedLog < 0 || m.selectedLog >= len(m.logs.Entries) {
+		return subtleStyle.Render("Selected entry: none")
+	}
+
+	contentWidth := maxInt(m.width-4, 20)
+	label := labelStyle.Render(fmt.Sprintf("Selected log %d/%d", m.selectedLog+1, len(m.logs.Entries)))
+	detail := lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth).Render(renderLogLine(m.logs.Entries[m.selectedLog]))
+	return label + "\n" + detail
+}
+
+func renderSelectedLogPosition(m model) string {
+	if len(m.logs.Entries) == 0 || m.selectedLog < 0 {
+		return "none"
+	}
+	return fmt.Sprintf("%d/%d", m.selectedLog+1, len(m.logs.Entries))
 }
 
 func renderState(state string) string {

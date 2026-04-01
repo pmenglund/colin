@@ -482,13 +482,19 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 		t.Fatalf("webhook /webhooks/linear status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, err = http.Get(webhookServer.URL + "/")
+	redirectClient := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err = redirectClient.Get(webhookServer.URL + "/")
 	if err != nil {
 		t.Fatalf("GET webhook / error = %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("webhook / status = %d, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("webhook / status = %d, want 302", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != projectURL {
+		t.Fatalf("webhook / Location = %q, want %q", got, projectURL)
 	}
 }
 

@@ -12,23 +12,14 @@ import (
 
 // Snapshot returns a read-only summary of current runtime state for logs and future status surfaces.
 func (o *Orchestrator) Snapshot(ctx context.Context) (domain.Snapshot, error) {
+	_ = ctx
 	if !o.loopStarted.Load() {
 		return o.snapshotAt(time.Now().UTC()), nil
 	}
-
-	response := make(chan domain.Snapshot, 1)
-	select {
-	case o.eventCh <- snapshotRequestEvent{response: response}:
-	case <-ctx.Done():
-		return domain.Snapshot{}, ctx.Err()
+	if cached, ok := o.snapshot.Load().(domain.Snapshot); ok {
+		return cloneSnapshot(cached), nil
 	}
-
-	select {
-	case snapshot := <-response:
-		return snapshot, nil
-	case <-ctx.Done():
-		return domain.Snapshot{}, ctx.Err()
-	}
+	return domain.Snapshot{}, nil
 }
 
 func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
@@ -77,6 +68,53 @@ func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 		IssueStates:       cloneCounts(o.issueStates),
 		PausedIssueStates: clonePausedStateSummaries(o.pausedIssueStates),
 	}
+}
+
+func (o *Orchestrator) publishSnapshot(now time.Time) {
+	if o == nil {
+		return
+	}
+	o.snapshot.Store(o.snapshotAt(now))
+}
+
+func cloneSnapshot(input domain.Snapshot) domain.Snapshot {
+	out := input
+	out.Running = cloneSnapshotRunning(input.Running)
+	out.Retrying = append([]domain.RetryEntry(nil), input.Retrying...)
+	out.RateLimits = cloneRateLimitSnapshot(input.RateLimits)
+	out.Counts = cloneCounts(input.Counts)
+	out.IssueStates = cloneCounts(input.IssueStates)
+	out.PausedIssueStates = clonePausedStateSummaries(input.PausedIssueStates)
+	if len(input.Tracked) > 0 {
+		out.Tracked = make(map[string]struct{}, len(input.Tracked))
+		for key, value := range input.Tracked {
+			out.Tracked[key] = value
+		}
+	} else {
+		out.Tracked = nil
+	}
+	return out
+}
+
+func cloneSnapshotRunning(input []domain.SnapshotRunning) []domain.SnapshotRunning {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]domain.SnapshotRunning, 0, len(input))
+	for _, entry := range input {
+		cloned := entry
+		if entry.URL != nil {
+			value := *entry.URL
+			cloned.URL = &value
+		}
+		if entry.LastEventAt != nil {
+			value := *entry.LastEventAt
+			cloned.LastEventAt = &value
+		}
+		cloned.OutputLog = append([]domain.OutputLog(nil), entry.OutputLog...)
+		out = append(out, cloned)
+	}
+	return out
 }
 
 func cloneCounts(input map[string]int) map[string]int {

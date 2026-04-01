@@ -20,6 +20,7 @@ const (
 	refreshTimeout   = 250 * time.Millisecond
 	minLogViewHeight = 8
 	logHeaderHeight  = 6
+	logDetailMinRows = 4
 	logFooterHeight  = 2
 	lastMessageWidth = 48
 )
@@ -69,6 +70,7 @@ type model struct {
 	logs         domain.BufferedLogSnapshot
 	setup        domain.FunnelSetupStatus
 	logOffset    int
+	selectedLog  int
 	lastRefresh  time.Time
 	refreshErr   error
 	fatalErr     error
@@ -104,13 +106,14 @@ func newModel(ctx context.Context, source Source, serviceErrs <-chan error, stop
 		ctx = context.Background()
 	}
 	return model{
-		ctx:        ctx,
-		source:     source,
-		serviceErr: serviceErrs,
-		stop:       stop,
-		mode:       modeOverview,
-		width:      defaultWidth,
-		height:     defaultHeight,
+		ctx:         ctx,
+		source:      source,
+		serviceErr:  serviceErrs,
+		stop:        stop,
+		mode:        modeOverview,
+		width:       defaultWidth,
+		height:      defaultHeight,
+		selectedLog: -1,
 	}
 }
 
@@ -132,7 +135,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.height = msg.Height
 		}
 		if m.mode == modeLogs {
-			m.clampLogOffset()
+			m.ensureSelectedLogVisible()
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -143,7 +146,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, refreshRuntime(m.ctx, m.source)
 	case refreshMsg:
-		atBottom := m.mode == modeLogs && m.isLogPinnedToBottom()
+		followLatest := m.mode == modeLogs && m.isFollowingLatestLog()
 		m.dashboardURL = msg.dashboardURL
 		m.setupURL = msg.setupURL
 		m.snapshot = msg.snapshot
@@ -152,10 +155,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshErr = msg.err
 		m.lastRefresh = time.Now().UTC()
 		if m.mode == modeLogs {
-			if atBottom {
-				m.pinLogsToBottom()
+			if followLatest {
+				m.selectLastLog()
 			} else {
-				m.clampLogOffset()
+				m.clampSelectedLog()
+				m.ensureSelectedLogVisible()
 			}
 		}
 		if m.quitting {
@@ -173,7 +177,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := strings.ToLower(msg.String())
 	switch key {
-	case "ctrl+c", "esc":
+	case "ctrl+c", "esc", "q":
 		if !m.quitting {
 			m.quitting = true
 			if m.stop != nil {
@@ -184,7 +188,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if m.mode == modeOverview {
 			m.mode = modeLogs
-			m.pinLogsToBottom()
+			if m.selectedLog < 0 || m.selectedLog >= len(m.logs.Entries) {
+				m.selectLastLog()
+			} else {
+				m.ensureSelectedLogVisible()
+			}
 		} else {
 			m.mode = modeOverview
 		}
@@ -197,22 +205,23 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Code {
 	case tea.KeyUp:
-		m.logOffset--
+		m.selectedLog--
 	case tea.KeyDown:
-		m.logOffset++
+		m.selectedLog++
 	case tea.KeyPgUp:
-		m.logOffset -= m.visibleLogLines()
+		m.selectedLog -= m.visibleLogLines()
 	case tea.KeyPgDown:
-		m.logOffset += m.visibleLogLines()
+		m.selectedLog += m.visibleLogLines()
 	case tea.KeyHome:
-		m.logOffset = 0
+		m.selectedLog = 0
 	case tea.KeyEnd:
-		m.pinLogsToBottom()
+		m.selectLastLog()
 		return m, nil
 	default:
 		return m, nil
 	}
-	m.clampLogOffset()
+	m.clampSelectedLog()
+	m.ensureSelectedLogVisible()
 	return m, nil
 }
 
@@ -291,24 +300,78 @@ func (m model) visibleLogLines() int {
 	if height < minLogViewHeight {
 		height = defaultHeight
 	}
-	lines := height - logHeaderHeight - logFooterHeight
+	lines := height - logHeaderHeight - logFooterHeight - m.logDetailRows()
 	if lines < 1 {
 		return 1
 	}
 	return lines
 }
 
-func (m *model) pinLogsToBottom() {
-	maxOffset := maxInt(len(m.logs.Entries)-m.visibleLogLines(), 0)
-	m.logOffset = maxOffset
+func (m model) logDetailRows() int {
+	height := m.height
+	if height < minLogViewHeight {
+		height = defaultHeight
+	}
+	available := height - logHeaderHeight - logFooterHeight
+	if available <= 1 {
+		return 1
+	}
+	rows := available / 3
+	if rows < logDetailMinRows {
+		rows = logDetailMinRows
+	}
+	if rows >= available {
+		rows = available - 1
+	}
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+func (m *model) selectLastLog() {
+	if len(m.logs.Entries) == 0 {
+		m.selectedLog = -1
+		m.logOffset = 0
+		return
+	}
+	m.selectedLog = len(m.logs.Entries) - 1
+	m.ensureSelectedLogVisible()
 }
 
 func (m model) isLogPinnedToBottom() bool {
 	return m.logOffset >= maxInt(len(m.logs.Entries)-m.visibleLogLines(), 0)
 }
 
-func (m *model) clampLogOffset() {
+func (m model) isFollowingLatestLog() bool {
+	if len(m.logs.Entries) == 0 {
+		return true
+	}
+	return m.selectedLog >= len(m.logs.Entries)-1 && m.isLogPinnedToBottom()
+}
+
+func (m *model) clampSelectedLog() {
+	if len(m.logs.Entries) == 0 {
+		m.selectedLog = -1
+		m.logOffset = 0
+		return
+	}
+	m.selectedLog = clampInt(m.selectedLog, 0, len(m.logs.Entries)-1)
+}
+
+func (m *model) ensureSelectedLogVisible() {
+	m.clampSelectedLog()
 	maxOffset := maxInt(len(m.logs.Entries)-m.visibleLogLines(), 0)
+	if m.selectedLog < 0 {
+		m.logOffset = 0
+		return
+	}
+	if m.selectedLog < m.logOffset {
+		m.logOffset = m.selectedLog
+	}
+	if m.selectedLog >= m.logOffset+m.visibleLogLines() {
+		m.logOffset = m.selectedLog - m.visibleLogLines() + 1
+	}
 	m.logOffset = clampInt(m.logOffset, 0, maxOffset)
 }
 
