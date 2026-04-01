@@ -33,6 +33,7 @@ type Answers struct {
 	WorkspaceRoot string
 	ServerPort    int
 	WantsWebhook  bool
+	WebhookPort   int
 }
 
 // Prerequisites summarizes the local environment checks shown during setup.
@@ -92,6 +93,13 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	webhookPort := 0
+	if wantsWebhook {
+		webhookPort, err = promptRequiredInt(reader, out, "Webhook port", resolved.defaults.WebhookPort)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	writeFile, err := promptBool(reader, out, fmt.Sprintf("Write workflow file to %s", resolved.workflowPath), true)
 	if err != nil {
 		return Result{}, err
@@ -108,6 +116,7 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 		WorkspaceRoot: workspaceRoot,
 		ServerPort:    serverPort,
 		WantsWebhook:  wantsWebhook,
+		WebhookPort:   webhookPort,
 	}
 
 	overwrite, err := confirmOverwrite(reader, out, resolved.workflowPath)
@@ -162,6 +171,7 @@ type detectedDefaults struct {
 	BaseRef       string
 	WorkspaceRoot string
 	ServerPort    int
+	WebhookPort   int
 }
 
 func detectPrerequisites() Prerequisites {
@@ -183,6 +193,7 @@ func detectDefaults(workingDir string) detectedDefaults {
 		BaseRef:       firstNonEmpty(gitDefaultBranch(workingDir), "main"),
 		WorkspaceRoot: "./.colin/workspaces",
 		ServerPort:    8888,
+		WebhookPort:   8998,
 	}
 }
 

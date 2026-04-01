@@ -94,19 +94,29 @@ func TestObservabilityServerRoutes(t *testing.T) {
 	}, func(context.Context) (domain.FunnelSetupStatus, error) {
 		now := time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC)
 		return domain.FunnelSetupStatus{
-			GeneratedAt:      now,
-			Ready:            true,
-			LocalBaseURL:     "http://127.0.0.1:8888",
-			PublicBaseURL:    "https://colin.tail.example.ts.net",
-			SuggestedCommand: "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
-			LinearWebhookURL: "https://colin.tail.example.ts.net/webhooks/linear",
-			GitHubWebhookURL: "https://colin.tail.example.ts.net/webhooks/github",
+			GeneratedAt:           now,
+			Ready:                 true,
+			LocalBaseURL:          "http://127.0.0.1:8888",
+			LocalWebhookBaseURL:   "http://127.0.0.1:8998",
+			TailnetUIBaseURL:      "https://colin.tail.example.ts.net",
+			PublicBaseURL:         "https://colin.tail.example.ts.net",
+			SuggestedServeCommand: "tailscale serve --bg 8888",
+			SuggestedCommand:      "tailscale funnel --bg --https=443 --set-path=/webhooks 8998",
+			LinearWebhookURL:      "https://colin.tail.example.ts.net/webhooks/linear",
+			GitHubWebhookURL:      "https://colin.tail.example.ts.net/webhooks/github",
 			Checks: []domain.SetupCheck{
 				{
 					ID:        "tailscale_local_api",
 					Label:     "Colin can reach the local Tailscale daemon",
 					Status:    "ok",
 					Detail:    "Connected to the local Tailscale daemon.",
+					CheckedAt: now,
+				},
+				{
+					ID:        "serve_route",
+					Label:     "Serve proxies Colin at `/` on the tailnet",
+					Status:    "ok",
+					Detail:    "Detected `https://colin.tail.example.ts.net` proxying Colin from `/`.",
 					CheckedAt: now,
 				},
 			},
@@ -371,9 +381,10 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		for _, want := range []string{
 			`data-testid="funnel-urls"`,
-			`Ready for webhooks`,
+			`Tailscale ready`,
 			`https://colin.tail.example.ts.net/webhooks/github`,
-			`tailscale funnel --bg --https=443 --set-path=/webhooks 8888`,
+			`tailscale serve --bg 8888`,
+			`tailscale funnel --bg --https=443 --set-path=/webhooks 8998`,
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("setup page missing %q: %s", want, text)
@@ -423,6 +434,59 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSeparateUIAndWebhookHandlers(t *testing.T) {
+	t.Parallel()
+
+	uiHandler, err := NewUIHandler(func(context.Context) (domain.Snapshot, error) {
+		return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
+	}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewUIHandler() error = %v", err)
+	}
+	webhookHandler := NewWebhookHandler(nil, nil, nil)
+
+	uiServer := httptest.NewServer(uiHandler)
+	defer uiServer.Close()
+	webhookServer := httptest.NewServer(webhookHandler)
+	defer webhookServer.Close()
+
+	resp, err := http.Get(uiServer.URL + "/")
+	if err != nil {
+		t.Fatalf("GET ui / error = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ui / status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, err = http.Get(uiServer.URL + "/webhooks/readyz")
+	if err != nil {
+		t.Fatalf("GET ui /webhooks/readyz error = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("ui /webhooks/readyz status = %d, want 404", resp.StatusCode)
+	}
+
+	resp, err = http.Post(webhookServer.URL+"/webhooks/linear", "application/json", strings.NewReader(`{"webhookTimestamp":1735689600000}`))
+	if err != nil {
+		t.Fatalf("POST webhook /webhooks/linear error = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("webhook /webhooks/linear status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, err = http.Get(webhookServer.URL + "/")
+	if err != nil {
+		t.Fatalf("GET webhook / error = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("webhook / status = %d, want 404", resp.StatusCode)
+	}
 }
 
 func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T) {

@@ -43,12 +43,13 @@ func TestResolveMissingLocalAPI(t *testing.T) {
 	}
 
 	status := inspector.Resolve(context.Background(), Options{
-		LocalPort: intPtr(8888),
+		UIPort:      intPtr(8888),
+		WebhookPort: intPtr(8998),
 	})
 	if status.Ready {
 		t.Fatal("Resolve() reported ready without a reachable LocalAPI")
 	}
-	if status.SuggestedCommand != "tailscale funnel --bg --https=443 --set-path=/webhooks 8888" {
+	if status.SuggestedCommand != "tailscale funnel --bg --https=443 --set-path=/webhooks 8998" {
 		t.Fatalf("SuggestedCommand = %q", status.SuggestedCommand)
 	}
 	if got := status.Checks[0].ID; got != "tailscale_local_api" {
@@ -90,6 +91,7 @@ func TestResolveDetectsMatchingFunnel(t *testing.T) {
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"colin.tail.example.ts.net:443": {
 						Handlers: map[string]*ipn.HTTPHandler{
+							"/":         {Proxy: "http://127.0.0.1:" + itoa(localPort)},
 							"/webhooks": {Proxy: "http://127.0.0.1:" + itoa(localPort)},
 						},
 					},
@@ -106,8 +108,10 @@ func TestResolveDetectsMatchingFunnel(t *testing.T) {
 	}
 
 	status := inspector.Check(context.Background(), Options{
-		LocalPort:                intPtr(localPort),
-		LocalDashboardURL:        local.URL,
+		UIPort:                   intPtr(localPort),
+		LocalUIBaseURL:           local.URL,
+		WebhookPort:              intPtr(localPort),
+		LocalWebhookBaseURL:      local.URL,
 		ExplicitWebhookPublicURL: public.URL,
 	})
 	if !status.Ready {
@@ -154,7 +158,8 @@ func TestResolveRejectsNonWebhookMount(t *testing.T) {
 	}
 
 	status := inspector.Resolve(context.Background(), Options{
-		LocalPort: intPtr(8888),
+		UIPort:      intPtr(8888),
+		WebhookPort: intPtr(8888),
 	})
 	if status.Ready {
 		t.Fatal("Resolve() reported ready for non-webhook funnel mount")
@@ -198,7 +203,8 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 	}
 
 	status := inspector.Resolve(context.Background(), Options{
-		LocalPort: intPtr(8888),
+		UIPort:      intPtr(8888),
+		WebhookPort: intPtr(8888),
 	})
 	if status.PublicBaseURL != "https://colin.tail.example.ts.net:8443" {
 		t.Fatalf("PublicBaseURL = %q", status.PublicBaseURL)
@@ -318,7 +324,7 @@ func TestResolveHandlesMissingCurrentTailnet(t *testing.T) {
 	}
 
 	status := inspector.Resolve(context.Background(), Options{
-		LocalPort: intPtr(8888),
+		UIPort: intPtr(8888),
 	})
 	if status.Ready {
 		t.Fatal("Resolve() reported ready without a current tailnet")
@@ -328,6 +334,50 @@ func TestResolveHandlesMissingCurrentTailnet(t *testing.T) {
 	}
 	if got := status.Checks[2].Detail; got != "The local Tailscale daemon is not connected to a tailnet yet." {
 		t.Fatalf("magic dns detail = %q", got)
+	}
+}
+
+func TestResolveSkipsFunnelWhenWebhookPortUnset(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			status: &ipnstate.Status{
+				BackendState: "Running",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					MagicDNSEnabled: true,
+				},
+			},
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
+				},
+			},
+		},
+		now: func() time.Time {
+			return time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
+		},
+	}
+
+	status := inspector.Resolve(context.Background(), Options{
+		UIPort: intPtr(8888),
+	})
+	if !status.Ready {
+		t.Fatalf("Resolve() Ready = false, checks = %#v", status.Checks)
+	}
+	if status.SuggestedCommand != "" {
+		t.Fatalf("SuggestedCommand = %q, want empty", status.SuggestedCommand)
+	}
+	if status.SuggestedServeCommand != "tailscale serve --bg 8888" {
+		t.Fatalf("SuggestedServeCommand = %q", status.SuggestedServeCommand)
+	}
+	last := status.Checks[len(status.Checks)-1]
+	if last.ID != "funnel_route" || last.Status != "ok" {
+		t.Fatalf("last check = %#v, want disabled-ok funnel check", last)
 	}
 }
 

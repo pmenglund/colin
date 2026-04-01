@@ -75,8 +75,38 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
 		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
 	}
+	if cfg.Server.WebhookPort != nil {
+		t.Fatalf("cfg.Server.WebhookPort = %v, want nil by default", cfg.Server.WebhookPort)
+	}
 	if cfg.Server.LogBufferLines != domain.DefaultLogBufferLines {
 		t.Fatalf("cfg.Server.LogBufferLines = %d, want %d", cfg.Server.LogBufferLines, domain.DefaultLogBufferLines)
+	}
+}
+
+func TestBuildReadsWebhookPort(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"server": map[string]any{
+			"port":         8888,
+			"webhook_port": 8998,
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if cfg.Server.Port == nil || *cfg.Server.Port != 8888 {
+		t.Fatalf("cfg.Server.Port = %v, want 8888", cfg.Server.Port)
+	}
+	if cfg.Server.WebhookPort == nil || *cfg.Server.WebhookPort != 8998 {
+		t.Fatalf("cfg.Server.WebhookPort = %v, want 8998", cfg.Server.WebhookPort)
 	}
 }
 

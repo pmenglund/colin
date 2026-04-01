@@ -121,10 +121,30 @@ func validateServerPort(value string) string {
 	return ""
 }
 
+func validateWebhookPort(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "Webhook port is required."
+	}
+	port, err := strconv.Atoi(trimmed)
+	if err != nil || port <= 0 {
+		return "Webhook port must be a positive integer."
+	}
+	return ""
+}
+
 func parseServerPort(value string) (int, error) {
 	port, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || port <= 0 {
 		return 0, fmt.Errorf("server port must be a positive integer")
+	}
+	return port, nil
+}
+
+func parseWebhookPort(value string) (int, error) {
+	port, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || port <= 0 {
+		return 0, fmt.Errorf("webhook port must be a positive integer")
 	}
 	return port, nil
 }

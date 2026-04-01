@@ -40,6 +40,8 @@ type watchedProjectIDProvider interface {
 
 const githubStartupValidationTimeout = 10 * time.Second
 
+var errDuplicateListenerPorts = errors.New("server.port and server.webhook_port must be different when both are enabled")
+
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
 type Service struct {
 	logger       *slog.Logger
@@ -48,8 +50,10 @@ type Service struct {
 	workflowPath string
 	options      options
 	serverPort   *int
+	webhookPort  *int
 	serverMu     sync.RWMutex
 	serverURL    string
+	webhookURL   string
 	runtimeMu    sync.RWMutex
 	runtime      orchestrator.Runtime
 	orch         *orchestrator.Orchestrator
@@ -76,6 +80,7 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 		workflowPath: path,
 		options:      options,
 		serverPort:   clonePort(runtime.Config.Server.Port),
+		webhookPort:  clonePort(runtime.Config.Server.WebhookPort),
 		runtime:      runtime,
 		orch:         orch,
 		inspector:    tsdiag.NewInspector(),
@@ -85,7 +90,10 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 // Run starts startup cleanup, workflow reload watching, and the orchestrator loop.
 func (s *Service) Run(ctx context.Context) error {
 	s.logger.Info("service starting", "workflow_path", s.workflowPath)
-	if err := s.startHTTPServer(ctx); err != nil {
+	if err := s.startUIServer(ctx); err != nil {
+		return err
+	}
+	if err := s.startWebhookServer(ctx); err != nil {
 		return err
 	}
 	stopGOPS := startGOPSAgent(ctx, s.logger, defaultGOPSHooks)
@@ -120,6 +128,12 @@ func (s *Service) FunnelSetupURL() string {
 	return base + "/setup/funnel"
 }
 
+func (s *Service) webhookBaseURL() string {
+	s.serverMu.RLock()
+	defer s.serverMu.RUnlock()
+	return s.webhookURL
+}
+
 // Snapshot returns the current in-memory orchestrator snapshot.
 func (s *Service) Snapshot(ctx context.Context) (domain.Snapshot, error) {
 	return s.orch.Snapshot(ctx)
@@ -149,6 +163,9 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 		return orchestrator.Runtime{}, err
 	}
 	if err := config.ValidateDispatch(cfg); err != nil {
+		return orchestrator.Runtime{}, err
+	}
+	if err := validateListenerPorts(cfg.Server.Port, cfg.Server.WebhookPort); err != nil {
 		return orchestrator.Runtime{}, err
 	}
 	trackerClient, _, err := PreflightTrackerConfig(context.Background(), cfg)
@@ -238,57 +255,12 @@ func validateGitHubAccess(cfg domain.ServiceConfig, manager *repoops.Manager) er
 	return validateRepoAccess(cfg, manager)
 }
 
-func (s *Service) startHTTPServer(ctx context.Context) error {
+func (s *Service) startUIServer(ctx context.Context) error {
 	if s.serverPort == nil {
 		return nil
 	}
 
-	handler, err := app.NewObservabilityServer(
-		func(snapshotCtx context.Context) (domain.Snapshot, error) {
-			return s.orch.Snapshot(snapshotCtx)
-		},
-		func(snapshotCtx context.Context, issueID string) (domain.Issue, error) {
-			runtime := s.currentRuntime()
-			if runtime.Tracker == nil {
-				return domain.Issue{}, errors.New("tracker unavailable")
-			}
-			return runtime.Tracker.FetchIssueByID(snapshotCtx, issueID)
-		},
-		func(snapshotCtx context.Context) (domain.FunnelSetupStatus, error) {
-			return s.funnelSetupStatus(snapshotCtx), nil
-		},
-		func(_ context.Context, minLevel *slog.Level) (domain.BufferedLogSnapshot, error) {
-			if s.logBuffer == nil {
-				return domain.BufferedLogSnapshot{}, nil
-			}
-			return s.logBuffer.Snapshot(minLevel), nil
-		},
-		func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
-			runtime := s.currentRuntime()
-			if !shouldQueueImmediateLinearRefresh(event, watchedProjectID(runtime.Tracker)) {
-				return app.LinearWebhookTriggerResult{}
-			}
-			reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
-			if event.IssueID != "" {
-				reason += " issue_id=" + event.IssueID
-			}
-			if event.ProjectID != "" {
-				reason += " project_id=" + event.ProjectID
-			}
-			queued, coalesced := s.orch.RequestRefresh(reason)
-			if queued {
-				return app.LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: coalesced}
-			}
-			if !s.orch.RefreshReady() {
-				return app.LinearWebhookTriggerResult{Relevant: true, Suppressed: true}
-			}
-			return app.LinearWebhookTriggerResult{Relevant: true}
-		},
-		func(context.Context) string {
-			return s.currentRuntime().Config.Tracker.WebhookSigningSecret
-		},
-		s.logger,
-	)
+	handler, err := s.newDashboardHandler()
 	if err != nil {
 		return fmt.Errorf("create dashboard server: %w", err)
 	}
@@ -326,11 +298,65 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 	return nil
 }
 
+func (s *Service) startWebhookServer(ctx context.Context) error {
+	if !hasEnabledPort(s.webhookPort) {
+		return nil
+	}
+
+	handler := app.NewWebhookHandler(s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.logger)
+
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*s.webhookPort)))
+	if err != nil {
+		return fmt.Errorf("listen webhook server: %w", err)
+	}
+
+	s.serverMu.Lock()
+	s.webhookURL = "http://" + listener.Addr().String()
+	s.serverMu.Unlock()
+	s.logger.Info("webhook server started", "url", s.webhookBaseURL())
+
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Warn("webhook server shutdown failed", "error", err)
+		}
+	}()
+
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("webhook server exited", "error", err)
+		}
+	}()
+
+	return nil
+}
+
 func clonePort(value *int) *int {
 	if value == nil {
 		return nil
 	}
 	return intPtr(*value)
+}
+
+func validateListenerPorts(serverPort *int, webhookPort *int) error {
+	if !hasEnabledPort(serverPort) || !hasEnabledPort(webhookPort) {
+		return nil
+	}
+	if *serverPort == *webhookPort {
+		return fmt.Errorf("%w: %d", errDuplicateListenerPorts, *serverPort)
+	}
+	return nil
+}
+
+func hasEnabledPort(value *int) bool {
+	return value != nil && *value > 0
 }
 
 func (s *Service) currentRuntime() orchestrator.Runtime {
@@ -347,6 +373,65 @@ func (s *Service) setRuntime(runtime orchestrator.Runtime) {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func (s *Service) newDashboardHandler() (http.Handler, error) {
+	provider := func(snapshotCtx context.Context) (domain.Snapshot, error) {
+		return s.orch.Snapshot(snapshotCtx)
+	}
+	issueProvider := func(snapshotCtx context.Context, issueID string) (domain.Issue, error) {
+		runtime := s.currentRuntime()
+		if runtime.Tracker == nil {
+			return domain.Issue{}, errors.New("tracker unavailable")
+		}
+		return runtime.Tracker.FetchIssueByID(snapshotCtx, issueID)
+	}
+	setupProvider := func(snapshotCtx context.Context) (domain.FunnelSetupStatus, error) {
+		return s.funnelSetupStatus(snapshotCtx), nil
+	}
+	logProvider := func(_ context.Context, minLevel *slog.Level) (domain.BufferedLogSnapshot, error) {
+		if s.logBuffer == nil {
+			return domain.BufferedLogSnapshot{}, nil
+		}
+		return s.logBuffer.Snapshot(minLevel), nil
+	}
+	if !hasEnabledPort(s.webhookPort) {
+		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.logger)
+	}
+	return app.NewUIHandler(provider, issueProvider, setupProvider, logProvider)
+}
+
+func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
+	return func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
+		runtime := s.currentRuntime()
+		if !shouldQueueImmediateLinearRefresh(event, watchedProjectID(runtime.Tracker)) {
+			return app.LinearWebhookTriggerResult{}
+		}
+		reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
+		if event.IssueID != "" {
+			reason += " issue_id=" + event.IssueID
+		}
+		if event.ProjectID != "" {
+			reason += " project_id=" + event.ProjectID
+		}
+		if s.orch == nil {
+			return app.LinearWebhookTriggerResult{Relevant: true}
+		}
+		queued, coalesced := s.orch.RequestRefresh(reason)
+		if queued {
+			return app.LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: coalesced}
+		}
+		if !s.orch.RefreshReady() {
+			return app.LinearWebhookTriggerResult{Relevant: true, Suppressed: true}
+		}
+		return app.LinearWebhookTriggerResult{Relevant: true}
+	}
+}
+
+func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider {
+	return func(context.Context) string {
+		return s.currentRuntime().Config.Tracker.WebhookSigningSecret
+	}
 }
 
 func (s *Service) ensureManagedLabels(ctx context.Context) error {
@@ -376,8 +461,10 @@ func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatu
 		inspector = tsdiag.NewInspector()
 	}
 	return inspector.Check(ctx, tsdiag.Options{
-		LocalPort:                runtime.Config.Server.Port,
-		LocalDashboardURL:        s.DashboardURL(),
+		UIPort:                   runtime.Config.Server.Port,
+		LocalUIBaseURL:           s.DashboardURL(),
+		WebhookPort:              runtime.Config.Server.WebhookPort,
+		LocalWebhookBaseURL:      s.webhookBaseURL(),
 		ExplicitWebhookPublicURL: webhookPublicURL(runtime.Config.Server),
 	})
 }
@@ -388,8 +475,8 @@ func (s *Service) effectiveWebhookPublicBaseURL(ctx context.Context, cfg domain.
 		inspector = tsdiag.NewInspector()
 	}
 	status := inspector.Resolve(ctx, tsdiag.Options{
-		LocalPort:                cfg.Port,
-		LocalDashboardURL:        s.DashboardURL(),
+		WebhookPort:              cfg.WebhookPort,
+		LocalWebhookBaseURL:      s.webhookBaseURL(),
 		ExplicitWebhookPublicURL: webhookPublicURL(cfg),
 	})
 	return strings.TrimSpace(status.PublicBaseURL)

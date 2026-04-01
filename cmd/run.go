@@ -153,10 +153,16 @@ func announceStartup(cmd *cobra.Command, dashboardEnabled bool, dashboardURL fun
 func renderSetupStatus(cmd *cobra.Command, status domain.FunnelSetupStatus) {
 	cmd.Printf("Funnel ready: %t\n", status.Ready)
 	if status.LocalBaseURL != "" {
-		cmd.Printf("Local URL: %s\n", status.LocalBaseURL)
+		cmd.Printf("Local UI URL: %s\n", status.LocalBaseURL)
+	}
+	if status.TailnetUIBaseURL != "" {
+		cmd.Printf("Tailnet UI URL: %s\n", status.TailnetUIBaseURL)
+	}
+	if status.LocalWebhookBaseURL != "" {
+		cmd.Printf("Local webhook URL: %s\n", status.LocalWebhookBaseURL)
 	}
 	if status.PublicBaseURL != "" {
-		cmd.Printf("Public URL: %s\n", status.PublicBaseURL)
+		cmd.Printf("Public webhook URL: %s\n", status.PublicBaseURL)
 	}
 	if status.LinearWebhookURL != "" {
 		cmd.Printf("Linear webhook URL: %s\n", status.LinearWebhookURL)
@@ -164,8 +170,11 @@ func renderSetupStatus(cmd *cobra.Command, status domain.FunnelSetupStatus) {
 	if status.GitHubWebhookURL != "" {
 		cmd.Printf("GitHub webhook URL: %s\n", status.GitHubWebhookURL)
 	}
+	if status.SuggestedServeCommand != "" {
+		cmd.Printf("Suggested Serve command: %s\n", status.SuggestedServeCommand)
+	}
 	if status.SuggestedCommand != "" {
-		cmd.Printf("Suggested command: %s\n", status.SuggestedCommand)
+		cmd.Printf("Suggested Funnel command: %s\n", status.SuggestedCommand)
 	}
 	cmd.Println("Checks:")
 	for _, check := range status.Checks {

@@ -366,6 +366,9 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowServerConfi
 	if value, ok := intValue(raw.Port); ok {
 		cfg.Server.Port = &value
 	}
+	if value, ok := intValue(raw.WebhookPort); ok {
+		cfg.Server.WebhookPort = &value
+	}
 	if value := stringValue(raw.PublicURL); value != "" {
 		cfg.Server.PublicURL = resolveEnvToken(value)
 	}

@@ -68,6 +68,9 @@ codex:
 
 server:
   port: {{.ServerPort}}
+{{- if .WantsWebhook}}
+  webhook_port: {{.WebhookPort}}
+{{- end}}
 ---
 
 You are working on Linear issue {{"{{.issue.identifier}}"}}: {{"{{.issue.title}}"}}.

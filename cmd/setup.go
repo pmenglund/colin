@@ -75,7 +75,7 @@ func newSetupTailscaleCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootO
 		Use:   "tailscale",
 		Short: "Prepare Tailscale for incoming webhook exposure",
 		Long: "Check whether this machine and workflow are ready to expose Colin through Tailscale.\n\n" +
-			"This command is used before configuring Linear and GitHub webhooks. It verifies the local Tailscale setup, outlines that Colin uses Tailscale Funnel to expose only the `/webhooks` paths publicly, shows the exact `tailscale funnel` command Colin expects, and keeps the dashboard and setup UI private unless you publish them separately.",
+			"This command is used before configuring Linear and GitHub webhooks. It verifies the local Tailscale setup, outlines that Colin uses Tailscale Serve for the web UI and Tailscale Funnel only for the `/webhooks` paths, shows the exact `tailscale serve` and `tailscale funnel` commands Colin expects, and keeps the dashboard and setup UI private unless you publish them separately.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,6 +26,7 @@ const (
 	tuiStepWorkspaceRoot
 	tuiStepServerPort
 	tuiStepWebhook
+	tuiStepWebhookPort
 	tuiStepReview
 	tuiStepSuccess
 
@@ -63,6 +65,7 @@ type tuiModel struct {
 	workspaceRoot string
 	serverPort    string
 	wantsWebhook  bool
+	webhookPort   string
 
 	cursorPos              int
 	projectFilterCursorPos int
@@ -128,6 +131,7 @@ func RunTUI(in io.Reader, out io.Writer, opts Options) (Result, error) {
 		baseRef:           resolved.defaults.BaseRef,
 		workspaceRoot:     resolved.defaults.WorkspaceRoot,
 		serverPort:        fmt.Sprintf("%d", resolved.defaults.ServerPort),
+		webhookPort:       fmt.Sprintf("%d", resolved.defaults.WebhookPort),
 		projectManualMode: !isValidLinearAPIKey(resolved.linearAPIKey),
 		preflightDirty:    true,
 	}
@@ -215,7 +219,7 @@ func (m tuiModel) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.step {
-	case tuiStepLinearAPIKey, tuiStepGitHubToken, tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort:
+	case tuiStepLinearAPIKey, tuiStepGitHubToken, tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort, tuiStepWebhookPort:
 		m.insertText(text)
 		m.inlineError = m.liveValidationError()
 		if m.step != tuiStepLinearAPIKey {
@@ -259,7 +263,7 @@ func (m tuiModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateGitHubTokenKey(msg)
 	case tuiStepProjectSlug:
 		return m.updateProjectKey(msg)
-	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort:
+	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort, tuiStepWebhookPort:
 		return m.updateTextStepKey(msg)
 	case tuiStepWebhook:
 		return m.updateWebhookKey(msg)
@@ -636,13 +640,18 @@ func (m tuiModel) visibleSteps() []int {
 	if !m.hasGitHubToken() {
 		steps = append(steps, tuiStepGitHubToken)
 	}
-	return append(steps,
+	steps = append(steps,
 		tuiStepProjectSlug,
 		tuiStepRepoURL,
 		tuiStepBaseRef,
 		tuiStepWorkspaceRoot,
 		tuiStepServerPort,
 		tuiStepWebhook,
+	)
+	if m.wantsWebhook {
+		steps = append(steps, tuiStepWebhookPort)
+	}
+	return append(steps,
 		tuiStepReview,
 	)
 }
@@ -683,6 +692,8 @@ func (m tuiModel) currentTextValue() string {
 		return m.workspaceRoot
 	case tuiStepServerPort:
 		return m.serverPort
+	case tuiStepWebhookPort:
+		return m.webhookPort
 	default:
 		return ""
 	}
@@ -704,6 +715,8 @@ func (m *tuiModel) setCurrentTextValue(value string) {
 		m.workspaceRoot = value
 	case tuiStepServerPort:
 		m.serverPort = value
+	case tuiStepWebhookPort:
+		m.webhookPort = value
 	}
 }
 
@@ -750,6 +763,8 @@ func (m tuiModel) validateCurrentStep() string {
 		return validateWorkspaceRoot(m.workspaceRoot)
 	case tuiStepServerPort:
 		return validateServerPort(m.serverPort)
+	case tuiStepWebhookPort:
+		return validateWebhookPort(m.webhookPort)
 	default:
 		return ""
 	}
@@ -760,6 +775,13 @@ func (m tuiModel) answers() (Answers, error) {
 	if err != nil {
 		return Answers{}, err
 	}
+	webhookPort := 0
+	if m.wantsWebhook {
+		webhookPort, err = parseWebhookPort(m.webhookPort)
+		if err != nil {
+			return Answers{}, err
+		}
+	}
 	return Answers{
 		ProjectSlug:   strings.TrimSpace(m.projectSlug),
 		RepoURL:       strings.TrimSpace(m.repoURL),
@@ -767,6 +789,7 @@ func (m tuiModel) answers() (Answers, error) {
 		WorkspaceRoot: strings.TrimSpace(m.workspaceRoot),
 		ServerPort:    port,
 		WantsWebhook:  m.wantsWebhook,
+		WebhookPort:   webhookPort,
 	}, nil
 }
 
@@ -839,7 +862,7 @@ func (m tuiModel) render() string {
 		return m.renderGitHubTokenStep()
 	case tuiStepProjectSlug:
 		return m.renderProjectStep()
-	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort:
+	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort, tuiStepWebhookPort:
 		return m.renderTextStep()
 	case tuiStepWebhook:
 		return m.renderWebhookStep()
@@ -1000,7 +1023,7 @@ func (m tuiModel) renderWebhookStep() string {
 	lines := []string{
 		m.renderProgress(),
 		tuiTitleStyle.Render("Webhook guidance"),
-		tuiSubtitleStyle.Render("Choose whether setup should include Tailscale webhook follow-up guidance."),
+		tuiSubtitleStyle.Render("Choose whether Colin should enable a dedicated local webhook listener for Tailscale Funnel."),
 		"",
 		lipgloss.JoinHorizontal(lipgloss.Top,
 			noStyle.Render("No"),
@@ -1029,6 +1052,12 @@ func (m tuiModel) renderReview() string {
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Workspace root:"), tuiReviewValueStyle.Render(previewWorkspaceRoot(answers.WorkspaceRoot))),
 		fmt.Sprintf("%s %d", tuiLabelStyle.Render("Server port:"), answers.ServerPort),
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Webhook guidance:"), tuiReviewValueStyle.Render(yesNo(answers.WantsWebhook))),
+		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Webhook port:"), tuiReviewValueStyle.Render(func() string {
+			if !answers.WantsWebhook {
+				return "disabled"
+			}
+			return strconv.Itoa(answers.WebhookPort)
+		}())),
 		"",
 		tuiLabelStyle.Render("Preflight checks"),
 	}
@@ -1134,6 +1163,8 @@ func (m tuiModel) textStepDetails() (string, string, string) {
 		return "Workspace root", "Colin will create per-issue workspaces under this directory.", m.workspaceRoot
 	case tuiStepServerPort:
 		return "Server port", "The local dashboard and setup UI port.", m.serverPort
+	case tuiStepWebhookPort:
+		return "Webhook port", "The local port for webhook and readyz endpoints exposed through Tailscale Funnel.", m.webhookPort
 	default:
 		return "", "", ""
 	}
