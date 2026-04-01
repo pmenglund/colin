@@ -25,7 +25,7 @@ const (
 	githubWebhookPath = "/webhooks/github"
 )
 
-var allowedFunnelPorts = []int{443, 8443, 10000}
+var allowedFunnelPorts = []int{8443, 10000, 443}
 
 // Options configures one Tailscale Funnel readiness inspection.
 type Options struct {
@@ -274,6 +274,7 @@ func matchFunnel(cfg *ipn.ServeConfig, localPort *int) (*funnelMatchInfo, map[in
 
 	ports := usedPorts(cfg)
 	var sawProxyForPort bool
+	matches := make([]funnelMatchInfo, 0, len(cfg.Web))
 	for hostPort, server := range cfg.Web {
 		if server == nil {
 			continue
@@ -292,13 +293,35 @@ func matchFunnel(cfg *ipn.ServeConfig, localPort *int) (*funnelMatchInfo, map[in
 			continue
 		}
 		sawProxyForPort = true
+		port, ok := parseHostPortPort(string(hostPort))
+		if !ok || !allowedFunnelPort(port) {
+			continue
+		}
 		if !cfg.AllowFunnel[hostPort] {
 			continue
 		}
-		return &funnelMatchInfo{
+		matches = append(matches, funnelMatchInfo{
 			URL:      hostPortToURL(string(hostPort)),
 			HostPort: string(hostPort),
-		}, ports, nil
+		})
+	}
+	if len(matches) > 0 {
+		sort.Slice(matches, func(i, j int) bool {
+			rootI := serveExposesRoot(cfg, matches[i].HostPort)
+			rootJ := serveExposesRoot(cfg, matches[j].HostPort)
+			if rootI != rootJ {
+				return !rootI
+			}
+			portI, _ := parseHostPortPort(matches[i].HostPort)
+			portJ, _ := parseHostPortPort(matches[j].HostPort)
+			rankI := funnelPortPreferenceRank(portI)
+			rankJ := funnelPortPreferenceRank(portJ)
+			if rankI != rankJ {
+				return rankI < rankJ
+			}
+			return matches[i].HostPort < matches[j].HostPort
+		})
+		return &matches[0], ports, nil
 	}
 	if sawProxyForPort {
 		return nil, ports, errors.New("Funnel points at Colin, but not from `/webhooks`.")
@@ -372,13 +395,22 @@ func probeCheck(client *http.Client, checkedAt time.Time, id, label, rawURL, rem
 func finalizeStatus(status domain.FunnelSetupStatus) domain.FunnelSetupStatus {
 	ready := len(status.Checks) > 0
 	for _, check := range status.Checks {
-		if check.Status != "ok" {
+		if !setupCheckAllowsReady(check.Status) {
 			ready = false
 			break
 		}
 	}
 	status.Ready = ready
 	return status
+}
+
+func setupCheckAllowsReady(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ok", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func localUIBaseURL(opts Options) string {
@@ -495,6 +527,36 @@ func serveURLScheme(port int) (string, bool) {
 	}
 }
 
+func allowedFunnelPort(port int) bool {
+	for _, candidate := range allowedFunnelPorts {
+		if candidate == port {
+			return true
+		}
+	}
+	return false
+}
+
+func funnelPortPreferenceRank(port int) int {
+	for idx, candidate := range allowedFunnelPorts {
+		if candidate == port {
+			return idx
+		}
+	}
+	return len(allowedFunnelPorts)
+}
+
+func serveExposesRoot(cfg *ipn.ServeConfig, hostPort string) bool {
+	if cfg == nil {
+		return false
+	}
+	server := cfg.Web[ipn.HostPort(hostPort)]
+	if server == nil {
+		return false
+	}
+	handler, ok := server.Handlers["/"]
+	return ok && handler != nil
+}
+
 func isServeDefaultPort(scheme string, port int) bool {
 	return (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
 }
@@ -543,7 +605,7 @@ func webhookCheckStatus(port *int) string {
 	if webhookConfigured(port) {
 		return "error"
 	}
-	return "ok"
+	return "disabled"
 }
 
 func webhookCheckDetail(port *int, err error) string {
@@ -585,15 +647,13 @@ func suggestedCommand(used map[int]struct{}, localPort *int) string {
 	if localPort == nil || *localPort <= 0 {
 		return ""
 	}
-	port := 443
-	for _, candidate := range allowedFunnelPorts {
-		if used == nil {
-			port = candidate
-			break
-		}
-		if _, exists := used[candidate]; !exists {
-			port = candidate
-			break
+	port := allowedFunnelPorts[0]
+	if used != nil {
+		for _, candidate := range allowedFunnelPorts {
+			if _, exists := used[candidate]; !exists {
+				port = candidate
+				break
+			}
 		}
 	}
 	return fmt.Sprintf("tailscale funnel --bg --https=%d --set-path=%s %d", port, webhookMountPath, *localPort)

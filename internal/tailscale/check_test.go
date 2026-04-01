@@ -49,7 +49,7 @@ func TestResolveMissingLocalAPI(t *testing.T) {
 	if status.Ready {
 		t.Fatal("Resolve() reported ready without a reachable LocalAPI")
 	}
-	if status.SuggestedCommand != "tailscale funnel --bg --https=443 --set-path=/webhooks 8998" {
+	if status.SuggestedCommand != "tailscale funnel --bg --https=8443 --set-path=/webhooks 8998" {
 		t.Fatalf("SuggestedCommand = %q", status.SuggestedCommand)
 	}
 	if got := status.Checks[0].ID; got != "tailscale_local_api" {
@@ -173,7 +173,7 @@ func TestResolveRejectsNonWebhookMount(t *testing.T) {
 	}
 }
 
-func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
+func TestResolvePrefersDedicatedWebhookFunnelWhenUnset(t *testing.T) {
 	t.Parallel()
 
 	inspector := &Inspector{
@@ -186,6 +186,11 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 			},
 			serveCfg: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/webhooks": {Proxy: "http://127.0.0.1:8888"},
+						},
+					},
 					"colin.tail.example.ts.net:8443": {
 						Handlers: map[string]*ipn.HTTPHandler{
 							"/webhooks": {Proxy: "http://127.0.0.1:8888"},
@@ -193,6 +198,7 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 					},
 				},
 				AllowFunnel: map[ipn.HostPort]bool{
+					"colin.tail.example.ts.net:443":  true,
 					"colin.tail.example.ts.net:8443": true,
 				},
 			},
@@ -211,6 +217,51 @@ func TestResolveDerivesPublicURLFromFunnelWhenUnset(t *testing.T) {
 	}
 	if status.PublicURLSource != "funnel" {
 		t.Fatalf("PublicURLSource = %q", status.PublicURLSource)
+	}
+}
+
+func TestResolveFallsBackToPort443WhenNoDedicatedWebhookFunnelExists(t *testing.T) {
+	t.Parallel()
+
+	inspector := &Inspector{
+		localClient: fakeLocalAPIClient{
+			status: &ipnstate.Status{
+				BackendState: "Running",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					MagicDNSEnabled: true,
+				},
+			},
+			serveCfg: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"colin.tail.example.ts.net:8443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/":         {Proxy: "http://127.0.0.1:8888"},
+							"/webhooks": {Proxy: "http://127.0.0.1:8998"},
+						},
+					},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					"colin.tail.example.ts.net:8443": true,
+				},
+			},
+		},
+		now: func() time.Time {
+			return time.Date(2026, 3, 30, 19, 0, 0, 0, time.UTC)
+		},
+	}
+
+	status := inspector.Resolve(context.Background(), Options{
+		UIPort:      intPtr(8888),
+		WebhookPort: intPtr(8998),
+	})
+	if !status.Ready {
+		t.Fatalf("Resolve() Ready = false, checks = %#v", status.Checks)
+	}
+	if status.PublicBaseURL != "https://colin.tail.example.ts.net:8443" {
+		t.Fatalf("PublicBaseURL = %q", status.PublicBaseURL)
+	}
+	if status.DetectedFunnelURL != "https://colin.tail.example.ts.net:8443" {
+		t.Fatalf("DetectedFunnelURL = %q", status.DetectedFunnelURL)
 	}
 }
 
@@ -376,8 +427,8 @@ func TestResolveSkipsFunnelWhenWebhookPortUnset(t *testing.T) {
 		t.Fatalf("SuggestedServeCommand = %q", status.SuggestedServeCommand)
 	}
 	last := status.Checks[len(status.Checks)-1]
-	if last.ID != "funnel_route" || last.Status != "ok" {
-		t.Fatalf("last check = %#v, want disabled-ok funnel check", last)
+	if last.ID != "funnel_route" || last.Status != "disabled" {
+		t.Fatalf("last check = %#v, want disabled funnel check", last)
 	}
 }
 

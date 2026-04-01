@@ -34,6 +34,7 @@ func renderOverviewView(m model) string {
 		"",
 		labelStyle.Render("URLs"),
 		renderURLLine("dashboard", m.dashboardURL),
+		renderURLLine("tailnet", m.setup.TailnetUIBaseURL),
 		renderURLLine("setup", m.setupURL),
 		renderURLLine("public", m.setup.PublicBaseURL),
 		renderURLLine("linear hook", m.setup.LinearWebhookURL),
@@ -104,9 +105,9 @@ func renderHeaderStatus(m model) string {
 func renderURLLine(label string, value string) string {
 	name := subtleStyle.Render(padRight(label, 11))
 	if strings.TrimSpace(value) == "" {
-		return name + subtleStyle.Render("not available")
+		return name + " " + subtleStyle.Render("not available")
 	}
-	return name + healthyURLStyle.Render(value)
+	return name + " " + healthyURLStyle.Render(value)
 }
 
 func renderWorkerLine(worker domain.SnapshotRunning, width int) string {

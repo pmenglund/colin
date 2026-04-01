@@ -571,6 +571,7 @@ func TestRenderSetupStatusColorizesCheckLabels(t *testing.T) {
 		Checks: []domain.SetupCheck{
 			{Status: "ok", Label: "Tailscale is running"},
 			{Status: "error", Label: "MagicDNS is enabled"},
+			{Status: "disabled", Label: "Webhook listener is disabled"},
 		},
 	})
 
@@ -580,6 +581,9 @@ func TestRenderSetupStatusColorizesCheckLabels(t *testing.T) {
 	}
 	if !strings.Contains(got, setupStatusErrorStyle.Render("[ERROR]")) {
 		t.Fatalf("output = %q, want colored ERROR label", got)
+	}
+	if !strings.Contains(got, setupStatusMutedStyle.Render("[DISABLED]")) {
+		t.Fatalf("output = %q, want muted DISABLED label", got)
 	}
 }
 

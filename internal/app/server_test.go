@@ -99,11 +99,11 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			LocalBaseURL:          "http://127.0.0.1:8888",
 			LocalWebhookBaseURL:   "http://127.0.0.1:8998",
 			TailnetUIBaseURL:      "https://colin.tail.example.ts.net",
-			PublicBaseURL:         "https://colin.tail.example.ts.net",
+			PublicBaseURL:         "https://colin.tail.example.ts.net:8443",
 			SuggestedServeCommand: "tailscale serve --bg 8888",
-			SuggestedCommand:      "tailscale funnel --bg --https=443 --set-path=/webhooks 8998",
-			LinearWebhookURL:      "https://colin.tail.example.ts.net/webhooks/linear",
-			GitHubWebhookURL:      "https://colin.tail.example.ts.net/webhooks/github",
+			SuggestedCommand:      "tailscale funnel --bg --https=8443 --set-path=/webhooks 8998",
+			LinearWebhookURL:      "https://colin.tail.example.ts.net:8443/webhooks/linear",
+			GitHubWebhookURL:      "https://colin.tail.example.ts.net:8443/webhooks/github",
 			Checks: []domain.SetupCheck{
 				{
 					ID:        "tailscale_local_api",
@@ -295,7 +295,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !status.Ready {
 			t.Fatal("Ready = false, want true")
 		}
-		if status.GitHubWebhookURL != "https://colin.tail.example.ts.net/webhooks/github" {
+		if status.GitHubWebhookURL != "https://colin.tail.example.ts.net:8443/webhooks/github" {
 			t.Fatalf("GitHubWebhookURL = %q", status.GitHubWebhookURL)
 		}
 	})
@@ -382,9 +382,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		for _, want := range []string{
 			`data-testid="funnel-urls"`,
 			`Tailscale ready`,
-			`https://colin.tail.example.ts.net/webhooks/github`,
+			`https://colin.tail.example.ts.net:8443/webhooks/github`,
 			`tailscale serve --bg 8888`,
-			`tailscale funnel --bg --https=443 --set-path=/webhooks 8998`,
+			`tailscale funnel --bg --https=8443 --set-path=/webhooks 8998`,
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("setup page missing %q: %s", want, text)

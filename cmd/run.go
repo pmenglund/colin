@@ -19,6 +19,7 @@ import (
 var (
 	setupStatusOKStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	setupStatusErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	setupStatusMutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	setupStatusWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 )
 
@@ -200,6 +201,8 @@ func renderSetupCheckStatus(status string) string {
 		return setupStatusOKStyle.Render(label)
 	case "error":
 		return setupStatusErrorStyle.Render(label)
+	case "disabled", "skipped":
+		return setupStatusMutedStyle.Render(label)
 	case "warn":
 		return setupStatusWarnStyle.Render(label)
 	default:
