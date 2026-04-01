@@ -93,14 +93,14 @@ func RenderTemplate(text string, payload map[string]any) (string, error) {
 	return strings.TrimSpace(buffer.String()), nil
 }
 
-func parseWorkflow(data []byte) (map[string]any, string, error) {
+func parseWorkflow(data []byte) (domain.WorkflowConfig, string, error) {
 	source := string(data)
 	if !strings.HasPrefix(source, "---") {
-		return map[string]any{}, strings.TrimSpace(source), nil
+		return domain.WorkflowConfig{}, strings.TrimSpace(source), nil
 	}
 	lines := strings.Split(source, "\n")
 	if len(lines) < 3 {
-		return nil, "", fmt.Errorf("%w: unterminated front matter", ErrWorkflowParseError)
+		return domain.WorkflowConfig{}, "", fmt.Errorf("%w: unterminated front matter", ErrWorkflowParseError)
 	}
 	end := -1
 	for i := 1; i < len(lines); i++ {
@@ -110,48 +110,19 @@ func parseWorkflow(data []byte) (map[string]any, string, error) {
 		}
 	}
 	if end == -1 {
-		return nil, "", fmt.Errorf("%w: unterminated front matter", ErrWorkflowParseError)
+		return domain.WorkflowConfig{}, "", fmt.Errorf("%w: unterminated front matter", ErrWorkflowParseError)
 	}
 	frontMatter := strings.Join(lines[1:end], "\n")
 	body := strings.Join(lines[end+1:], "\n")
 
-	var decoded any
-	if err := yaml.Unmarshal([]byte(frontMatter), &decoded); err != nil {
-		return nil, "", fmt.Errorf("%w: %v", ErrWorkflowParseError, err)
-	}
-	if decoded == nil {
-		return map[string]any{}, strings.TrimSpace(body), nil
-	}
-	root, ok := convertMap(decoded).(map[string]any)
-	if !ok {
-		return nil, "", ErrWorkflowFrontMatterNotMap
-	}
-	return root, strings.TrimSpace(body), nil
-}
+	decoder := yaml.NewDecoder(strings.NewReader(frontMatter))
+	decoder.KnownFields(true)
 
-func convertMap(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for key, item := range v {
-			out[key] = convertMap(item)
-		}
-		return out
-	case map[any]any:
-		out := make(map[string]any, len(v))
-		for key, item := range v {
-			out[fmt.Sprint(key)] = convertMap(item)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = convertMap(item)
-		}
-		return out
-	default:
-		return v
+	var decoded domain.WorkflowConfig
+	if err := decoder.Decode(&decoded); err != nil {
+		return domain.WorkflowConfig{}, "", fmt.Errorf("%w: %v", ErrWorkflowParseError, err)
 	}
+	return decoded, strings.TrimSpace(body), nil
 }
 
 func issueToMap(issue domain.Issue) map[string]any {

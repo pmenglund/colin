@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
+	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 )
 
@@ -137,6 +138,17 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		if strings.TrimSpace(event.result.Summary) != "" {
 			event.result.Issue = o.postRunSummary(ctx, entry, event.result.Issue, event.result.Summary)
 		}
+		if o.shouldRetrySameStateHandoff(entry, event.result) {
+			o.logger.Info(
+				"handoff automation is waiting in the same state; scheduling silent retry",
+				"issue_id", event.issueID,
+				"issue_identifier", entry.identifier,
+				"run_type", event.result.RunType,
+				"current_state", event.result.Issue.State,
+			)
+			o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "waiting for external handoff follow-up to complete", reviewSyncSlowPollInterval, entry.comment, false)
+			return
+		}
 		o.logger.Info(
 			"worker completed but review follow-up is incomplete; keeping issue in todo",
 			"issue_id", event.issueID,
@@ -257,6 +269,21 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		entry.comment,
 		true,
 	)
+}
+
+func (o *Orchestrator) shouldRetrySameStateHandoff(entry *runningEntry, result codex.Result) bool {
+	if entry == nil {
+		return false
+	}
+	if result.Status != "blocked" {
+		return false
+	}
+	switch result.RunType {
+	case codex.RunTypeReviewPublish, codex.RunTypeMerge:
+	default:
+		return false
+	}
+	return config.StateKey(entry.issue.State) == config.StateKey(result.Issue.State)
 }
 
 func shouldPostSummaryForSucceededRun(o *Orchestrator, result codex.Result) bool {

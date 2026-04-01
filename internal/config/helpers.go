@@ -1,44 +1,44 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/githubauth"
 )
 
-func normalizeSandboxPolicy(policy map[string]any) map[string]any {
-	if len(policy) == 0 {
-		return policy
-	}
-
-	normalized := make(map[string]any, len(policy))
-	for key, value := range policy {
-		normalized[key] = value
-	}
-
-	if mode, ok := readSandboxMode(normalized["mode"]); ok {
-		normalized["type"] = sandboxPolicyType(mode)
-		delete(normalized, "mode")
-	}
-	if policyType, ok := readSandboxMode(normalized["type"]); ok {
-		normalized["type"] = sandboxPolicyType(policyType)
-	}
-	return normalized
+func normalizeSandboxPolicy(policy domain.SandboxPolicy) domain.SandboxPolicy {
+	policy.Type = sandboxPolicyType(policy.Type)
+	return policy
 }
 
-func readSandboxMode(value any) (string, bool) {
-	text, ok := value.(string)
+func currentGitHubToken() string {
+	return githubauth.CurrentToken()
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func intValue(value *int) (int, bool) {
+	if value == nil {
+		return 0, false
+	}
+	return *value, true
+}
+
+func durationMillisValue(value *int) (time.Duration, bool) {
+	number, ok := intValue(value)
 	if !ok {
-		return "", false
+		return 0, false
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-	return text, true
+	return time.Duration(number) * time.Millisecond, true
 }
 
 func sandboxPolicyType(value string) string {
@@ -54,97 +54,6 @@ func sandboxPolicyType(value string) string {
 	default:
 		return value
 	}
-}
-
-func readString(raw map[string]any, key string) (string, bool) {
-	value, ok := raw[key]
-	if !ok || value == nil {
-		return "", false
-	}
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v), true
-	default:
-		return strings.TrimSpace(fmt.Sprint(v)), true
-	}
-}
-
-func readStringSlice(raw map[string]any, key string) ([]string, bool) {
-	value, ok := raw[key]
-	if !ok || value == nil {
-		return nil, false
-	}
-	items, ok := value.([]any)
-	if !ok {
-		return nil, false
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		switch v := item.(type) {
-		case string:
-			if trimmed := strings.TrimSpace(v); trimmed != "" {
-				out = append(out, trimmed)
-			}
-		default:
-			trimmed := strings.TrimSpace(fmt.Sprint(v))
-			if trimmed != "" {
-				out = append(out, trimmed)
-			}
-		}
-	}
-	return out, true
-}
-
-func readInt(raw map[string]any, key string) (int, bool) {
-	value, ok := raw[key]
-	if !ok || value == nil {
-		return 0, false
-	}
-	return toInt(value)
-}
-
-func readBool(raw map[string]any, key string) (bool, bool) {
-	value, ok := raw[key]
-	if !ok || value == nil {
-		return false, false
-	}
-	return toBool(value)
-}
-
-func toInt(value any) (int, bool) {
-	switch v := value.(type) {
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case float64:
-		return int(v), true
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		return n, err == nil
-	default:
-		return 0, false
-	}
-}
-
-func toBool(value any) (bool, bool) {
-	switch v := value.(type) {
-	case bool:
-		return v, true
-	case string:
-		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
-		return parsed, err == nil
-	default:
-		return false, false
-	}
-}
-
-func readDurationMillis(raw map[string]any, key string) (time.Duration, bool) {
-	value, ok := readInt(raw, key)
-	if !ok {
-		return 0, false
-	}
-	return time.Duration(value) * time.Millisecond, true
 }
 
 func resolveEnvToken(value string) string {

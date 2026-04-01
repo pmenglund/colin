@@ -101,38 +101,59 @@ func clonePausedStateSummaries(input map[string]domain.PausedStateSummary) map[s
 	return out
 }
 
-func mergeRateLimits(base map[string]any, overlay map[string]any) map[string]any {
+func mergeRateLimits(base domain.RateLimitSnapshot, overlay domain.RateLimitSnapshot) domain.RateLimitSnapshot {
 	switch {
 	case len(base) == 0 && len(overlay) == 0:
 		return nil
 	case len(base) == 0:
-		return cloneAnyMap(overlay)
+		return cloneRateLimitSnapshot(overlay)
 	case len(overlay) == 0:
-		return cloneAnyMap(base)
+		return cloneRateLimitSnapshot(base)
 	}
 
-	out := cloneAnyMap(base)
+	out := cloneRateLimitSnapshot(base)
 	for key, value := range overlay {
-		if nested, ok := value.(map[string]any); ok {
-			out[key] = cloneAnyMap(nested)
-			continue
-		}
-		out[key] = value
+		out[key] = cloneRateLimitWindow(value)
 	}
 	return out
 }
 
-func cloneAnyMap(input map[string]any) map[string]any {
+func cloneRateLimitSnapshot(input domain.RateLimitSnapshot) domain.RateLimitSnapshot {
 	if len(input) == 0 {
 		return nil
 	}
-	out := make(map[string]any, len(input))
+	out := make(domain.RateLimitSnapshot, len(input))
 	for key, value := range input {
-		if nested, ok := value.(map[string]any); ok {
-			out[key] = cloneAnyMap(nested)
-			continue
-		}
-		out[key] = value
+		out[key] = cloneRateLimitWindow(value)
+	}
+	return out
+}
+
+func cloneRateLimitWindow(input domain.RateLimitWindow) domain.RateLimitWindow {
+	out := input
+	if input.WindowDurationMinutes != nil {
+		value := *input.WindowDurationMinutes
+		out.WindowDurationMinutes = &value
+	}
+	if input.Limit != nil {
+		value := *input.Limit
+		out.Limit = &value
+	}
+	if input.Remaining != nil {
+		value := *input.Remaining
+		out.Remaining = &value
+	}
+	if input.UsedPercent != nil {
+		value := *input.UsedPercent
+		out.UsedPercent = &value
+	}
+	if input.ResetsAt != nil {
+		value := *input.ResetsAt
+		out.ResetsAt = &value
+	}
+	if input.NextAllowedAt != nil {
+		value := *input.NextAllowedAt
+		out.NextAllowedAt = &value
 	}
 	return out
 }

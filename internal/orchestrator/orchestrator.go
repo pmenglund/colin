@@ -298,11 +298,10 @@ func (o *Orchestrator) trackerThrottleDelay(now time.Time) time.Duration {
 	if !ok {
 		return 0
 	}
-	nextAllowedAt, ok := unixTimeValue(linearRequests["nextAllowedAt"])
-	if !ok || !nextAllowedAt.After(now) {
+	if linearRequests.NextAllowedAt == nil || !linearRequests.NextAllowedAt.After(now) {
 		return 0
 	}
-	return nextAllowedAt.Sub(now)
+	return linearRequests.NextAllowedAt.Sub(now)
 }
 
 func (o *Orchestrator) linearRateLimitLogArgs() []any {
@@ -311,57 +310,31 @@ func (o *Orchestrator) linearRateLimitLogArgs() []any {
 		return nil
 	}
 	args := make([]any, 0, 8)
-	if remaining, ok := int64Value(linearRequests["remaining"]); ok {
-		args = append(args, "linear_requests_remaining", remaining)
+	if linearRequests.Remaining != nil {
+		args = append(args, "linear_requests_remaining", *linearRequests.Remaining)
 	}
-	if limit, ok := int64Value(linearRequests["limit"]); ok {
-		args = append(args, "linear_requests_limit", limit)
+	if linearRequests.Limit != nil {
+		args = append(args, "linear_requests_limit", *linearRequests.Limit)
 	}
-	if resetsAt, ok := unixTimeValue(linearRequests["resetsAt"]); ok {
-		args = append(args, "linear_requests_reset_at", resetsAt.Format(time.RFC3339))
+	if linearRequests.ResetsAt != nil {
+		args = append(args, "linear_requests_reset_at", linearRequests.ResetsAt.Format(time.RFC3339))
 	}
-	if nextAllowedAt, ok := unixTimeValue(linearRequests["nextAllowedAt"]); ok {
-		args = append(args, "linear_requests_next_allowed_at", nextAllowedAt.Format(time.RFC3339))
+	if linearRequests.NextAllowedAt != nil {
+		args = append(args, "linear_requests_next_allowed_at", linearRequests.NextAllowedAt.Format(time.RFC3339))
 	}
 	return args
 }
 
-func (o *Orchestrator) currentLinearRequests() (map[string]any, bool) {
+func (o *Orchestrator) currentLinearRequests() (domain.RateLimitWindow, bool) {
 	limits := o.runtime.Tracker.CurrentRateLimits()
 	if len(limits) == 0 {
-		return nil, false
+		return domain.RateLimitWindow{}, false
 	}
-	linearRequests, ok := limits["linear_requests"].(map[string]any)
+	linearRequests, ok := limits["linear_requests"]
 	if !ok {
-		return nil, false
+		return domain.RateLimitWindow{}, false
 	}
 	return linearRequests, true
-}
-
-func unixTimeValue(value any) (time.Time, bool) {
-	switch v := value.(type) {
-	case int64:
-		return time.Unix(v, 0).UTC(), true
-	case int:
-		return time.Unix(int64(v), 0).UTC(), true
-	case float64:
-		return time.Unix(int64(v), 0).UTC(), true
-	default:
-		return time.Time{}, false
-	}
-}
-
-func int64Value(value any) (int64, bool) {
-	switch v := value.(type) {
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	default:
-		return 0, false
-	}
 }
 
 func trackedStateNames(cfg domain.ServiceConfig) []string {

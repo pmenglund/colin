@@ -67,15 +67,13 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			CreateExecPlan:             false,
 		},
 		Codex: domain.CodexConfig{
-			Command:        "codex app-server",
-			TurnTimeout:    1 * time.Hour,
-			ReadTimeout:    5 * time.Second,
-			StallTimeout:   5 * time.Minute,
-			ApprovalPolicy: "never",
-			ThreadSandbox:  "danger-full-access",
-			TurnSandboxPolicy: map[string]any{
-				"type": "dangerFullAccess",
-			},
+			Command:           "codex app-server",
+			TurnTimeout:       1 * time.Hour,
+			ReadTimeout:       5 * time.Second,
+			StallTimeout:      5 * time.Minute,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 		},
 		Server: domain.ServerConfig{
 			Port:           intPtr(8888),
@@ -83,28 +81,28 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 		},
 	}
 
-	if err := applyTrackerConfig(&cfg, readMap(def.Config, "tracker")); err != nil {
+	if err := applyTrackerConfig(&cfg, def.Config.Tracker); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyPollingConfig(&cfg, readMap(def.Config, "polling")); err != nil {
+	if err := applyPollingConfig(&cfg, def.Config.Polling); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyWorkspaceConfig(&cfg, readMap(def.Config, "workspace")); err != nil {
+	if err := applyWorkspaceConfig(&cfg, def.Config.Workspace); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyRepoConfig(&cfg, readMap(def.Config, "repo")); err != nil {
+	if err := applyRepoConfig(&cfg, def.Config.Repo); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyHooksConfig(&cfg, readMap(def.Config, "hooks")); err != nil {
+	if err := applyHooksConfig(&cfg, def.Config.Hooks); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyAgentConfig(&cfg, readMap(def.Config, "agent")); err != nil {
+	if err := applyAgentConfig(&cfg, def.Config.Agent); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyCodexConfig(&cfg, readMap(def.Config, "codex")); err != nil {
+	if err := applyCodexConfig(&cfg, def.Config.Codex); err != nil {
 		return domain.ServiceConfig{}, err
 	}
-	if err := applyServerConfig(&cfg, readMap(def.Config, "server")); err != nil {
+	if err := applyServerConfig(&cfg, def.Config.Server); err != nil {
 		return domain.ServiceConfig{}, err
 	}
 
@@ -193,46 +191,27 @@ func CandidateStates(cfg domain.ServiceConfig) []string {
 	return out
 }
 
-func readMap(root map[string]any, key string) map[string]any {
-	if root == nil {
-		return nil
-	}
-	value, ok := root[key]
-	if !ok {
-		return nil
-	}
-	out, ok := value.(map[string]any)
-	if ok {
-		return out
-	}
-	return nil
-}
-
-func applyTrackerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		cfg.Tracker.APIKey = strings.TrimSpace(os.Getenv("LINEAR_API_KEY"))
-		return nil
-	}
-	if value, ok := readString(raw, "kind"); ok {
+func applyTrackerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTrackerConfig) error {
+	if value := stringValue(raw.Kind); value != "" {
 		cfg.Tracker.Kind = value
 	}
-	if value, ok := readString(raw, "endpoint"); ok {
+	if value := stringValue(raw.Endpoint); value != "" {
 		cfg.Tracker.Endpoint = value
 	}
-	if value, ok := readString(raw, "api_key"); ok {
+	if value := stringValue(raw.APIKey); value != "" {
 		cfg.Tracker.APIKey = resolveEnvToken(value)
 	}
-	if value, ok := readString(raw, "webhook_signing_secret"); ok {
+	if value := stringValue(raw.WebhookSigningSecret); value != "" {
 		cfg.Tracker.WebhookSigningSecret = resolveEnvToken(value)
 	}
-	if value, ok := readString(raw, "project_slug"); ok {
+	if value := stringValue(raw.ProjectSlug); value != "" {
 		cfg.Tracker.ProjectSlug = value
 	}
-	if value, ok := readStringSlice(raw, "active_states"); ok && len(value) > 0 {
-		cfg.Tracker.ActiveStates = value
+	if len(raw.ActiveStates) > 0 {
+		cfg.Tracker.ActiveStates = append([]string(nil), raw.ActiveStates...)
 	}
-	if value, ok := readStringSlice(raw, "terminal_states"); ok && len(value) > 0 {
-		cfg.Tracker.TerminalStates = value
+	if len(raw.TerminalStates) > 0 {
+		cfg.Tracker.TerminalStates = append([]string(nil), raw.TerminalStates...)
 	}
 	if cfg.Tracker.APIKey == "" {
 		cfg.Tracker.APIKey = strings.TrimSpace(os.Getenv("LINEAR_API_KEY"))
@@ -240,119 +219,95 @@ func applyTrackerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	return nil
 }
 
-func applyPollingConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := readDurationMillis(raw, "interval_ms"); ok && value > 0 {
+func applyPollingConfig(cfg *domain.ServiceConfig, raw domain.WorkflowPollingConfig) error {
+	if value, ok := durationMillisValue(raw.IntervalMillis); ok && value > 0 {
 		cfg.Polling.Interval = value
 	}
 	return nil
 }
 
-func applyWorkspaceConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		cfg.Workspace.Root = expandPath(cfg.Workspace.Root)
-		return nil
-	}
-	if value, ok := readString(raw, "root"); ok {
+func applyWorkspaceConfig(cfg *domain.ServiceConfig, raw domain.WorkflowWorkspaceConfig) error {
+	if value := stringValue(raw.Root); value != "" {
 		cfg.Workspace.Root = expandPath(resolveEnvToken(value))
 	} else {
 		cfg.Workspace.Root = expandPath(cfg.Workspace.Root)
 	}
-	if value, ok := readString(raw, "repo_url"); ok {
-		cfg.Workspace.RepoURL = strings.TrimSpace(value)
+	if value := stringValue(raw.RepoURL); value != "" {
+		cfg.Workspace.RepoURL = value
 	}
-	if value, ok := readString(raw, "base_ref"); ok {
-		cfg.Workspace.BaseRef = strings.TrimSpace(value)
+	if value := stringValue(raw.BaseRef); value != "" {
+		cfg.Workspace.BaseRef = value
 	}
 	return nil
 }
 
-func applyHooksConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := readString(raw, "after_create"); ok {
+func applyHooksConfig(cfg *domain.ServiceConfig, raw domain.WorkflowHookConfig) error {
+	if value := stringValue(raw.AfterCreate); value != "" {
 		cfg.Hooks.AfterCreate = value
 	}
-	if value, ok := readString(raw, "before_run"); ok {
+	if value := stringValue(raw.BeforeRun); value != "" {
 		cfg.Hooks.BeforeRun = value
 	}
-	if value, ok := readString(raw, "after_run"); ok {
+	if value := stringValue(raw.AfterRun); value != "" {
 		cfg.Hooks.AfterRun = value
 	}
-	if value, ok := readString(raw, "before_remove"); ok {
+	if value := stringValue(raw.BeforeRemove); value != "" {
 		cfg.Hooks.BeforeRemove = value
 	}
-	if value, ok := readDurationMillis(raw, "timeout_ms"); ok {
+	if value, ok := durationMillisValue(raw.TimeoutMillis); ok {
 		cfg.Hooks.Timeout = value
 	}
 	return nil
 }
 
-func applyRepoConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-		if cfg.Repo.APIToken == "" {
-			cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
-		}
-		return nil
+func applyRepoConfig(cfg *domain.ServiceConfig, raw domain.WorkflowRepoConfig) error {
+	if len(raw.PublishStates) > 0 {
+		cfg.Repo.PublishStates = append([]string(nil), raw.PublishStates...)
 	}
-	if value, ok := readStringSlice(raw, "publish_states"); ok && len(value) > 0 {
-		cfg.Repo.PublishStates = value
+	if len(raw.MergeStates) > 0 {
+		cfg.Repo.MergeStates = append([]string(nil), raw.MergeStates...)
 	}
-	if value, ok := readStringSlice(raw, "merge_states"); ok && len(value) > 0 {
-		cfg.Repo.MergeStates = value
-	}
-	if value, ok := readString(raw, "remote_name"); ok {
+	if value := stringValue(raw.RemoteName); value != "" {
 		cfg.Repo.RemoteName = value
 	}
-	if value, ok := readString(raw, "merge_method"); ok {
+	if value := stringValue(raw.MergeMethod); value != "" {
 		cfg.Repo.MergeMethod = strings.ToLower(value)
 	}
-	if value, ok := readString(raw, "branch_template"); ok {
+	if value := stringValue(raw.BranchTemplate); value != "" {
 		cfg.Repo.BranchTemplate = value
 	}
-	if value, ok := readString(raw, "pr_template"); ok {
+	if value := stringValue(raw.PRTemplate); value != "" {
 		cfg.Repo.PRTemplate = value
 	}
-	if value, ok := readString(raw, "api_token"); ok {
+	if value := stringValue(raw.APIToken); value != "" {
 		cfg.Repo.APIToken = resolveEnvToken(value)
 	}
-	if value, ok := readBool(raw, "codex_pr_reviews_enabled"); ok {
-		cfg.Repo.CodexPRReviewsEnabled = value
+	if raw.CodexPRReviewsEnabled != nil {
+		cfg.Repo.CodexPRReviewsEnabled = *raw.CodexPRReviewsEnabled
 	}
 	if cfg.Repo.APIToken == "" {
-		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-	}
-	if cfg.Repo.APIToken == "" {
-		cfg.Repo.APIToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+		cfg.Repo.APIToken = currentGitHubToken()
 	}
 	return nil
 }
 
-func applyAgentConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := readInt(raw, "max_concurrent_agents"); ok && value > 0 {
+func applyAgentConfig(cfg *domain.ServiceConfig, raw domain.WorkflowAgentConfig) error {
+	if value, ok := intValue(raw.MaxConcurrentAgents); ok && value > 0 {
 		cfg.Agent.MaxConcurrentAgents = value
 	}
-	if value, ok := readDurationMillis(raw, "max_retry_backoff_ms"); ok && value > 0 {
+	if value, ok := durationMillisValue(raw.MaxRetryBackoffMillis); ok && value > 0 {
 		cfg.Agent.MaxRetryBackoff = value
 	}
-	if value, ok := readInt(raw, "max_turns"); ok && value > 0 {
+	if value, ok := intValue(raw.MaxTurns); ok && value > 0 {
 		cfg.Agent.MaxTurns = value
 	}
-	if value, ok := readBool(raw, "create_exec_plan"); ok {
-		cfg.Agent.CreateExecPlan = value
+	if raw.CreateExecPlan != nil {
+		cfg.Agent.CreateExecPlan = *raw.CreateExecPlan
 	}
-	if rawMap, ok := raw["max_concurrent_agents_by_state"].(map[string]any); ok {
+	if len(raw.MaxConcurrentAgentsByState) > 0 {
 		cfg.Agent.MaxConcurrentAgentsByState = map[string]int{}
-		for key, value := range rawMap {
-			number, ok := toInt(value)
-			if !ok || number <= 0 {
+		for key, number := range raw.MaxConcurrentAgentsByState {
+			if number <= 0 {
 				continue
 			}
 			cfg.Agent.MaxConcurrentAgentsByState[StateKey(key)] = number
@@ -361,51 +316,50 @@ func applyAgentConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
 	return nil
 }
 
-func applyCodexConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := readString(raw, "command"); ok {
+func applyCodexConfig(cfg *domain.ServiceConfig, raw domain.WorkflowCodexConfig) error {
+	if value := stringValue(raw.Command); value != "" {
 		cfg.Codex.Command = value
 	}
-	if value, ok := readString(raw, "approval_policy"); ok {
+	if value := stringValue(raw.ApprovalPolicy); value != "" {
 		cfg.Codex.ApprovalPolicy = value
 	}
-	if value, ok := readString(raw, "thread_sandbox"); ok {
+	if value := stringValue(raw.ThreadSandbox); value != "" {
 		cfg.Codex.ThreadSandbox = value
 	}
-	if value, ok := raw["turn_sandbox_policy"].(map[string]any); ok {
-		cfg.Codex.TurnSandboxPolicy = value
+	if raw.TurnSandboxPolicy != nil {
+		cfg.Codex.TurnSandboxPolicy = domain.SandboxPolicy{
+			Type: stringValue(raw.TurnSandboxPolicy.Type),
+		}
+		if cfg.Codex.TurnSandboxPolicy.Type == "" {
+			cfg.Codex.TurnSandboxPolicy.Type = stringValue(raw.TurnSandboxPolicy.Mode)
+		}
 	}
-	if value, ok := readDurationMillis(raw, "turn_timeout_ms"); ok && value > 0 {
+	if value, ok := durationMillisValue(raw.TurnTimeoutMillis); ok && value > 0 {
 		cfg.Codex.TurnTimeout = value
 	}
-	if value, ok := readDurationMillis(raw, "read_timeout_ms"); ok && value > 0 {
+	if value, ok := durationMillisValue(raw.ReadTimeoutMillis); ok && value > 0 {
 		cfg.Codex.ReadTimeout = value
 	}
-	if value, ok := readDurationMillis(raw, "stall_timeout_ms"); ok {
+	if value, ok := durationMillisValue(raw.StallTimeoutMillis); ok {
 		cfg.Codex.StallTimeout = value
 	}
 	return nil
 }
 
-func applyServerConfig(cfg *domain.ServiceConfig, raw map[string]any) error {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := readInt(raw, "port"); ok {
+func applyServerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowServerConfig) error {
+	if value, ok := intValue(raw.Port); ok {
 		cfg.Server.Port = &value
 	}
-	if value, ok := readString(raw, "public_url"); ok {
+	if value := stringValue(raw.PublicURL); value != "" {
 		cfg.Server.PublicURL = resolveEnvToken(value)
 	}
-	if value, ok := readString(raw, "webhook_public_url"); ok {
+	if value := stringValue(raw.WebhookPublicURL); value != "" {
 		cfg.Server.WebhookPublicURL = resolveEnvToken(value)
 	}
-	if value, ok := readString(raw, "ui_url"); ok {
+	if value := stringValue(raw.UIURL); value != "" {
 		cfg.Server.UIURL = resolveEnvToken(value)
 	}
-	if value, ok := readInt(raw, "log_buffer_lines"); ok && value > 0 {
+	if value, ok := intValue(raw.LogBufferLines); ok && value > 0 {
 		cfg.Server.LogBufferLines = value
 	}
 	return nil

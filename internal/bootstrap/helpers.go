@@ -4,16 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/githubauth"
 	"github.com/pmenglund/colin/internal/workflow"
 )
-
-var gitRemotePattern = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@[^:\s]+:[^\s]+|https?://\S+|ssh://\S+|git://\S+)$`)
 
 type resolvedOptions struct {
 	workflowPath string
@@ -45,7 +43,7 @@ func resolveOptions(opts Options) (resolvedOptions, error) {
 		prereqs:      detectPrerequisites(),
 		defaults:     detectDefaults(workingDir),
 		linearAPIKey: currentLinearAPIKey(),
-		githubToken:  currentGitHubToken(),
+		githubToken:  githubauth.CurrentToken(),
 	}, nil
 }
 
@@ -65,8 +63,7 @@ func validateOptionalLinearAPIKey(value string) string {
 }
 
 func isValidGitHubToken(value string) bool {
-	trimmed := strings.TrimSpace(value)
-	return strings.HasPrefix(trimmed, "github_pat_") || strings.HasPrefix(trimmed, "ghp_")
+	return githubauth.IsValidToken(value)
 }
 
 func validateOptionalGitHubToken(value string) string {
@@ -92,8 +89,8 @@ func validateRepoURL(value string) string {
 	if trimmed == "" {
 		return "Repository URL is required."
 	}
-	if !gitRemotePattern.MatchString(trimmed) {
-		return "Repository URL should look like an SSH, HTTPS, or Git remote."
+	if _, err := githubauth.ParseRepositoryURL(trimmed); err != nil {
+		return "Repository URL must be a supported github.com SSH or HTTPS remote."
 	}
 	return ""
 }
@@ -245,7 +242,7 @@ func applySessionLinearAPIKey(value string) error {
 
 func applySessionGitHubToken(value string) error {
 	value = strings.TrimSpace(value)
-	if !isValidGitHubToken(value) || isValidGitHubToken(currentGitHubToken()) {
+	if !isValidGitHubToken(value) || isValidGitHubToken(githubauth.CurrentToken()) {
 		return nil
 	}
 	if err := os.Setenv("GITHUB_TOKEN", value); err != nil {

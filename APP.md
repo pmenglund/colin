@@ -51,7 +51,8 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/tracker/` - tracker interface
 - `internal/tracker/linear/` - Linear GraphQL adapter for issue reads, state writes, comment writes, and `paused` label management
 - `internal/workspace/` - per-issue workspace lifecycle and hooks
-- `internal/agent/codex/` - Codex app-server integration and event normalization
+- `internal/agent/codex/` - Codex app-server integration, transport, and protocol/event normalization
+- `internal/automation/` - issue-run orchestration, workflow handoff policy, ExecPlan decisions, and merge-recovery automation
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
 - `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and reserved webhook routes
 - `internal/ui/` - gomponents-based HTML for the dashboard
@@ -62,7 +63,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - Keep workflow policy in `WORKFLOW.md` and `internal/config`, not scattered through the service.
 - Keep tracker transport logic in `internal/tracker/linear` and scheduling logic in `internal/orchestrator`.
 - Keep filesystem safety and workspace lifecycle concerns in `internal/workspace`.
-- Keep Codex protocol handling in `internal/agent/codex`.
+- Keep Codex protocol handling in `internal/agent/codex` and workflow execution policy in `internal/automation`.
 - Keep repo publish and merge behavior in `internal/repoops`.
 
 ## Contributor Notes

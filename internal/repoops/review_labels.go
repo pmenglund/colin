@@ -24,11 +24,11 @@ func CodexReviewStateFromContext(reviewContext ReviewContext) CodexReviewState {
 	if len(reviewContext.CodexReviewThreads) > 0 {
 		return CodexReviewStateUnresolvedFeedback
 	}
+	if reviewContext.CodexReviewApprovedAt != nil && (reviewContext.CodexReviewRequestedAt == nil || reviewContext.CodexReviewApprovedAt.After(*reviewContext.CodexReviewRequestedAt)) {
+		return CodexReviewStateApproved
+	}
 	if reviewContext.CodexReviewRequestedAt != nil && (reviewContext.CodexReviewApprovedAt == nil || !reviewContext.CodexReviewApprovedAt.After(*reviewContext.CodexReviewRequestedAt)) {
 		return CodexReviewStatePending
-	}
-	if reviewContext.CodexReviewRequestedAt != nil && reviewContext.CodexReviewApprovedAt != nil {
-		return CodexReviewStateApproved
 	}
 	return CodexReviewStateNone
 }

@@ -22,7 +22,7 @@ type trackerStub struct {
 	issuesByState       []domain.Issue
 	issuesByStateCalls  int
 	issuesByID          []domain.Issue
-	rateLimits          map[string]any
+	rateLimits          domain.RateLimitSnapshot
 	issueComments       []string
 	commentReplies      []string
 	metadata            domain.ColinMetadata
@@ -112,7 +112,7 @@ func (s *trackerStub) UpsertIssueExecPlan(_ context.Context, _ string, plan doma
 	return plan, nil
 }
 
-func (s *trackerStub) CurrentRateLimits() map[string]any {
+func (s *trackerStub) CurrentRateLimits() domain.RateLimitSnapshot {
 	return s.rateLimits
 }
 
@@ -794,6 +794,62 @@ func TestHandleWorkerExitMergeBlockedBackToReviewCreatesIssueCommentWhenRootIsMi
 	}
 }
 
+func TestHandleWorkerExitMergeBlockedInMergeSchedulesHiddenRetry(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", State: "Merge"}
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo: domain.RepoConfig{PublishStates: []string{"Review"}, MergeStates: []string{"Merge"}},
+			},
+			Tracker: tracker,
+		},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      issue,
+				identifier: issue.Identifier,
+				startedAt:  time.Now().Add(-2 * time.Second),
+				comment:    &commentThreadState{RunType: codex.RunTypeMerge, RootCommentID: "root"},
+			},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   issue,
+			RunType: codex.RunTypeMerge,
+			Status:  "blocked",
+			Summary: "Keeping issue in `Merge` while waiting for Codex PR review feedback.",
+		},
+	})
+
+	retry := orch.retrying["1"]
+	if retry == nil {
+		t.Fatal("expected retry entry for blocked merge handoff")
+	}
+	retry.timer.Stop()
+	if retry.notifyLinear {
+		t.Fatal("same-state handoff retry should be hidden from Linear comments")
+	}
+	if got := orch.completed["1"]; got != "" {
+		t.Fatalf("completed state = %q, want empty", got)
+	}
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
+	}
+	if tracker.commentReplies[0] != "[colin] Keeping issue in `Merge` while waiting for Codex PR review feedback." {
+		t.Fatalf("summary comment = %q", tracker.commentReplies[0])
+	}
+}
+
 func TestHandleWorkerExitCodingRunToReviewDoesNotMarkReviewCompleted(t *testing.T) {
 	t.Parallel()
 
@@ -961,9 +1017,9 @@ func TestHiddenRetryRemainsHiddenWhenDeferredByLinearBudget(t *testing.T) {
 
 	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
 	tracker := &trackerStub{
-		rateLimits: map[string]any{
-			"linear_requests": map[string]any{
-				"nextAllowedAt": nextAllowedAt,
+		rateLimits: domain.RateLimitSnapshot{
+			"linear_requests": {
+				NextAllowedAt: unixTimePtr(nextAllowedAt),
 			},
 		},
 	}
@@ -1070,9 +1126,9 @@ func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T)
 
 	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
 	tracker := &trackerStub{
-		rateLimits: map[string]any{
-			"linear_requests": map[string]any{
-				"nextAllowedAt": nextAllowedAt,
+		rateLimits: domain.RateLimitSnapshot{
+			"linear_requests": {
+				NextAllowedAt: unixTimePtr(nextAllowedAt),
 			},
 		},
 	}
@@ -1802,4 +1858,9 @@ func TestAppendOutputSkipsAdjacentTerminalDuplicateMessage(t *testing.T) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func unixTimePtr(value int64) *time.Time {
+	parsed := time.Unix(value, 0).UTC()
+	return &parsed
 }

@@ -409,25 +409,34 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 			TotalTokens:    5000,
 			SecondsRunning: 420,
 		},
-		RateLimits: map[string]any{
-			"primary": map[string]any{
-				"resetsAt":           now.Add(5*time.Hour + 32*time.Minute).Unix(),
-				"usedPercent":        5,
-				"windowDurationMins": 300,
+		RateLimits: domain.RateLimitSnapshot{
+			"primary": {
+				ResetsAt:              timePtr(now.Add(5*time.Hour + 32*time.Minute)),
+				UsedPercent:           int64Ptr(5),
+				WindowDurationMinutes: int64Ptr(300),
 			},
-			"secondary": map[string]any{
-				"resetsAt":           now.Add(7 * 24 * time.Hour).Unix(),
-				"usedPercent":        9,
-				"windowDurationMins": 10080,
+			"secondary": {
+				ResetsAt:              timePtr(now.Add(7 * 24 * time.Hour)),
+				UsedPercent:           int64Ptr(9),
+				WindowDurationMinutes: int64Ptr(10080),
 			},
-			"linear_requests": map[string]any{
-				"limit":         int64(100),
-				"remaining":     int64(25),
-				"resetsAt":      now.Add(5 * time.Minute).Unix(),
-				"nextAllowedAt": now.Add(3 * time.Second).Unix(),
+			"linear_requests": {
+				Limit:         int64Ptr(100),
+				Remaining:     int64Ptr(25),
+				ResetsAt:      timePtr(now.Add(5 * time.Minute)),
+				NextAllowedAt: timePtr(now.Add(3 * time.Second)),
 			},
 		},
 	}, nil
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func timePtr(value time.Time) *time.Time {
+	copy := value.UTC()
+	return &copy
 }
 
 func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.Issue, error) {

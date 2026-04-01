@@ -744,7 +744,7 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotMetadata["review_publish_directive"] != "skip" {
 		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
 	}
-	if gotMetadata["exec_plan_decision"] != domain.ExecPlanDecisionOneShot {
+	if gotMetadata["exec_plan_decision"] != string(domain.ExecPlanDecisionOneShot) {
 		t.Fatalf("exec_plan_decision = %v, want %q", gotMetadata["exec_plan_decision"], domain.ExecPlanDecisionOneShot)
 	}
 	if gotMetadata["pull_request_number"] != float64(11) && gotMetadata["pull_request_number"] != 11 {
@@ -1381,25 +1381,24 @@ func TestCurrentRateLimitsCapturesRequestHeaders(t *testing.T) {
 	}
 
 	limits := client.CurrentRateLimits()
-	linearRequests, ok := limits["linear_requests"].(map[string]any)
+	linearRequests, ok := limits["linear_requests"]
 	if !ok {
 		t.Fatalf("linear_requests missing from rate limits: %#v", limits)
 	}
-	if got, ok := linearRequests["limit"].(int64); !ok || got != 100 {
-		t.Fatalf("limit = %d, want 100", got)
+	if linearRequests.Limit == nil || *linearRequests.Limit != 100 {
+		t.Fatalf("limit = %v, want 100", linearRequests.Limit)
 	}
-	if got, ok := linearRequests["remaining"].(int64); !ok || got != 25 {
-		t.Fatalf("remaining = %d, want 25", got)
+	if linearRequests.Remaining == nil || *linearRequests.Remaining != 25 {
+		t.Fatalf("remaining = %v, want 25", linearRequests.Remaining)
 	}
-	if got, ok := linearRequests["resetsAt"].(int64); !ok || got != resetAt.Unix() {
-		t.Fatalf("resetsAt = %d, want %d", got, resetAt.Unix())
+	if linearRequests.ResetsAt == nil || !linearRequests.ResetsAt.Equal(resetAt.UTC()) {
+		t.Fatalf("resetsAt = %v, want %v", linearRequests.ResetsAt, resetAt.UTC())
 	}
-	nextAllowedAt, ok := linearRequests["nextAllowedAt"].(int64)
-	if !ok {
+	if linearRequests.NextAllowedAt == nil {
 		t.Fatalf("nextAllowedAt missing from rate limits: %#v", linearRequests)
 	}
-	if nextAllowedAt <= time.Now().UTC().Unix() {
-		t.Fatalf("nextAllowedAt = %d, want future timestamp", nextAllowedAt)
+	if !linearRequests.NextAllowedAt.After(time.Now().UTC()) {
+		t.Fatalf("nextAllowedAt = %v, want future timestamp", linearRequests.NextAllowedAt)
 	}
 }
 

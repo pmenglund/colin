@@ -164,7 +164,7 @@ type detectedDefaults struct {
 func detectPrerequisites() Prerequisites {
 	return Prerequisites{
 		LinearAPIKeyConfigured: isValidLinearAPIKey(currentLinearAPIKey()),
-		GitHubTokenConfigured:  isValidGitHubToken(currentGitHubToken()),
+		GitHubTokenConfigured:  isValidGitHubToken(githubauth.CurrentToken()),
 		GitAvailable:           commandExists("git"),
 		CodexAvailable:         commandExists("codex"),
 	}
@@ -172,10 +172,6 @@ func detectPrerequisites() Prerequisites {
 
 func currentLinearAPIKey() string {
 	return strings.TrimSpace(os.Getenv("LINEAR_API_KEY"))
-}
-
-func currentGitHubToken() string {
-	return strings.TrimSpace(firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")))
 }
 
 func detectDefaults(workingDir string) detectedDefaults {

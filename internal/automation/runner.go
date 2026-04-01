@@ -1,4 +1,4 @@
-package codex
+package automation
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/execplan"
@@ -15,6 +16,33 @@ import (
 	"github.com/pmenglund/colin/internal/tracker"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/internal/workspace"
+)
+
+type Event = codex.Event
+type Result = codex.Result
+
+const (
+	RunTypeCoding        = codex.RunTypeCoding
+	RunTypeReviewPublish = codex.RunTypeReviewPublish
+	RunTypeMerge         = codex.RunTypeMerge
+
+	EventWorkspacePrepared    = codex.EventWorkspacePrepared
+	EventIssueStateRefreshed  = codex.EventIssueStateRefreshed
+	EventReviewPublishStarted = codex.EventReviewPublishStarted
+	EventReviewPublishDone    = codex.EventReviewPublishDone
+	EventMergeStarted         = codex.EventMergeStarted
+	EventRunFailed            = codex.EventRunFailed
+	EventContinuationNeeded   = codex.EventContinuationNeeded
+	EventRunSucceeded         = codex.EventRunSucceeded
+	EventNotification         = codex.EventNotification
+	EventMergeDone            = codex.EventMergeDone
+)
+
+var (
+	ErrTurnTimeout     = codex.ErrTurnTimeout
+	ErrTurnCancelled   = codex.ErrTurnCancelled
+	ErrTurnInputNeeded = codex.ErrTurnInputNeeded
+	ErrTurnFailed      = codex.ErrTurnFailed
 )
 
 // Runner executes one issue attempt inside a workspace using the Codex app-server protocol.
@@ -123,14 +151,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		})
 	}
 
-	client := &appServerClient{
-		cfg:       r.cfg,
-		logger:    r.logger,
-		onEvent:   emit,
-		issue:     current,
-		workspace: ws.Path,
-		runType:   runType,
-	}
+	client := codex.NewClient(r.cfg, r.logger, emit, current, ws.Path, runType)
 	if runType == RunTypeCoding && hasDuplicateExecPlans(current) {
 		return r.handleDuplicateExecPlans(ctx, current, ws.Path)
 	}
@@ -217,7 +238,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 				Issue:         current,
 				RunType:       runType,
 				WorkspacePath: ws.Path,
-				Status:        "succeeded",
+				Status:        mergeReviewBlockedStatus(issue.State, current.State),
 				Summary:       summary,
 				PR:            pullRequestRef(reviewContext.PullRequest),
 			}
@@ -232,7 +253,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		return r.buildMergedResult(ctx, issue, ws.Path, result, emit)
 	}
 
-	if err := client.start(ctx, ws.Path); err != nil {
+	if err := client.Start(ctx, ws.Path); err != nil {
 		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 	}
 	r.logger.Info(
@@ -240,13 +261,13 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		"issue_id", issue.ID,
 		"issue_identifier", issue.Identifier,
 		"workspace_path", ws.Path,
-		"thread_id", client.threadID,
+		"thread_id", client.ThreadID(),
 	)
-	defer client.stop()
+	defer client.Stop()
 
 	current, err = r.ensureExecPlanDecision(ctx, client, ws.Path, current)
 	if err != nil {
-		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 	}
 
 	current, err = r.ensureExecPlan(ctx, client, ws.Path, current)
@@ -254,14 +275,14 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		if errors.Is(err, tracker.ErrDuplicateExecPlans) {
 			return r.handleDuplicateExecPlans(ctx, current, ws.Path)
 		}
-		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 	}
 
 	maxTurnsReached := false
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
 		if err != nil {
-			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 		}
 		if turn == 1 && r.cfg.Agent.CreateExecPlan {
 			prompt = injectExecPlanPrompt(prompt, current.ExecPlan)
@@ -283,7 +304,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			"continuation", turn > 1,
 		)
 		startedAt := time.Now()
-		if err := client.runTurn(ctx, ws.Path, current, prompt); err != nil {
+		if err := client.RunTurn(ctx, ws.Path, current, prompt); err != nil {
 			duration := time.Since(startedAt).Round(time.Millisecond)
 			r.logger.Warn(
 				"runner turn failed",
@@ -365,7 +386,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			)
 			break
 		}
-		if summary := strings.TrimSpace(client.finalSummary()); summary != "" {
+		if summary := strings.TrimSpace(client.FinalSummary()); summary != "" {
 			handoffOutcome, _ := parseCodingSummaryOutcome(summary)
 			if handoffOutcome == outcomeNeedsSpec {
 				r.logger.Info(
@@ -379,7 +400,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			}
 			reviewable, err := r.reviewableCodingArtifact(ctx, ws.Path)
 			if err != nil {
-				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.finalSummary(), Err: err}
+				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 			}
 			if reviewable {
 				r.logger.Info(
@@ -391,7 +412,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 				)
 				break
 			}
-			client.clearFinalSummary()
+			client.ClearFinalSummary()
 			r.logger.Info(
 				"runner turn produced a ready-for-review outcome without reviewable repository changes; continuing",
 				"issue_id", current.ID,
@@ -428,7 +449,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		maxTurnsReached = true
 	}
 
-	summary := client.finalSummary()
+	summary := client.FinalSummary()
 	prRef := (*domain.PullRequestRef)(nil)
 	threadsHandled := 0
 	threadsRemaining := 0
@@ -510,6 +531,13 @@ func (r *Runner) blockMergeForCodexReview(ctx context.Context, issue domain.Issu
 	return issue, summary, true, nil
 }
 
+func mergeReviewBlockedStatus(previousState string, currentState string) string {
+	if config.StateKey(previousState) == config.StateKey(currentState) {
+		return "blocked"
+	}
+	return "succeeded"
+}
+
 func (r *Runner) handleMergeFailure(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, err error) Result {
 	reviewState := mergeReviewState(r.cfg)
 	updated, updateErr := r.moveIssueToState(ctx, issue, reviewState)
@@ -552,15 +580,8 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 		Message:   "Merge conflict detected; asking Codex to repair the branch before retrying merge.",
 	})
 
-	client := &appServerClient{
-		cfg:       r.cfg,
-		logger:    r.logger,
-		onEvent:   emit,
-		issue:     issue,
-		workspace: workspacePath,
-		runType:   RunTypeMerge,
-	}
-	if err := client.start(ctx, workspacePath); err != nil {
+	client := codex.NewClient(r.cfg, r.logger, emit, issue, workspacePath, RunTypeMerge)
+	if err := client.Start(ctx, workspacePath); err != nil {
 		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
 	}
 	r.logger.Info(
@@ -568,19 +589,19 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 		"issue_id", issue.ID,
 		"issue_identifier", issue.Identifier,
 		"workspace_path", workspacePath,
-		"thread_id", client.threadID,
+		"thread_id", client.ThreadID(),
 	)
-	defer client.stop()
+	defer client.Stop()
 
 	recoverySummary, ready, err := r.runMergeRecoveryTurns(ctx, client, issue, workspacePath, result, mergeErr, emit)
 	if err != nil {
 		if shouldHandoffMergeRecoveryError(err) {
-			return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, result, mergeErr, err.Error(), client.lastOutput())
+			return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, result, mergeErr, err.Error(), client.LastOutput())
 		}
 		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
 	}
 	if !ready {
-		return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, result, mergeErr, "Codex did not finish the merge-conflict repair within the configured turn limit.", client.lastOutput())
+		return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, result, mergeErr, "Codex did not finish the merge-conflict repair within the configured turn limit.", client.LastOutput())
 	}
 
 	published, err := r.repo.Publish(ctx, issue, workspacePath)
@@ -612,7 +633,7 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 			Issue:         current,
 			RunType:       RunTypeMerge,
 			WorkspacePath: workspacePath,
-			Status:        "succeeded",
+			Status:        mergeReviewBlockedStatus(issue.State, current.State),
 			Summary:       buildMergeRecoveryReviewBlockedSummary(r.cfg, recoverySummary, reviewContext),
 			PR:            pullRequestRef(reviewContext.PullRequest),
 		}
@@ -645,7 +666,7 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 	return r.buildMergedResult(ctx, issue, workspacePath, merged, emit)
 }
 
-func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *appServerClient, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, emit func(Event)) (string, bool, error) {
+func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *codex.Client, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, emit func(Event)) (string, bool, error) {
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		prompt := buildMergeRecoveryPrompt(issue, result, mergeErr)
 		if turn > 1 {
@@ -661,7 +682,7 @@ func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *appServerCli
 			"continuation", turn > 1,
 		)
 		startedAt := time.Now()
-		if err := client.runTurn(ctx, workspacePath, issue, prompt); err != nil {
+		if err := client.RunTurn(ctx, workspacePath, issue, prompt); err != nil {
 			duration := time.Since(startedAt).Round(time.Millisecond)
 			r.logger.Warn(
 				"merge recovery turn failed",
@@ -702,7 +723,7 @@ func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *appServerCli
 			Message:   fmt.Sprintf("Merge recovery turn %d completed; issue state is still %s", turn, issue.State),
 		})
 
-		if outcome, summary := parseMergeRecoverySummaryOutcome(client.finalSummary()); outcome == outcomeReadyForMergeRetry {
+		if outcome, summary := parseMergeRecoverySummaryOutcome(client.FinalSummary()); outcome == outcomeReadyForMergeRetry {
 			return summary, true, nil
 		}
 		if turn < r.cfg.Agent.MaxTurns {
@@ -715,7 +736,7 @@ func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *appServerCli
 			})
 		}
 	}
-	return strings.TrimSpace(client.lastOutput()), false, nil
+	return strings.TrimSpace(client.LastOutput()), false, nil
 }
 
 func (r *Runner) handleMergeRecoveryFailure(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, reason string, recoveryOutput string) Result {
@@ -1104,6 +1125,9 @@ func buildMergeBlockedSummary(cfg domain.ServiceConfig, reviewContext repoops.Re
 }
 
 func codexReviewApprovalPending(reviewContext repoops.ReviewContext) bool {
+	if reviewContext.CodexReviewRequestedAt == nil && reviewContext.CodexReviewApprovedAt != nil {
+		return false
+	}
 	if reviewContext.CodexReviewRequestedAt == nil {
 		return false
 	}
@@ -1138,6 +1162,9 @@ func mergeReviewBlockDisposition(cfg domain.ServiceConfig, reviewContext repoops
 		return block
 	}
 	if reviewContext.CodexReviewRequestedAt == nil {
+		if reviewContext.CodexReviewApprovedAt != nil {
+			return block
+		}
 		block.Blocked = true
 		block.WaitingForPickup = true
 		return block
@@ -1250,7 +1277,7 @@ func nextConfiguredState(states []string, current string) (string, bool) {
 func parseCodingSummaryOutcome(summary string) (string, string) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		return outcomeReadyForReview, ""
+		return "", ""
 	}
 
 	lines := strings.Split(summary, "\n")
@@ -1261,7 +1288,7 @@ func parseCodingSummaryOutcome(summary string) (string, string) {
 	case outcomeReadyForReview:
 		return outcomeReadyForReview, strings.TrimSpace(strings.Join(lines[1:], "\n"))
 	default:
-		return outcomeReadyForReview, summary
+		return "", summary
 	}
 }
 
@@ -1502,9 +1529,9 @@ func codexMetadataWithDirective(issue domain.Issue, runType string, outcome stri
 	if issue.ColinMetadata != nil {
 		metadata = *issue.ColinMetadata
 	}
-	metadata.ReviewPublishDirective = strings.TrimSpace(directive)
-	metadata.LastRunType = strings.TrimSpace(runType)
-	metadata.LastOutcome = strings.TrimSpace(outcome)
+	metadata.ReviewPublishDirective = domain.ReviewPublishDirective(strings.TrimSpace(directive))
+	metadata.LastRunType = domain.RunType(strings.TrimSpace(runType))
+	metadata.LastOutcome = domain.RunOutcome(strings.TrimSpace(outcome))
 	metadata.LastSummaryCommentID = strings.TrimSpace(summaryCommentID)
 	now := time.Now().UTC()
 	metadata.UpdatedAt = &now
@@ -1535,7 +1562,7 @@ func reviewPublishDirective(issue domain.Issue) string {
 	if issue.ColinMetadata == nil {
 		return ""
 	}
-	return strings.TrimSpace(issue.ColinMetadata.ReviewPublishDirective)
+	return strings.TrimSpace(string(issue.ColinMetadata.ReviewPublishDirective))
 }
 
 func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath string) (bool, error) {
@@ -1545,7 +1572,7 @@ func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath str
 	return r.repo.ReviewableArtifact(ctx, workspacePath)
 }
 
-func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *appServerClient, workspacePath string, issue domain.Issue) (domain.Issue, error) {
+func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *codex.Client, workspacePath string, issue domain.Issue) (domain.Issue, error) {
 	if hasDuplicateExecPlans(issue) || !r.cfg.Agent.CreateExecPlan {
 		return issue, nil
 	}
@@ -1563,11 +1590,11 @@ func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *appServerCl
 		"issue_identifier", issue.Identifier,
 		"workspace_path", workspacePath,
 	)
-	if err := client.runTurn(ctx, workspacePath, issue, prompt); err != nil {
+	if err := client.RunTurn(ctx, workspacePath, issue, prompt); err != nil {
 		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
 	}
 
-	output := client.lastOutput()
+	output := client.LastOutput()
 	decision, err := parseExecPlanDecision(output)
 	if err == nil {
 		return r.persistExecPlanDecision(ctx, issue, decision)
@@ -1579,13 +1606,13 @@ func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *appServerCl
 		"issue_identifier", issue.Identifier,
 		"workspace_path", workspacePath,
 		"invalid_first_line", firstLine(output),
-		"captured_from_completed_item", client.lastOutputCapturedFromCompletedItem(),
+		"captured_from_completed_item", client.LastOutputCapturedFromCompletedItem(),
 	)
-	if err := client.runTurn(ctx, workspacePath, issue, buildExecPlanDecisionRetryPrompt(output)); err != nil {
+	if err := client.RunTurn(ctx, workspacePath, issue, buildExecPlanDecisionRetryPrompt(output)); err != nil {
 		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
 	}
 
-	output = client.lastOutput()
+	output = client.LastOutput()
 	decision, err = parseExecPlanDecision(output)
 	if err != nil {
 		r.logger.Warn(
@@ -1594,14 +1621,14 @@ func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *appServerCl
 			"issue_identifier", issue.Identifier,
 			"workspace_path", workspacePath,
 			"invalid_first_line", firstLine(output),
-			"captured_from_completed_item", client.lastOutputCapturedFromCompletedItem(),
+			"captured_from_completed_item", client.LastOutputCapturedFromCompletedItem(),
 		)
 		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
 	}
 	return r.persistExecPlanDecision(ctx, issue, decision)
 }
 
-func (r *Runner) ensureExecPlan(ctx context.Context, client *appServerClient, workspacePath string, issue domain.Issue) (domain.Issue, error) {
+func (r *Runner) ensureExecPlan(ctx context.Context, client *codex.Client, workspacePath string, issue domain.Issue) (domain.Issue, error) {
 	if hasDuplicateExecPlans(issue) {
 		return issue, tracker.ErrDuplicateExecPlans
 	}
@@ -1620,11 +1647,11 @@ func (r *Runner) ensureExecPlan(ctx context.Context, client *appServerClient, wo
 		"issue_identifier", issue.Identifier,
 		"workspace_path", workspacePath,
 	)
-	if err := client.runTurn(ctx, workspacePath, issue, prompt); err != nil {
+	if err := client.RunTurn(ctx, workspacePath, issue, prompt); err != nil {
 		return issue, fmt.Errorf("generate exec plan: %w", err)
 	}
 
-	body := normalizeExecPlanBody(client.lastOutput())
+	body := normalizeExecPlanBody(client.LastOutput())
 	if body == "" {
 		return issue, errors.New("generate exec plan: empty response")
 	}
@@ -1759,7 +1786,7 @@ func normalizeExecPlanBody(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func parseExecPlanDecision(value string) (string, error) {
+func parseExecPlanDecision(value string) (domain.ExecPlanDecision, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", errors.New("empty response")
@@ -1784,18 +1811,18 @@ func firstLine(value string) string {
 	return strings.TrimSpace(strings.Split(value, "\n")[0])
 }
 
-func execPlanDecision(issue domain.Issue) string {
+func execPlanDecision(issue domain.Issue) domain.ExecPlanDecision {
 	if issue.ColinMetadata == nil {
 		return ""
 	}
 	return normalizeExecPlanDecision(issue.ColinMetadata.ExecPlanDecision)
 }
 
-func normalizeExecPlanDecision(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case domain.ExecPlanDecisionOneShot:
+func normalizeExecPlanDecision(value domain.ExecPlanDecision) domain.ExecPlanDecision {
+	switch strings.ToLower(strings.TrimSpace(string(value))) {
+	case string(domain.ExecPlanDecisionOneShot):
 		return domain.ExecPlanDecisionOneShot
-	case domain.ExecPlanDecisionExecPlan:
+	case string(domain.ExecPlanDecisionExecPlan):
 		return domain.ExecPlanDecisionExecPlan
 	default:
 		return ""
@@ -1844,7 +1871,7 @@ func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, m
 	return issue, nil
 }
 
-func (r *Runner) persistExecPlanDecision(ctx context.Context, issue domain.Issue, decision string) (domain.Issue, error) {
+func (r *Runner) persistExecPlanDecision(ctx context.Context, issue domain.Issue, decision domain.ExecPlanDecision) (domain.Issue, error) {
 	decision = normalizeExecPlanDecision(decision)
 	if decision == "" {
 		return issue, errors.New("missing exec plan decision")

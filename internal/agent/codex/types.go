@@ -12,6 +12,10 @@ const (
 	RunTypeReviewPublish = "review_publish"
 	RunTypeMerge         = "merge"
 
+	OutcomeReadyForReviewLine     = "COLIN_OUTCOME: READY_FOR_REVIEW"
+	OutcomeReadyForMergeRetryLine = "COLIN_OUTCOME: READY_FOR_MERGE_RETRY"
+	OutcomeNeedsSpecLine          = "COLIN_OUTCOME: NEEDS_SPEC"
+
 	EventSessionStarted       = "session_started"
 	EventStartupFailed        = "startup_failed"
 	EventWorkspacePrepared    = "workspace_prepared"
@@ -63,7 +67,7 @@ type Event struct {
 	PrevState  string
 	Duration   time.Duration
 	Usage      map[string]int64
-	RateLimits map[string]any
+	RateLimits domain.RateLimitSnapshot
 	Raw        map[string]any
 	IssueID    string
 	Identifier string

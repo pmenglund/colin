@@ -121,9 +121,9 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 							h.Class("worker-grid"),
 							metadataStatCard("Identifier", fallback(issue.Identifier, "unknown")),
 							metadataStatCard("State", fallback(issue.State, "unknown")),
-							metadataStatCard("ExecPlan decision", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.ExecPlanDecision }), "not recorded")),
-							metadataStatCard("Last run type", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastRunType }), "unknown")),
-							metadataStatCard("Last outcome", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastOutcome }), "unknown")),
+							metadataStatCard("ExecPlan decision", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return string(value.ExecPlanDecision) }), "not recorded")),
+							metadataStatCard("Last run type", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return string(value.LastRunType) }), "unknown")),
+							metadataStatCard("Last outcome", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return string(value.LastOutcome) }), "unknown")),
 							metadataStatCard("Summary comment", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastSummaryCommentID }), "not recorded")),
 							metadataStatCard("Updated", fallback(metadataTimestamp(metadata), "not recorded")),
 						),
@@ -627,31 +627,27 @@ func rateLimitBox(title, testID string, lines []string) g.Node {
 	)
 }
 
-func rateLimitRows(now time.Time, rateLimits map[string]any) ([]string, []string) {
+func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]string, []string) {
 	if len(rateLimits) == 0 {
 		return nil, nil
 	}
 
 	codexRows := make([]string, 0, 2)
 	for _, name := range []string{"primary", "secondary"} {
-		limit, ok := nestedMap(rateLimits, name)
+		limit, ok := rateLimits[name]
 		if !ok {
 			continue
 		}
 		codexRows = append(codexRows, fmt.Sprintf(
 			"%s of %s window which resets in %s",
-			rateLimitUsed(limit["usedPercent"]),
-			rateLimitWindow(limit["windowDurationMins"]),
-			rateLimitResetDuration(now, limit["resetsAt"]),
+			rateLimitUsed(limit.UsedPercent),
+			rateLimitWindow(limit.WindowDurationMinutes),
+			rateLimitResetDuration(now, limit.ResetsAt),
 		))
 	}
 	var linearRows []string
-	for name, raw := range rateLimits {
+	for name, limit := range rateLimits {
 		if name == "primary" || name == "secondary" {
-			continue
-		}
-		limit, ok := raw.(map[string]any)
-		if !ok {
 			continue
 		}
 		remaining, limitValue, ok := rateLimitRemaining(limit)
@@ -660,7 +656,7 @@ func rateLimitRows(now time.Time, rateLimits map[string]any) ([]string, []string
 		}
 		line := fmt.Sprintf(
 			"resets in %s, %d of %d remaining",
-			rateLimitResetDuration(now, limit["resetsAt"]),
+			rateLimitResetDuration(now, limit.ResetsAt),
 			remaining,
 			limitValue,
 		)
@@ -680,33 +676,18 @@ func fallbackLines(lines []string) []string {
 	return lines
 }
 
-func nestedMap(root map[string]any, key string) (map[string]any, bool) {
-	value, ok := root[key]
-	if !ok {
-		return nil, false
-	}
-	out, ok := value.(map[string]any)
-	return out, ok
-}
-
-func rateLimitRemaining(limit map[string]any) (int64, int64, bool) {
-	remaining, ok := int64Any(limit["remaining"])
-	if !ok {
+func rateLimitRemaining(limit domain.RateLimitWindow) (int64, int64, bool) {
+	if limit.Remaining == nil || limit.Limit == nil {
 		return 0, 0, false
 	}
-	limitValue, ok := int64Any(limit["limit"])
-	if !ok {
-		return 0, 0, false
-	}
-	return remaining, limitValue, true
+	return *limit.Remaining, *limit.Limit, true
 }
 
-func rateLimitNextAllowed(limit map[string]any) (time.Time, bool) {
-	unix, ok := int64Any(limit["nextAllowedAt"])
-	if !ok {
+func rateLimitNextAllowed(limit domain.RateLimitWindow) (time.Time, bool) {
+	if limit.NextAllowedAt == nil {
 		return time.Time{}, false
 	}
-	return time.Unix(unix, 0).UTC(), true
+	return limit.NextAllowedAt.UTC(), true
 }
 
 func emptyPanel(title, body string) g.Node {
@@ -870,108 +851,26 @@ func formatDuration(value time.Duration) string {
 	return value.Round(time.Second).String()
 }
 
-func rateLimitResetDuration(now time.Time, value any) string {
-	resetAt, ok := parseRateLimitTime(value)
-	if !ok {
+func rateLimitResetDuration(now time.Time, value *time.Time) string {
+	if value == nil {
 		return "unknown"
 	}
-	return formatCompactDuration(resetAt.Sub(now))
+	return formatCompactDuration(value.Sub(now))
 }
 
-func rateLimitUsed(value any) string {
-	number, ok := numericValue(value)
-	if !ok {
+func rateLimitUsed(value *int64) string {
+	if value == nil {
 		return "unknown used"
 	}
-	if number == float64(int64(number)) {
-		return fmt.Sprintf("%d%% used", int64(number))
-	}
-	return fmt.Sprintf("%s%% used", strconv.FormatFloat(number, 'f', -1, 64))
+	return fmt.Sprintf("%d%% used", *value)
 }
 
-func rateLimitWindow(value any) string {
-	number, ok := numericValue(value)
-	if !ok {
+func rateLimitWindow(value *int64) string {
+	if value == nil {
 		return "unknown"
 	}
-	minutes := time.Duration(number * float64(time.Minute))
+	minutes := time.Duration(*value) * time.Minute
 	return formatCompactDuration(minutes)
-}
-
-func int64Any(value any) (int64, bool) {
-	switch v := value.(type) {
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	default:
-		return 0, false
-	}
-}
-
-func parseRateLimitTime(value any) (time.Time, bool) {
-	switch typed := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(typed)
-		if trimmed == "" {
-			return time.Time{}, false
-		}
-		if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
-			return parsed, true
-		}
-		if number, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
-			return unixRateLimitTime(number), true
-		}
-		return time.Time{}, false
-	case int:
-		return unixRateLimitTime(int64(typed)), true
-	case int64:
-		return unixRateLimitTime(typed), true
-	case int32:
-		return unixRateLimitTime(int64(typed)), true
-	case float64:
-		return unixRateLimitTime(int64(typed)), true
-	case float32:
-		return unixRateLimitTime(int64(typed)), true
-	default:
-		return time.Time{}, false
-	}
-}
-
-func unixRateLimitTime(value int64) time.Time {
-	if value >= 1_000_000_000_000 {
-		return time.UnixMilli(value).UTC()
-	}
-	return time.Unix(value, 0).UTC()
-}
-
-func numericValue(value any) (float64, bool) {
-	switch typed := value.(type) {
-	case int:
-		return float64(typed), true
-	case int64:
-		return float64(typed), true
-	case int32:
-		return float64(typed), true
-	case float64:
-		return typed, true
-	case float32:
-		return float64(typed), true
-	case string:
-		trimmed := strings.TrimSpace(typed)
-		if trimmed == "" {
-			return 0, false
-		}
-		number, err := strconv.ParseFloat(trimmed, 64)
-		if err != nil {
-			return 0, false
-		}
-		return number, true
-	default:
-		return 0, false
-	}
 }
 
 func formatCompactDuration(value time.Duration) string {

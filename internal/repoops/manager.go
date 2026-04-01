@@ -674,14 +674,14 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 	return threads, codexThreads, nil
 }
 
-func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node map[string]any) (bool, error) {
+func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node GitHubReviewThread) (bool, error) {
 	if reviewThreadPageContainsCodexAuthor(node) {
 		return true, nil
 	}
 	if !reviewThreadCommentsHasNextPage(node) {
 		return false, nil
 	}
-	threadID, _ := stringValue(node["id"])
+	threadID := node.ID
 	if strings.TrimSpace(threadID) == "" {
 		return false, nil
 	}
@@ -700,8 +700,7 @@ func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspaceP
 			return false, err
 		}
 		for _, node := range resp.Comments {
-			author, _ := nestedString(node, "author", "login")
-			if isCodexReviewAuthor(author) {
+			if isCodexReviewAuthor(node.AuthorLogin) {
 				return true, nil
 			}
 		}
@@ -760,54 +759,36 @@ func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, 
 	return requested, approved, nil
 }
 
-func parseReviewThread(node map[string]any) (domain.GitHubReviewThread, bool) {
-	id, _ := stringValue(node["id"])
-	pathValue, _ := stringValue(node["path"])
-	if strings.TrimSpace(id) == "" || strings.TrimSpace(pathValue) == "" {
+func parseReviewThread(node GitHubReviewThread) (domain.GitHubReviewThread, bool) {
+	if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Path) == "" {
 		return domain.GitHubReviewThread{}, false
 	}
-	comments, ok := nestedSlice(node, "comments", "nodes")
-	if !ok || len(comments) == 0 {
+	if len(node.Comments.Comments) == 0 {
 		return domain.GitHubReviewThread{}, false
 	}
-	comment := comments[len(comments)-1]
-	commentID, _ := stringValue(comment["id"])
-	body, _ := stringValue(comment["body"])
-	commentURL, _ := stringValue(comment["url"])
-	author, _ := nestedString(comment, "author", "login")
+	comment := node.Comments.Comments[len(node.Comments.Comments)-1]
 
 	thread := domain.GitHubReviewThread{
-		ID:         id,
-		Path:       pathValue,
-		CommentID:  commentID,
-		CommentURL: commentURL,
-		Author:     author,
-		Body:       strings.TrimSpace(body),
-		IsResolved: boolValue(node["isResolved"]),
-		IsOutdated: boolValue(node["isOutdated"]),
-		CanReply:   boolValue(node["viewerCanReply"]),
-		CanResolve: boolValue(node["viewerCanResolve"]),
+		ID:         node.ID,
+		Path:       node.Path,
+		CommentID:  comment.ID,
+		CommentURL: comment.URL,
+		Author:     comment.AuthorLogin,
+		Body:       strings.TrimSpace(comment.Body),
+		IsResolved: node.IsResolved,
+		IsOutdated: node.IsOutdated,
+		CanReply:   node.ViewerCanReply,
+		CanResolve: node.ViewerCanResolve,
 	}
-	if value, ok := intValue(node["line"]); ok {
-		thread.Line = &value
-	}
-	if value, ok := intValue(node["startLine"]); ok {
-		thread.StartLine = &value
-	}
-	if createdAt, ok := parseTimestamp(comment["createdAt"]); ok {
-		thread.CreatedAt = &createdAt
-	}
+	thread.Line = node.Line
+	thread.StartLine = node.StartLine
+	thread.CreatedAt = comment.CreatedAt
 	return thread, true
 }
 
-func reviewThreadPageContainsCodexAuthor(node map[string]any) bool {
-	comments, ok := nestedSlice(node, "comments", "nodes")
-	if !ok {
-		return false
-	}
-	for _, comment := range comments {
-		author, _ := nestedString(comment, "author", "login")
-		if isCodexReviewAuthor(author) {
+func reviewThreadPageContainsCodexAuthor(node GitHubReviewThread) bool {
+	for _, comment := range node.Comments.Comments {
+		if isCodexReviewAuthor(comment.AuthorLogin) {
 			return true
 		}
 	}
@@ -823,92 +804,8 @@ func isCodexReviewAuthor(login string) bool {
 	return false
 }
 
-func reviewThreadCommentsHasNextPage(node map[string]any) bool {
-	hasNextPage, _ := nestedBool(node, "comments", "pageInfo", "hasNextPage")
-	return hasNextPage
-}
-
-func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {
-	value, ok := nestedValue(root, keys...)
-	if !ok || value == nil {
-		return nil, false
-	}
-	raw, ok := value.([]any)
-	if !ok {
-		return nil, false
-	}
-	out := make([]map[string]any, 0, len(raw))
-	for _, item := range raw {
-		asMap, ok := item.(map[string]any)
-		if ok {
-			out = append(out, asMap)
-		}
-	}
-	return out, true
-}
-
-func nestedBool(root map[string]any, keys ...string) (bool, bool) {
-	value, ok := nestedValue(root, keys...)
-	if !ok {
-		return false, false
-	}
-	return boolValue(value), true
-}
-
-func nestedString(root map[string]any, keys ...string) (string, bool) {
-	value, ok := nestedValue(root, keys...)
-	if !ok {
-		return "", false
-	}
-	return stringValue(value)
-}
-
-func nestedValue(root map[string]any, keys ...string) (any, bool) {
-	current := any(root)
-	for _, key := range keys {
-		asMap, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		current, ok = asMap[key]
-		if !ok {
-			return nil, false
-		}
-	}
-	return current, true
-}
-
-func stringValue(value any) (string, bool) {
-	v, ok := value.(string)
-	return v, ok
-}
-
-func intValue(value any) (int, bool) {
-	switch v := value.(type) {
-	case int:
-		return v, true
-	case float64:
-		return int(v), true
-	default:
-		return 0, false
-	}
-}
-
-func boolValue(value any) bool {
-	v, _ := value.(bool)
-	return v
-}
-
-func parseTimestamp(value any) (time.Time, bool) {
-	raw, ok := stringValue(value)
-	if !ok {
-		return time.Time{}, false
-	}
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return parsed, true
+func reviewThreadCommentsHasNextPage(node GitHubReviewThread) bool {
+	return node.Comments.HasNextPage
 }
 
 func latestTimePtr(current *time.Time, candidate time.Time) *time.Time {

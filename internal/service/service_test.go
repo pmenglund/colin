@@ -1017,6 +1017,6 @@ func (s *serviceTrackerStub) UpsertIssueExecPlan(context.Context, string, domain
 	return domain.ExecPlan{}, nil
 }
 
-func (s *serviceTrackerStub) CurrentRateLimits() map[string]any {
+func (s *serviceTrackerStub) CurrentRateLimits() domain.RateLimitSnapshot {
 	return nil
 }

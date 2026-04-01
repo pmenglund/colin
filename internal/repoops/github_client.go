@@ -25,16 +25,45 @@ type CreatePullRequestInput struct {
 	Body  string
 }
 
+// GitHubReviewComment is the minimal review comment payload Colin consumes.
+type GitHubReviewComment struct {
+	ID          string
+	Body        string
+	URL         string
+	AuthorLogin string
+	CreatedAt   *time.Time
+}
+
+// GitHubReviewCommentConnection captures the subset of GraphQL comment pagination Colin needs.
+type GitHubReviewCommentConnection struct {
+	Comments    []GitHubReviewComment
+	HasNextPage bool
+	EndCursor   string
+}
+
+// GitHubReviewThread is the typed review-thread payload consumed outside the GitHub transport.
+type GitHubReviewThread struct {
+	ID               string
+	Path             string
+	Line             *int
+	StartLine        *int
+	IsResolved       bool
+	IsOutdated       bool
+	ViewerCanReply   bool
+	ViewerCanResolve bool
+	Comments         GitHubReviewCommentConnection
+}
+
 // GitHubReviewThreadPage is one page of review threads from GitHub GraphQL.
 type GitHubReviewThreadPage struct {
-	Threads     []map[string]any
+	Threads     []GitHubReviewThread
 	HasNextPage bool
 	EndCursor   string
 }
 
 // GitHubReviewThreadCommentPage is one page of review thread comments from GitHub GraphQL.
 type GitHubReviewThreadCommentPage struct {
-	Comments    []map[string]any
+	Comments    []GitHubReviewComment
 	HasNextPage bool
 	EndCursor   string
 }

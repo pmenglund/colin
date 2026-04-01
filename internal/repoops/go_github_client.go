@@ -174,8 +174,15 @@ func (c *goGitHubClient) ReviewThreads(ctx context.Context, owner, repo string, 
 	nodes, _ := nestedSlice(resp, "data", "repository", "pullRequest", "reviewThreads", "nodes")
 	hasNextPage, _ := nestedBool(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "hasNextPage")
 	endCursor, _ := nestedString(resp, "data", "repository", "pullRequest", "reviewThreads", "pageInfo", "endCursor")
+	threads := make([]GitHubReviewThread, 0, len(nodes))
+	for _, node := range nodes {
+		thread, ok := gitHubReviewThread(node)
+		if ok {
+			threads = append(threads, thread)
+		}
+	}
 	return GitHubReviewThreadPage{
-		Threads:     nodes,
+		Threads:     threads,
 		HasNextPage: hasNextPage,
 		EndCursor:   endCursor,
 	}, nil
@@ -209,8 +216,15 @@ func (c *goGitHubClient) ReviewThreadComments(ctx context.Context, threadID, cur
 	nodes, _ := nestedSlice(resp, "data", "node", "comments", "nodes")
 	hasNextPage, _ := nestedBool(resp, "data", "node", "comments", "pageInfo", "hasNextPage")
 	endCursor, _ := nestedString(resp, "data", "node", "comments", "pageInfo", "endCursor")
+	comments := make([]GitHubReviewComment, 0, len(nodes))
+	for _, node := range nodes {
+		comment, ok := gitHubReviewComment(node)
+		if ok {
+			comments = append(comments, comment)
+		}
+	}
 	return GitHubReviewThreadCommentPage{
-		Comments:    nodes,
+		Comments:    comments,
 		HasNextPage: hasNextPage,
 		EndCursor:   endCursor,
 	}, nil
@@ -360,6 +374,153 @@ func pullRequestHeadQueries(owner, head string) []string {
 	}
 	add(owner, head)
 	return queries
+}
+
+func gitHubReviewThread(node map[string]any) (GitHubReviewThread, bool) {
+	id, _ := stringValue(node["id"])
+	pathValue, _ := stringValue(node["path"])
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(pathValue) == "" {
+		return GitHubReviewThread{}, false
+	}
+
+	comments, ok := nestedSlice(node, "comments", "nodes")
+	if !ok {
+		return GitHubReviewThread{}, false
+	}
+	thread := GitHubReviewThread{
+		ID:               id,
+		Path:             pathValue,
+		IsResolved:       boolValue(node["isResolved"]),
+		IsOutdated:       boolValue(node["isOutdated"]),
+		ViewerCanReply:   boolValue(node["viewerCanReply"]),
+		ViewerCanResolve: boolValue(node["viewerCanResolve"]),
+		Comments: GitHubReviewCommentConnection{
+			Comments:    make([]GitHubReviewComment, 0, len(comments)),
+			HasNextPage: nestedBoolValue(node, "comments", "pageInfo", "hasNextPage"),
+			EndCursor:   nestedStringValue(node, "comments", "pageInfo", "endCursor"),
+		},
+	}
+	if value, ok := intValue(node["line"]); ok {
+		thread.Line = &value
+	}
+	if value, ok := intValue(node["startLine"]); ok {
+		thread.StartLine = &value
+	}
+	for _, raw := range comments {
+		comment, ok := gitHubReviewComment(raw)
+		if ok {
+			thread.Comments.Comments = append(thread.Comments.Comments, comment)
+		}
+	}
+	return thread, true
+}
+
+func gitHubReviewComment(node map[string]any) (GitHubReviewComment, bool) {
+	comment := GitHubReviewComment{}
+	comment.ID, _ = stringValue(node["id"])
+	comment.Body, _ = stringValue(node["body"])
+	comment.URL, _ = stringValue(node["url"])
+	comment.AuthorLogin, _ = nestedString(node, "author", "login")
+	if createdAt, ok := parseTimestamp(node["createdAt"]); ok {
+		comment.CreatedAt = &createdAt
+	}
+	if comment.ID == "" && comment.AuthorLogin == "" && comment.Body == "" && comment.URL == "" && comment.CreatedAt == nil {
+		return GitHubReviewComment{}, false
+	}
+	return comment, true
+}
+
+func nestedBoolValue(root map[string]any, keys ...string) bool {
+	value, _ := nestedBool(root, keys...)
+	return value
+}
+
+func nestedStringValue(root map[string]any, keys ...string) string {
+	value, _ := nestedString(root, keys...)
+	return value
+}
+
+func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok || value == nil {
+		return nil, false
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		asMap, ok := item.(map[string]any)
+		if ok {
+			out = append(out, asMap)
+		}
+	}
+	return out, true
+}
+
+func nestedBool(root map[string]any, keys ...string) (bool, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok {
+		return false, false
+	}
+	return boolValue(value), true
+}
+
+func nestedString(root map[string]any, keys ...string) (string, bool) {
+	value, ok := nestedValue(root, keys...)
+	if !ok {
+		return "", false
+	}
+	return stringValue(value)
+}
+
+func nestedValue(root map[string]any, keys ...string) (any, bool) {
+	current := any(root)
+	for _, key := range keys {
+		asMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = asMap[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func stringValue(value any) (string, bool) {
+	v, ok := value.(string)
+	return v, ok
+}
+
+func intValue(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func boolValue(value any) bool {
+	v, _ := value.(bool)
+	return v
+}
+
+func parseTimestamp(value any) (time.Time, bool) {
+	raw, ok := stringValue(value)
+	if !ok {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }
 
 func gitHubHTTPClientWithTimeout(httpClient *http.Client) *http.Client {

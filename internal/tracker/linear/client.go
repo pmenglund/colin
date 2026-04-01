@@ -60,7 +60,7 @@ type Client struct {
 	uiBaseURL         string
 	uiBaseURLResolver func(context.Context) string
 	rateMu            sync.RWMutex
-	rateInfo          map[string]any
+	rateInfo          domain.RateLimitSnapshot
 	labelMu           sync.RWMutex
 	labelIDs          map[string]string
 }
@@ -604,10 +604,10 @@ mutation UpsertIssueExecPlan($input: AttachmentCreateInput!) {
 }
 
 // CurrentRateLimits returns the latest Linear request budget observed from HTTP response headers.
-func (c *Client) CurrentRateLimits() map[string]any {
+func (c *Client) CurrentRateLimits() domain.RateLimitSnapshot {
 	c.rateMu.RLock()
 	defer c.rateMu.RUnlock()
-	return cloneMap(c.rateInfo)
+	return cloneRateLimits(c.rateInfo)
 }
 
 func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
@@ -953,17 +953,20 @@ func (c *Client) captureRateLimitHeaders(header http.Header, observedAt time.Tim
 		return
 	}
 
-	info := map[string]any{
-		"linear_requests": map[string]any{
-			"limit":         limit,
-			"remaining":     remaining,
-			"resetsAt":      resetAt.Unix(),
-			"observedAt":    observedAt.Unix(),
-			"nextAllowedAt": nextAllowedAt(observedAt, resetAt, remaining).Unix(),
+	nextAllowedAt := nextAllowedAt(observedAt, resetAt, remaining)
+	info := domain.RateLimitSnapshot{
+		"linear_requests": {
+			Limit:         int64Ptr(limit),
+			Remaining:     int64Ptr(remaining),
+			ResetsAt:      timePtr(resetAt),
+			NextAllowedAt: timePtr(nextAllowedAt),
 		},
 	}
 	if limit > 0 {
-		info["linear_requests"].(map[string]any)["usedPercent"] = int(((limit - remaining) * 100) / limit)
+		usedPercent := ((limit - remaining) * 100) / limit
+		window := info["linear_requests"]
+		window.UsedPercent = int64Ptr(usedPercent)
+		info["linear_requests"] = window
 	}
 
 	c.rateMu.Lock()
@@ -1315,10 +1318,18 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadata := domain.ColinMetadata{}
 	metadata.AttachmentID, _ = stringValue(node["id"])
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
-	metadata.ExecPlanDecision, _ = stringValue(metadataMap["exec_plan_decision"])
-	metadata.ReviewPublishDirective, _ = stringValue(metadataMap["review_publish_directive"])
-	metadata.LastRunType, _ = stringValue(metadataMap["last_run_type"])
-	metadata.LastOutcome, _ = stringValue(metadataMap["last_outcome"])
+	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
+		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
+	}
+	if value, ok := stringValue(metadataMap["review_publish_directive"]); ok {
+		metadata.ReviewPublishDirective = domain.ReviewPublishDirective(value)
+	}
+	if value, ok := stringValue(metadataMap["last_run_type"]); ok {
+		metadata.LastRunType = domain.RunType(value)
+	}
+	if value, ok := stringValue(metadataMap["last_outcome"]); ok {
+		metadata.LastOutcome = domain.RunOutcome(value)
+	}
 	metadata.LastSummaryCommentID, _ = stringValue(metadataMap["last_summary_comment_id"])
 	if value, ok := intValue(metadataMap["pull_request_number"]); ok {
 		metadata.PullRequestNumber = value
@@ -1394,10 +1405,10 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
 		"actual_branch_name":       strings.TrimSpace(metadata.ActualBranchName),
-		"exec_plan_decision":       strings.TrimSpace(metadata.ExecPlanDecision),
-		"review_publish_directive": strings.TrimSpace(metadata.ReviewPublishDirective),
-		"last_run_type":            strings.TrimSpace(metadata.LastRunType),
-		"last_outcome":             strings.TrimSpace(metadata.LastOutcome),
+		"exec_plan_decision":       strings.TrimSpace(string(metadata.ExecPlanDecision)),
+		"review_publish_directive": strings.TrimSpace(string(metadata.ReviewPublishDirective)),
+		"last_run_type":            strings.TrimSpace(string(metadata.LastRunType)),
+		"last_outcome":             strings.TrimSpace(string(metadata.LastOutcome)),
 		"last_summary_comment_id":  strings.TrimSpace(metadata.LastSummaryCommentID),
 		"pull_request_number":      metadata.PullRequestNumber,
 		"pull_request_url":         strings.TrimSpace(metadata.PullRequestURL),
@@ -1795,21 +1806,41 @@ func parseHeaderTime(value string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func cloneMap(input map[string]any) map[string]any {
+func cloneRateLimits(input domain.RateLimitSnapshot) domain.RateLimitSnapshot {
 	if len(input) == 0 {
 		return nil
 	}
-	out := make(map[string]any, len(input))
+	out := make(domain.RateLimitSnapshot, len(input))
 	for key, value := range input {
-		if nested, ok := value.(map[string]any); ok {
-			clone := make(map[string]any, len(nested))
-			for nestedKey, nestedValue := range nested {
-				clone[nestedKey] = nestedValue
-			}
-			out[key] = clone
-			continue
+		clone := value
+		if value.WindowDurationMinutes != nil {
+			clone.WindowDurationMinutes = int64Ptr(*value.WindowDurationMinutes)
 		}
-		out[key] = value
+		if value.Limit != nil {
+			clone.Limit = int64Ptr(*value.Limit)
+		}
+		if value.Remaining != nil {
+			clone.Remaining = int64Ptr(*value.Remaining)
+		}
+		if value.UsedPercent != nil {
+			clone.UsedPercent = int64Ptr(*value.UsedPercent)
+		}
+		if value.ResetsAt != nil {
+			clone.ResetsAt = timePtr(*value.ResetsAt)
+		}
+		if value.NextAllowedAt != nil {
+			clone.NextAllowedAt = timePtr(*value.NextAllowedAt)
+		}
+		out[key] = clone
 	}
 	return out
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func timePtr(value time.Time) *time.Time {
+	copy := value.UTC()
+	return &copy
 }

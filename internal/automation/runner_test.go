@@ -1,4 +1,4 @@
-package codex
+package automation
 
 import (
 	"bufio"
@@ -53,7 +53,7 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -125,7 +125,7 @@ func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -329,6 +329,47 @@ func TestBlockMergeForCodexReviewKeepsIssueInMergeWhileWaitingForPickup(t *testi
 	}
 }
 
+func TestBlockMergeForCodexReviewAllowsMergeWhenApprovalExistsWithoutPickupMarker(t *testing.T) {
+	t.Parallel()
+
+	approvedAt := time.Date(2026, time.March, 31, 23, 39, 59, 0, time.UTC)
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{
+				PublishStates:         []string{"Review"},
+				CodexPRReviewsEnabled: true,
+			},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-141",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest:           domain.PullRequestRef{Number: 34, URL: "https://example.test/pr/34", State: "OPEN"},
+		CodexReviewApprovedAt: &approvedAt,
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if blocked {
+		t.Fatal("blocked = true, want false")
+	}
+	if summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
+	}
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
+	}
+}
+
 func TestBlockMergeForCodexReviewSkipsPickupWaitWhenDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -459,12 +500,12 @@ func TestParseCodingSummaryOutcomeNeedsSpec(t *testing.T) {
 	}
 }
 
-func TestParseCodingSummaryOutcomeDefaultsToReview(t *testing.T) {
+func TestParseCodingSummaryOutcomeLeavesImplicitSummaryUnclassified(t *testing.T) {
 	t.Parallel()
 
 	outcome, summary := parseCodingSummaryOutcome("Implemented the requested change.")
-	if outcome != outcomeReadyForReview {
-		t.Fatalf("outcome = %q, want %q", outcome, outcomeReadyForReview)
+	if outcome != "" {
+		t.Fatalf("outcome = %q, want empty", outcome)
 	}
 	if summary != "Implemented the requested change." {
 		t.Fatalf("summary = %q", summary)
@@ -708,7 +749,7 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       5 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      5 * time.Second,
@@ -801,7 +842,7 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       5 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      5 * time.Second,
@@ -861,8 +902,8 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 		BranchName: testStringPtr(branch),
 	}, nil, nil)
 
-	if result.Status != "succeeded" {
-		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	if result.Status != "blocked" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "blocked", result.Err)
 	}
 	if result.Issue.State != "Merge" {
 		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Merge")
@@ -913,7 +954,7 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1003,7 +1044,7 @@ func TestRunnerReusesExistingExecPlanWithoutCreatingAnother(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1095,7 +1136,7 @@ func TestRunnerSkipsExecPlanForOneShotDecision(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1185,7 +1226,7 @@ func TestRunnerReusesPersistedOneShotDecisionWithoutCreatingExecPlan(t *testing.
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1275,7 +1316,7 @@ func TestRunnerFailsWhenExecPlanDecisionOutputIsMalformed(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1348,7 +1389,7 @@ func TestRunnerRetriesMalformedExecPlanDecisionOnce(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1421,7 +1462,7 @@ func TestRunnerParsesExecPlanTurnsFromCompletedItemTextOnly(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1489,7 +1530,7 @@ func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1567,7 +1608,7 @@ func TestRunnerClearsExecPlanSummaryBeforeCodingTurn(t *testing.T) {
 			Command:           command,
 			ApprovalPolicy:    "never",
 			ThreadSandbox:     "danger-full-access",
-			TurnSandboxPolicy: map[string]any{"type": "dangerFullAccess"},
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
@@ -1760,7 +1801,7 @@ func (s *stubTracker) UpsertIssueExecPlan(_ context.Context, _ string, plan doma
 	return plan, nil
 }
 
-func (s *stubTracker) CurrentRateLimits() map[string]any {
+func (s *stubTracker) CurrentRateLimits() domain.RateLimitSnapshot {
 	return nil
 }
 

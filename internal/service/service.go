@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/app"
+	"github.com/pmenglund/colin/internal/automation"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/githubauth"
@@ -137,7 +137,7 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	}
 	manager := workspace.NewManager(cfg, logger)
 	repoManager := repoops.NewManager(cfg, logger)
-	runner := codex.NewRunner(cfg, def, trackerClient, manager, logger)
+	runner := automation.NewRunner(cfg, def, trackerClient, manager, logger)
 	logger.Info(
 		"runtime loaded",
 		"workflow_path", path,

@@ -19,7 +19,7 @@ func TestValidateRepoURL(t *testing.T) {
 	valid := []string{
 		"git@github.com:acme/repo.git",
 		"https://github.com/acme/repo.git",
-		"ssh://git@example.com/acme/repo.git",
+		"ssh://git@github.com/acme/repo.git",
 	}
 	for _, value := range valid {
 		if got := validateRepoURL(value); got != "" {

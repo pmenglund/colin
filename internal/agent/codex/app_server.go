@@ -93,7 +93,7 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 	stream, err := c.thread.RunStreamed(ctx, []sdk.Input{sdk.TextInput(prompt)}, &sdk.TurnOptions{
 		Cwd:            cwd,
 		ApprovalPolicy: c.cfg.Codex.ApprovalPolicy,
-		SandboxPolicy:  c.cfg.Codex.TurnSandboxPolicy,
+		SandboxPolicy:  sandboxPolicyValue(c.cfg.Codex.TurnSandboxPolicy),
 	})
 	if err != nil {
 		return mapRuntimeError(err)
@@ -186,6 +186,57 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 	}
 }
 
+// Client is the exported Codex app-server session wrapper used by automation packages.
+type Client struct {
+	inner *appServerClient
+}
+
+// NewClient constructs a Codex session client bound to one issue workspace and event sink.
+func NewClient(cfg domain.ServiceConfig, logger *slog.Logger, onEvent func(Event), issue domain.Issue, workspace string, runType string) *Client {
+	return &Client{
+		inner: &appServerClient{
+			cfg:       cfg,
+			logger:    logger,
+			onEvent:   onEvent,
+			issue:     issue,
+			workspace: workspace,
+			runType:   runType,
+		},
+	}
+}
+
+func (c *Client) Start(ctx context.Context, cwd string) error {
+	return c.inner.start(ctx, cwd)
+}
+
+func (c *Client) RunTurn(ctx context.Context, cwd string, issue domain.Issue, prompt string) error {
+	return c.inner.runTurn(ctx, cwd, issue, prompt)
+}
+
+func (c *Client) Stop() {
+	c.inner.stop()
+}
+
+func (c *Client) ThreadID() string {
+	return c.inner.threadID
+}
+
+func (c *Client) FinalSummary() string {
+	return c.inner.finalSummary()
+}
+
+func (c *Client) ClearFinalSummary() {
+	c.inner.clearFinalSummary()
+}
+
+func (c *Client) LastOutput() string {
+	return c.inner.lastOutput()
+}
+
+func (c *Client) LastOutputCapturedFromCompletedItem() bool {
+	return c.inner.lastOutputCapturedFromCompletedItem()
+}
+
 func (c *appServerClient) finalSummary() string {
 	return strings.TrimSpace(c.lastSummary)
 }
@@ -223,7 +274,7 @@ func shouldCaptureSummary(eventName, summary string) bool {
 
 func isExplicitOutcomeSummary(summary string) bool {
 	firstLine := strings.TrimSpace(strings.Split(strings.TrimSpace(summary), "\n")[0])
-	return firstLine == outcomeReadyForReview || firstLine == outcomeNeedsSpec || firstLine == outcomeReadyForMergeRetry
+	return firstLine == OutcomeReadyForReviewLine || firstLine == OutcomeNeedsSpecLine || firstLine == OutcomeReadyForMergeRetryLine
 }
 
 func (c *appServerClient) stop() {
@@ -258,6 +309,13 @@ func (c *appServerClient) emit(event Event) {
 		}
 		c.onEvent(event)
 	}
+}
+
+func sandboxPolicyValue(policy domain.SandboxPolicy) map[string]any {
+	if strings.TrimSpace(policy.Type) == "" {
+		return nil
+	}
+	return map[string]any{"type": strings.TrimSpace(policy.Type)}
 }
 
 type approvalHandler struct {

@@ -1,6 +1,11 @@
 package codex
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
+)
 
 func translateEvent(method string) string {
 	switch method {
@@ -234,8 +239,8 @@ func collectDirectUsage(value any, out map[string]int64) {
 	}
 }
 
-func extractRateLimits(msg map[string]any) map[string]any {
-	out := map[string]any{}
+func extractRateLimits(msg map[string]any) domain.RateLimitSnapshot {
+	out := domain.RateLimitSnapshot{}
 	collectRateLimits(msg, out)
 	if len(out) == 0 {
 		return nil
@@ -243,7 +248,7 @@ func extractRateLimits(msg map[string]any) map[string]any {
 	return out
 }
 
-func collectRateLimits(value any, out map[string]any) {
+func collectRateLimits(value any, out domain.RateLimitSnapshot) {
 	switch v := value.(type) {
 	case map[string]any:
 		for key, item := range v {
@@ -251,7 +256,9 @@ func collectRateLimits(value any, out map[string]any) {
 			if strings.Contains(lower, "rate") && strings.Contains(lower, "limit") {
 				if asMap, ok := item.(map[string]any); ok {
 					for nestedKey, nestedValue := range asMap {
-						out[nestedKey] = nestedValue
+						if parsed, ok := rateLimitWindow(nestedValue); ok {
+							out[nestedKey] = parsed
+						}
 					}
 				}
 			}
@@ -262,6 +269,65 @@ func collectRateLimits(value any, out map[string]any) {
 			collectRateLimits(item, out)
 		}
 	}
+}
+
+func rateLimitWindow(value any) (domain.RateLimitWindow, bool) {
+	asMap, ok := value.(map[string]any)
+	if !ok {
+		return domain.RateLimitWindow{}, false
+	}
+
+	var window domain.RateLimitWindow
+	if n, ok := int64Value(asMap["limit"]); ok {
+		window.Limit = int64Ptr(n)
+	}
+	if n, ok := int64Value(asMap["windowDurationMins"]); ok {
+		window.WindowDurationMinutes = int64Ptr(n)
+	}
+	if n, ok := int64Value(asMap["remaining"]); ok {
+		window.Remaining = int64Ptr(n)
+	}
+	if n, ok := int64Value(asMap["usedPercent"]); ok {
+		window.UsedPercent = int64Ptr(n)
+	}
+	if ts, ok := rateLimitTime(asMap["resetsAt"]); ok {
+		window.ResetsAt = timePtr(ts)
+	}
+	if ts, ok := rateLimitTime(asMap["nextAllowedAt"]); ok {
+		window.NextAllowedAt = timePtr(ts)
+	}
+	if window.WindowDurationMinutes == nil && window.Limit == nil && window.Remaining == nil && window.UsedPercent == nil && window.ResetsAt == nil && window.NextAllowedAt == nil {
+		return domain.RateLimitWindow{}, false
+	}
+	return window, true
+}
+
+func rateLimitTime(value any) (time.Time, bool) {
+	switch v := value.(type) {
+	case string:
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
+		if err != nil {
+			return time.Time{}, false
+		}
+		return parsed.UTC(), true
+	case int64:
+		return time.Unix(v, 0).UTC(), true
+	case int:
+		return time.Unix(int64(v), 0).UTC(), true
+	case float64:
+		return time.Unix(int64(v), 0).UTC(), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func timePtr(value time.Time) *time.Time {
+	copy := value.UTC()
+	return &copy
 }
 
 func isResponse(msg map[string]any) bool {

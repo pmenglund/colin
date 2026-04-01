@@ -20,8 +20,8 @@ Work on {{.issue.identifier}}
 	if err != nil {
 		t.Fatalf("parseWorkflow() error = %v", err)
 	}
-	if got := config["tracker"].(map[string]any)["kind"]; got != "linear" {
-		t.Fatalf("tracker.kind = %v, want linear", got)
+	if config.Tracker.Kind == nil || *config.Tracker.Kind != "linear" {
+		t.Fatalf("tracker.kind = %v, want linear", config.Tracker.Kind)
 	}
 	if body != "Work on {{.issue.identifier}}" {
 		t.Fatalf("body = %q", body)
@@ -114,7 +114,7 @@ func TestRenderPromptIncludesExecPlanDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderPrompt() error = %v", err)
 	}
-	if prompt != domain.ExecPlanDecisionOneShot {
+	if prompt != string(domain.ExecPlanDecisionOneShot) {
 		t.Fatalf("prompt = %q, want %q", prompt, domain.ExecPlanDecisionOneShot)
 	}
 }

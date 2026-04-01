@@ -204,7 +204,7 @@ func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []map[string]any{
+		Threads: []repoops.GitHubReviewThread{
 			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
 		},
 	}, nil)
@@ -239,7 +239,7 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []map[string]any{
+		Threads: []repoops.GitHubReviewThread{
 			reviewThreadNode("thread-1", "chatgpt-codex-connector", "Please fix this.", false, false),
 		},
 	}, nil)
@@ -274,19 +274,20 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	workspacePath, _ := setupRepoAutomationTest(t)
 
 	threadNode := reviewThreadNode("thread-1", "reviewer", "Comment 20", false, true)
-	threadNode["comments"] = map[string]any{
-		"nodes":    reviewComments("reviewer", 20),
-		"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "comments-page-2"},
+	threadNode.Comments = repoops.GitHubReviewCommentConnection{
+		Comments:    reviewComments("reviewer", 20),
+		HasNextPage: true,
+		EndCursor:   "comments-page-2",
 	}
 
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []map[string]any{threadNode},
+		Threads: []repoops.GitHubReviewThread{threadNode},
 	}, nil)
 	fakeGitHub.ReviewThreadCommentsReturns(repoops.GitHubReviewThreadCommentPage{
-		Comments: []map[string]any{
-			{"author": map[string]any{"login": "chatgpt-codex-connector"}},
+		Comments: []repoops.GitHubReviewComment{
+			{AuthorLogin: "chatgpt-codex-connector"},
 		},
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
@@ -316,7 +317,7 @@ func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []map[string]any{
+		Threads: []repoops.GitHubReviewThread{
 			reviewThreadNode("thread-1", "chatgpt-codex-connector[bot]", "Please fix this.", false, false),
 		},
 	}, nil)
@@ -354,7 +355,7 @@ func TestReviewContextPrefersCurrentWorkspaceBranchOverTrackerBranchName(t *test
 		return nil, nil
 	})
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []map[string]any{
+		Threads: []repoops.GitHubReviewThread{
 			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
 		},
 	}, nil)
@@ -395,7 +396,7 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 		return nil, nil
 	})
 	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []map[string]any{
+		Threads: []repoops.GitHubReviewThread{
 			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
 		},
 	}, nil)
@@ -673,43 +674,45 @@ func testPullRequest(number int, state, head string) *repoops.GitHubPullRequest 
 	}
 }
 
-func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPage bool) map[string]any {
-	return map[string]any{
-		"id":               id,
-		"isResolved":       resolved,
-		"isOutdated":       false,
-		"viewerCanReply":   true,
-		"viewerCanResolve": true,
-		"path":             "internal/foo.go",
-		"line":             float64(42),
-		"startLine":        float64(40),
-		"comments": map[string]any{
-			"nodes": []any{
-				map[string]any{
-					"id":        "comment-1",
-					"body":      body,
-					"url":       "https://example.test/comment/1",
-					"createdAt": "2026-03-28T18:00:00Z",
-					"author":    map[string]any{"login": author},
+func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPage bool) repoops.GitHubReviewThread {
+	createdAt := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
+	line := 42
+	startLine := 40
+	return repoops.GitHubReviewThread{
+		ID:               id,
+		IsResolved:       resolved,
+		IsOutdated:       false,
+		ViewerCanReply:   true,
+		ViewerCanResolve: true,
+		Path:             "internal/foo.go",
+		Line:             &line,
+		StartLine:        &startLine,
+		Comments: repoops.GitHubReviewCommentConnection{
+			Comments: []repoops.GitHubReviewComment{
+				{
+					ID:          "comment-1",
+					Body:        body,
+					URL:         "https://example.test/comment/1",
+					CreatedAt:   &createdAt,
+					AuthorLogin: author,
 				},
 			},
-			"pageInfo": map[string]any{
-				"hasNextPage": commentsHasNextPage,
-				"endCursor":   "comments-page-2",
-			},
+			HasNextPage: commentsHasNextPage,
+			EndCursor:   "comments-page-2",
 		},
 	}
 }
 
-func reviewComments(author string, count int) []any {
-	out := make([]any, 0, count)
+func reviewComments(author string, count int) []repoops.GitHubReviewComment {
+	out := make([]repoops.GitHubReviewComment, 0, count)
+	createdAt := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
 	for i := 1; i <= count; i++ {
-		out = append(out, map[string]any{
-			"id":        fmt.Sprintf("comment-%d", i),
-			"body":      fmt.Sprintf("Comment %d", i),
-			"url":       fmt.Sprintf("https://example.test/comment/%d", i),
-			"createdAt": "2026-03-28T18:00:00Z",
-			"author":    map[string]any{"login": author},
+		out = append(out, repoops.GitHubReviewComment{
+			ID:          fmt.Sprintf("comment-%d", i),
+			Body:        fmt.Sprintf("Comment %d", i),
+			URL:         fmt.Sprintf("https://example.test/comment/%d", i),
+			CreatedAt:   &createdAt,
+			AuthorLogin: author,
 		})
 	}
 	return out

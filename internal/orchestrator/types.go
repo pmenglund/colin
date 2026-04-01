@@ -42,7 +42,7 @@ type Orchestrator struct {
 	reviewSync        map[string]*reviewSyncState
 	completed         map[string]string
 	totalTokens       domain.Totals
-	rateLimits        map[string]any
+	rateLimits        domain.RateLimitSnapshot
 	issueStates       map[string]int
 	pausedIssueStates map[string]domain.PausedStateSummary
 }

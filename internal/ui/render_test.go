@@ -23,22 +23,22 @@ func TestPageRendersDashboardShell(t *testing.T) {
 				URL:   "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
 			},
 		},
-		RateLimits: map[string]any{
-			"primary": map[string]any{
-				"resetsAt":           time.Date(2026, 3, 28, 17, 32, 0, 0, time.UTC).Unix(),
-				"usedPercent":        5,
-				"windowDurationMins": 300,
+		RateLimits: domain.RateLimitSnapshot{
+			"primary": {
+				ResetsAt:              ptr(time.Date(2026, 3, 28, 17, 32, 0, 0, time.UTC)),
+				UsedPercent:           int64Ptr(5),
+				WindowDurationMinutes: int64Ptr(300),
 			},
-			"secondary": map[string]any{
-				"resetsAt":           time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC).Unix(),
-				"usedPercent":        9,
-				"windowDurationMins": 10080,
+			"secondary": {
+				ResetsAt:              ptr(time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)),
+				UsedPercent:           int64Ptr(9),
+				WindowDurationMinutes: int64Ptr(10080),
 			},
-			"linear_requests": map[string]any{
-				"limit":         int64(100),
-				"remaining":     int64(25),
-				"resetsAt":      time.Date(2026, 3, 28, 12, 5, 0, 0, time.UTC).Unix(),
-				"nextAllowedAt": time.Date(2026, 3, 28, 12, 0, 3, 0, time.UTC).Unix(),
+			"linear_requests": {
+				Limit:         int64Ptr(100),
+				Remaining:     int64Ptr(25),
+				ResetsAt:      ptr(time.Date(2026, 3, 28, 12, 5, 0, 0, time.UTC)),
+				NextAllowedAt: ptr(time.Date(2026, 3, 28, 12, 0, 3, 0, time.UTC)),
 			},
 		},
 		Running: []domain.SnapshotRunning{{
@@ -352,5 +352,9 @@ func renderNode(t *testing.T, node g.Node) string {
 }
 
 func ptr(value time.Time) *time.Time {
+	return &value
+}
+
+func int64Ptr(value int64) *int64 {
 	return &value
 }

@@ -2,6 +2,46 @@ package domain
 
 import "time"
 
+type ReviewPublishDirective string
+type ExecPlanDecision string
+type RunType string
+type RunOutcome string
+type CodexReviewState string
+
+const (
+	ReviewPublishDirectivePublish ReviewPublishDirective = "publish"
+	ReviewPublishDirectiveSkip    ReviewPublishDirective = "skip"
+	PausedIssueLabel                                     = "paused"
+
+	CodexReviewPendingLabel    = "codex-review: pending"
+	CodexReviewApprovedLabel   = "codex-review: approved"
+	CodexReviewUnresolvedLabel = "codex-review: unresolved-feedback"
+
+	ExecPlanDecisionOneShot  ExecPlanDecision = "one_shot"
+	ExecPlanDecisionExecPlan ExecPlanDecision = "exec_plan"
+
+	RunTypeCoding        RunType = "coding"
+	RunTypeReviewPublish RunType = "review_publish"
+	RunTypeMerge         RunType = "merge"
+
+	RunOutcomeReadyForReview   RunOutcome = "ready_for_review"
+	RunOutcomeNeedsSpec        RunOutcome = "needs_spec"
+	RunOutcomeMaxTurns         RunOutcome = "max_turns"
+	RunOutcomeExecPlanConflict RunOutcome = "exec_plan_conflict"
+	RunOutcomeMerged           RunOutcome = "merged"
+	RunOutcomeReadyForMergeFix RunOutcome = "ready_for_merge_retry"
+
+	CodexReviewStatePending    CodexReviewState = "pending"
+	CodexReviewStateApproved   CodexReviewState = "approved"
+	CodexReviewStateUnresolved CodexReviewState = "unresolved_feedback"
+
+	OutcomeReadyForReviewLine     = "COLIN_OUTCOME: READY_FOR_REVIEW"
+	OutcomeReadyForMergeRetryLine = "COLIN_OUTCOME: READY_FOR_MERGE_RETRY"
+	OutcomeNeedsSpecLine          = "COLIN_OUTCOME: NEEDS_SPEC"
+	ExecPlanDecisionOneShotLine   = "COLIN_EXECPLAN_DECISION: ONE_SHOT"
+	ExecPlanDecisionExecPlanLine  = "COLIN_EXECPLAN_DECISION: EXEC_PLAN"
+)
+
 // Issue is the normalized tracker record consumed by orchestration, prompting, and logging.
 type Issue struct {
 	ID                   string
@@ -26,17 +66,6 @@ type Issue struct {
 	UpdatedAt            *time.Time
 }
 
-const (
-	ReviewPublishDirectivePublish = "publish"
-	ReviewPublishDirectiveSkip    = "skip"
-	PausedIssueLabel              = "paused"
-	CodexReviewPendingLabel       = "codex-review: pending"
-	CodexReviewApprovedLabel      = "codex-review: approved"
-	CodexReviewUnresolvedLabel    = "codex-review: unresolved-feedback"
-	ExecPlanDecisionOneShot       = "one_shot"
-	ExecPlanDecisionExecPlan      = "exec_plan"
-)
-
 // ManagedIssueLabels returns the Colin-managed Linear labels that must exist at startup.
 func ManagedIssueLabels() []string {
 	return []string{
@@ -60,10 +89,10 @@ func ManagedCodexReviewLabels() []string {
 type ColinMetadata struct {
 	AttachmentID           string
 	ActualBranchName       string
-	ExecPlanDecision       string
-	ReviewPublishDirective string
-	LastRunType            string
-	LastOutcome            string
+	ExecPlanDecision       ExecPlanDecision
+	ReviewPublishDirective ReviewPublishDirective
+	LastRunType            RunType
+	LastOutcome            RunOutcome
 	LastSummaryCommentID   string
 	PullRequestNumber      int
 	PullRequestURL         string
@@ -135,9 +164,91 @@ type GitHubReviewThread struct {
 
 // WorkflowDefinition is the parsed WORKFLOW.md content used for config and prompt rendering.
 type WorkflowDefinition struct {
-	Config         map[string]any
+	Config         WorkflowConfig
 	PromptTemplate string
 	SourcePath     string
+}
+
+// WorkflowConfig is the typed front matter contract accepted in WORKFLOW.md.
+type WorkflowConfig struct {
+	Tracker   WorkflowTrackerConfig   `yaml:"tracker"`
+	Polling   WorkflowPollingConfig   `yaml:"polling"`
+	Workspace WorkflowWorkspaceConfig `yaml:"workspace"`
+	Repo      WorkflowRepoConfig      `yaml:"repo"`
+	Hooks     WorkflowHookConfig      `yaml:"hooks"`
+	Agent     WorkflowAgentConfig     `yaml:"agent"`
+	Codex     WorkflowCodexConfig     `yaml:"codex"`
+	Server    WorkflowServerConfig    `yaml:"server"`
+}
+
+type WorkflowTrackerConfig struct {
+	Kind                 *string  `yaml:"kind"`
+	Endpoint             *string  `yaml:"endpoint"`
+	APIKey               *string  `yaml:"api_key"`
+	WebhookSigningSecret *string  `yaml:"webhook_signing_secret"`
+	ProjectSlug          *string  `yaml:"project_slug"`
+	ActiveStates         []string `yaml:"active_states"`
+	TerminalStates       []string `yaml:"terminal_states"`
+}
+
+type WorkflowPollingConfig struct {
+	IntervalMillis *int `yaml:"interval_ms"`
+}
+
+type WorkflowWorkspaceConfig struct {
+	Root    *string `yaml:"root"`
+	RepoURL *string `yaml:"repo_url"`
+	BaseRef *string `yaml:"base_ref"`
+}
+
+type WorkflowRepoConfig struct {
+	PublishStates         []string `yaml:"publish_states"`
+	MergeStates           []string `yaml:"merge_states"`
+	RemoteName            *string  `yaml:"remote_name"`
+	MergeMethod           *string  `yaml:"merge_method"`
+	BranchTemplate        *string  `yaml:"branch_template"`
+	PRTemplate            *string  `yaml:"pr_template"`
+	APIToken              *string  `yaml:"api_token"`
+	CodexPRReviewsEnabled *bool    `yaml:"codex_pr_reviews_enabled"`
+}
+
+type WorkflowHookConfig struct {
+	AfterCreate   *string `yaml:"after_create"`
+	BeforeRun     *string `yaml:"before_run"`
+	AfterRun      *string `yaml:"after_run"`
+	BeforeRemove  *string `yaml:"before_remove"`
+	TimeoutMillis *int    `yaml:"timeout_ms"`
+}
+
+type WorkflowAgentConfig struct {
+	MaxConcurrentAgents        *int           `yaml:"max_concurrent_agents"`
+	MaxRetryBackoffMillis      *int           `yaml:"max_retry_backoff_ms"`
+	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state"`
+	MaxTurns                   *int           `yaml:"max_turns"`
+	CreateExecPlan             *bool          `yaml:"create_exec_plan"`
+}
+
+type WorkflowSandboxPolicy struct {
+	Type *string `yaml:"type"`
+	Mode *string `yaml:"mode"`
+}
+
+type WorkflowCodexConfig struct {
+	Command            *string                `yaml:"command"`
+	ApprovalPolicy     *string                `yaml:"approval_policy"`
+	ThreadSandbox      *string                `yaml:"thread_sandbox"`
+	TurnSandboxPolicy  *WorkflowSandboxPolicy `yaml:"turn_sandbox_policy"`
+	TurnTimeoutMillis  *int                   `yaml:"turn_timeout_ms"`
+	ReadTimeoutMillis  *int                   `yaml:"read_timeout_ms"`
+	StallTimeoutMillis *int                   `yaml:"stall_timeout_ms"`
+}
+
+type WorkflowServerConfig struct {
+	Port             *int    `yaml:"port"`
+	PublicURL        *string `yaml:"public_url"`
+	WebhookPublicURL *string `yaml:"webhook_public_url"`
+	UIURL            *string `yaml:"ui_url"`
+	LogBufferLines   *int    `yaml:"log_buffer_lines"`
 }
 
 // ServiceConfig is the typed runtime view built from workflow front matter and defaults.
@@ -211,11 +322,29 @@ type CodexConfig struct {
 	Command           string
 	ApprovalPolicy    string
 	ThreadSandbox     string
-	TurnSandboxPolicy map[string]any
+	TurnSandboxPolicy SandboxPolicy
 	TurnTimeout       time.Duration
 	ReadTimeout       time.Duration
 	StallTimeout      time.Duration
 }
+
+// SandboxPolicy describes the per-turn Codex sandbox contract Colin supports.
+type SandboxPolicy struct {
+	Type string `json:"type"`
+}
+
+// RateLimitWindow is one typed rate-limit bucket captured from a dependency.
+type RateLimitWindow struct {
+	WindowDurationMinutes *int64     `json:"window_duration_minutes,omitempty"`
+	Limit                 *int64     `json:"limit,omitempty"`
+	Remaining             *int64     `json:"remaining,omitempty"`
+	UsedPercent           *int64     `json:"used_percent,omitempty"`
+	ResetsAt              *time.Time `json:"resets_at,omitempty"`
+	NextAllowedAt         *time.Time `json:"next_allowed_at,omitempty"`
+}
+
+// RateLimitSnapshot is the typed set of named rate-limit buckets used across the runtime.
+type RateLimitSnapshot map[string]RateLimitWindow
 
 // ServerConfig reserves space for optional server extensions.
 type ServerConfig struct {
@@ -308,7 +437,7 @@ type Snapshot struct {
 	Running           []SnapshotRunning             `json:"running"`
 	Retrying          []RetryEntry                  `json:"retrying"`
 	CodexTotals       Totals                        `json:"codex_totals"`
-	RateLimits        map[string]any                `json:"rate_limits"`
+	RateLimits        RateLimitSnapshot             `json:"rate_limits"`
 	Counts            map[string]int                `json:"counts"`
 	IssueStates       map[string]int                `json:"issue_states"`
 	PausedIssueStates map[string]PausedStateSummary `json:"paused_issue_states,omitempty"`

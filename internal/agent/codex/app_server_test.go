@@ -7,6 +7,7 @@ import (
 
 	sdkprotocol "github.com/pmenglund/codex-sdk-go/protocol"
 	sdkrpc "github.com/pmenglund/codex-sdk-go/rpc"
+	"github.com/pmenglund/colin/internal/domain"
 )
 
 func TestNotificationRuntimeError(t *testing.T) {
@@ -143,7 +144,7 @@ func TestCompletedItemTextUsesCompletedItemOnly(t *testing.T) {
 			"threadId": "thread-1",
 			"text":     "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.",
 			"item": map[string]any{
-				"text": execPlanDecisionOneShotLine + "\n\nSafe to implement directly.",
+				"text": domain.ExecPlanDecisionOneShotLine + "\n\nSafe to implement directly.",
 			},
 		},
 	})
@@ -159,7 +160,7 @@ func TestCompletedItemTextUsesCompletedItemOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("completedItemText() = not found, want completed item text")
 	}
-	want := execPlanDecisionOneShotLine + "\n\nSafe to implement directly."
+	want := domain.ExecPlanDecisionOneShotLine + "\n\nSafe to implement directly."
 	if got != want {
 		t.Fatalf("completedItemText() = %q, want %q", got, want)
 	}
@@ -199,8 +200,8 @@ func TestIsExplicitOutcomeSummary(t *testing.T) {
 		summary string
 		want    bool
 	}{
-		{name: "ready for review", summary: outcomeReadyForReview + "\n\nImplemented the requested change.", want: true},
-		{name: "needs spec", summary: outcomeNeedsSpec + "\n\nThe spec should be improved before implementation.", want: true},
+		{name: "ready for review", summary: domain.OutcomeReadyForReviewLine + "\n\nImplemented the requested change.", want: true},
+		{name: "needs spec", summary: domain.OutcomeNeedsSpecLine + "\n\nThe spec should be improved before implementation.", want: true},
 		{name: "generic prose", summary: "Implemented the requested change.", want: false},
 		{name: "exec plan", summary: "# Fake ExecPlan\n\nPlan details.", want: false},
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 )
@@ -41,6 +42,17 @@ func ParseRepositoryURL(raw string) (Repository, error) {
 		return parseURLRepository(raw)
 	}
 	return parseSCPRepository(raw)
+}
+
+// CurrentToken returns the first configured GitHub token Colin accepts.
+func CurrentToken() string {
+	return strings.TrimSpace(firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")))
+}
+
+// IsValidToken reports whether the value looks like a GitHub token Colin can use.
+func IsValidToken(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "github_pat_") || strings.HasPrefix(trimmed, "ghp_")
 }
 
 // BuildSetupDetails returns the recommended GitHub token settings for one repository.
@@ -138,4 +150,13 @@ func tokenName(repo string) string {
 		return name
 	}
 	return name[:40]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
