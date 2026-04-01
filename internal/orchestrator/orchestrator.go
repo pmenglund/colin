@@ -142,8 +142,6 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	}
 	o.logger.Debug("poll tick started", args...)
 	o.reconcileRunning(ctx)
-	trackedIssues := o.refreshIssueStateCounts(ctx)
-	o.syncCodexReviewLabels(ctx, trackedIssues)
 	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
@@ -178,6 +176,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.dispatch(ctx, issue, nil, nil)
 		dispatched++
 	}
+	trackedIssues := o.refreshIssueStateCounts(ctx)
+	o.syncCodexReviewLabels(ctx, trackedIssues)
 	args = []any{
 		"candidate_count", len(issues),
 		"eligible_count", eligible,
@@ -199,10 +199,6 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 	if len(stateNames) == 0 {
 		o.issueStates = map[string]int{}
 		o.pausedIssueStates = map[string]domain.PausedStateSummary{}
-		return nil
-	}
-	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
-		o.logger.Debug("issue state count refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
 		return nil
 	}
 
