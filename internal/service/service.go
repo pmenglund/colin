@@ -48,8 +48,10 @@ type Service struct {
 	workflowPath string
 	options      options
 	serverPort   *int
+	webhookPort  *int
 	serverMu     sync.RWMutex
 	serverURL    string
+	webhookURL   string
 	runtimeMu    sync.RWMutex
 	runtime      orchestrator.Runtime
 	orch         *orchestrator.Orchestrator
@@ -76,6 +78,7 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 		workflowPath: path,
 		options:      options,
 		serverPort:   clonePort(runtime.Config.Server.Port),
+		webhookPort:  clonePort(runtime.Config.Server.WebhookPort),
 		runtime:      runtime,
 		orch:         orch,
 		inspector:    tsdiag.NewInspector(),
@@ -85,7 +88,10 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 // Run starts startup cleanup, workflow reload watching, and the orchestrator loop.
 func (s *Service) Run(ctx context.Context) error {
 	s.logger.Info("service starting", "workflow_path", s.workflowPath)
-	if err := s.startHTTPServer(ctx); err != nil {
+	if err := s.startUIServer(ctx); err != nil {
+		return err
+	}
+	if err := s.startWebhookServer(ctx); err != nil {
 		return err
 	}
 	stopGOPS := startGOPSAgent(ctx, s.logger, defaultGOPSHooks)
@@ -118,6 +124,12 @@ func (s *Service) FunnelSetupURL() string {
 		return ""
 	}
 	return base + "/setup/funnel"
+}
+
+func (s *Service) webhookBaseURL() string {
+	s.serverMu.RLock()
+	defer s.serverMu.RUnlock()
+	return s.webhookURL
 }
 
 func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.Runtime, error) {
@@ -220,12 +232,12 @@ func validateGitHubAccess(cfg domain.ServiceConfig, manager *repoops.Manager) er
 	return validateRepoAccess(cfg, manager)
 }
 
-func (s *Service) startHTTPServer(ctx context.Context) error {
+func (s *Service) startUIServer(ctx context.Context) error {
 	if s.serverPort == nil {
 		return nil
 	}
 
-	handler, err := app.NewObservabilityServer(
+	handler, err := app.NewUIHandler(
 		func(snapshotCtx context.Context) (domain.Snapshot, error) {
 			return s.orch.Snapshot(snapshotCtx)
 		},
@@ -245,31 +257,6 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 			}
 			return s.logBuffer.Snapshot(minLevel), nil
 		},
-		func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
-			runtime := s.currentRuntime()
-			if !shouldQueueImmediateLinearRefresh(event, watchedProjectID(runtime.Tracker)) {
-				return app.LinearWebhookTriggerResult{}
-			}
-			reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
-			if event.IssueID != "" {
-				reason += " issue_id=" + event.IssueID
-			}
-			if event.ProjectID != "" {
-				reason += " project_id=" + event.ProjectID
-			}
-			queued, coalesced := s.orch.RequestRefresh(reason)
-			if queued {
-				return app.LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: coalesced}
-			}
-			if !s.orch.RefreshReady() {
-				return app.LinearWebhookTriggerResult{Relevant: true, Suppressed: true}
-			}
-			return app.LinearWebhookTriggerResult{Relevant: true}
-		},
-		func(context.Context) string {
-			return s.currentRuntime().Config.Tracker.WebhookSigningSecret
-		},
-		s.logger,
 	)
 	if err != nil {
 		return fmt.Errorf("create dashboard server: %w", err)
@@ -302,6 +289,72 @@ func (s *Service) startHTTPServer(ctx context.Context) error {
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.logger.Error("dashboard server exited", "error", err)
+		}
+	}()
+
+	return nil
+}
+
+func (s *Service) startWebhookServer(ctx context.Context) error {
+	if s.webhookPort == nil || *s.webhookPort <= 0 {
+		return nil
+	}
+
+	handler := app.NewWebhookHandler(
+		func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
+			runtime := s.currentRuntime()
+			if !shouldQueueImmediateLinearRefresh(event, watchedProjectID(runtime.Tracker)) {
+				return app.LinearWebhookTriggerResult{}
+			}
+			reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
+			if event.IssueID != "" {
+				reason += " issue_id=" + event.IssueID
+			}
+			if event.ProjectID != "" {
+				reason += " project_id=" + event.ProjectID
+			}
+			queued, coalesced := s.orch.RequestRefresh(reason)
+			if queued {
+				return app.LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: coalesced}
+			}
+			if !s.orch.RefreshReady() {
+				return app.LinearWebhookTriggerResult{Relevant: true, Suppressed: true}
+			}
+			return app.LinearWebhookTriggerResult{Relevant: true}
+		},
+		func(context.Context) string {
+			return s.currentRuntime().Config.Tracker.WebhookSigningSecret
+		},
+		s.logger,
+	)
+
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*s.webhookPort)))
+	if err != nil {
+		return fmt.Errorf("listen webhook server: %w", err)
+	}
+
+	s.serverMu.Lock()
+	s.webhookURL = "http://" + listener.Addr().String()
+	s.serverMu.Unlock()
+	s.logger.Info("webhook server started", "url", s.webhookBaseURL())
+
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Warn("webhook server shutdown failed", "error", err)
+		}
+	}()
+
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("webhook server exited", "error", err)
 		}
 	}()
 
@@ -358,8 +411,10 @@ func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatu
 		inspector = tsdiag.NewInspector()
 	}
 	return inspector.Check(ctx, tsdiag.Options{
-		LocalPort:                runtime.Config.Server.Port,
-		LocalDashboardURL:        s.DashboardURL(),
+		UIPort:                   runtime.Config.Server.Port,
+		LocalUIBaseURL:           s.DashboardURL(),
+		WebhookPort:              runtime.Config.Server.WebhookPort,
+		LocalWebhookBaseURL:      s.webhookBaseURL(),
 		ExplicitWebhookPublicURL: webhookPublicURL(runtime.Config.Server),
 	})
 }
@@ -370,8 +425,8 @@ func (s *Service) effectiveWebhookPublicBaseURL(ctx context.Context, cfg domain.
 		inspector = tsdiag.NewInspector()
 	}
 	status := inspector.Resolve(ctx, tsdiag.Options{
-		LocalPort:                cfg.Port,
-		LocalDashboardURL:        s.DashboardURL(),
+		WebhookPort:              cfg.WebhookPort,
+		LocalWebhookBaseURL:      s.webhookBaseURL(),
 		ExplicitWebhookPublicURL: webhookPublicURL(cfg),
 	})
 	return strings.TrimSpace(status.PublicBaseURL)

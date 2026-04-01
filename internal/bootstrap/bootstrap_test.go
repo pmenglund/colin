@@ -18,6 +18,8 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		BaseRef:       "main",
 		WorkspaceRoot: "./.colin/workspaces",
 		ServerPort:    7777,
+		WantsWebhook:  true,
+		WebhookPort:   8998,
 	})
 	if err != nil {
 		t.Fatalf("RenderWorkflow() error = %v", err)
@@ -32,6 +34,7 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		`repo_url: "git@github.com:acme/repo.git"`,
 		`base_ref: "main"`,
 		"port: 7777",
+		"webhook_port: 8998",
 		"COLIN_OUTCOME: READY_FOR_REVIEW",
 	} {
 		if !strings.Contains(got, want) {
@@ -77,6 +80,9 @@ func TestRunWritesWorkflowAndPrintsWebhookSkip(t *testing.T) {
 	}
 	if !strings.Contains(gotFile, `repo_url: "git@github.com:acme/repo.git"`) {
 		t.Fatalf("workflow file = %q, want repo url", gotFile)
+	}
+	if strings.Contains(gotFile, "webhook_port:") {
+		t.Fatalf("workflow file = %q, want webhook port omitted when webhooks are disabled", gotFile)
 	}
 
 	gotOutput := output.String()
@@ -140,6 +146,7 @@ func TestRunPrintsAutoStartWebhookGuidance(t *testing.T) {
 		"",
 		"8888",
 		"y",
+		"",
 		"y",
 		"",
 	}, "\n"))
@@ -159,6 +166,13 @@ func TestRunPrintsAutoStartWebhookGuidance(t *testing.T) {
 	}
 	if !strings.Contains(got, "run `colin setup linear`") {
 		t.Fatalf("output = %q, want setup linear guidance", got)
+	}
+	data, err := os.ReadFile(filepath.Join(tempDir, "WORKFLOW.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "webhook_port: 8998") {
+		t.Fatalf("workflow file = %q, want default webhook port", string(data))
 	}
 }
 

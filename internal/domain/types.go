@@ -250,6 +250,7 @@ type WorkflowCodexConfig struct {
 
 type WorkflowServerConfig struct {
 	Port             *int    `yaml:"port"`
+	WebhookPort      *int    `yaml:"webhook_port"`
 	PublicURL        *string `yaml:"public_url"`
 	WebhookPublicURL *string `yaml:"webhook_public_url"`
 	UIURL            *string `yaml:"ui_url"`
@@ -356,6 +357,7 @@ type RateLimitSnapshot map[string]RateLimitWindow
 // ServerConfig reserves space for optional server extensions.
 type ServerConfig struct {
 	Port             *int
+	WebhookPort      *int
 	PublicURL        string
 	WebhookPublicURL string
 	UIURL            string
@@ -374,20 +376,23 @@ type SetupCheck struct {
 
 // FunnelSetupStatus describes Colin's current Tailscale Funnel readiness.
 type FunnelSetupStatus struct {
-	GeneratedAt       time.Time    `json:"generated_at"`
-	Ready             bool         `json:"ready"`
-	PublicURLSource   string       `json:"public_url_source,omitempty"`
-	LocalBaseURL      string       `json:"local_base_url,omitempty"`
-	LocalSetupURL     string       `json:"local_setup_url,omitempty"`
-	LocalReadyURL     string       `json:"local_ready_url,omitempty"`
-	PublicBaseURL     string       `json:"public_base_url,omitempty"`
-	PublicSetupURL    string       `json:"public_setup_url,omitempty"`
-	PublicReadyURL    string       `json:"public_ready_url,omitempty"`
-	DetectedFunnelURL string       `json:"detected_funnel_url,omitempty"`
-	SuggestedCommand  string       `json:"suggested_command,omitempty"`
-	LinearWebhookURL  string       `json:"linear_webhook_url,omitempty"`
-	GitHubWebhookURL  string       `json:"github_webhook_url,omitempty"`
-	Checks            []SetupCheck `json:"checks,omitempty"`
+	GeneratedAt           time.Time    `json:"generated_at"`
+	Ready                 bool         `json:"ready"`
+	PublicURLSource       string       `json:"public_url_source,omitempty"`
+	LocalBaseURL          string       `json:"local_base_url,omitempty"`
+	LocalWebhookBaseURL   string       `json:"local_webhook_base_url,omitempty"`
+	TailnetUIBaseURL      string       `json:"tailnet_ui_base_url,omitempty"`
+	LocalSetupURL         string       `json:"local_setup_url,omitempty"`
+	LocalReadyURL         string       `json:"local_ready_url,omitempty"`
+	PublicBaseURL         string       `json:"public_base_url,omitempty"`
+	PublicSetupURL        string       `json:"public_setup_url,omitempty"`
+	PublicReadyURL        string       `json:"public_ready_url,omitempty"`
+	DetectedFunnelURL     string       `json:"detected_funnel_url,omitempty"`
+	SuggestedServeCommand string       `json:"suggested_serve_command,omitempty"`
+	SuggestedCommand      string       `json:"suggested_command,omitempty"`
+	LinearWebhookURL      string       `json:"linear_webhook_url,omitempty"`
+	GitHubWebhookURL      string       `json:"github_webhook_url,omitempty"`
+	Checks                []SetupCheck `json:"checks,omitempty"`
 }
 
 // Workspace describes a prepared per-issue workspace directory.

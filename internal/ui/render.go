@@ -226,9 +226,9 @@ func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 
 // FunnelSetupPage renders the Tailscale webhook ingress readiness page.
 func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time) g.Node {
-	stateText := "Needs setup"
+	stateText := "Needs Tailscale setup"
 	if status.Ready {
-		stateText = "Ready for webhooks"
+		stateText = "Tailscale ready"
 	}
 
 	return h.Doctype(h.HTML(
@@ -248,9 +248,9 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 					h.Div(
 						h.Class("hero-grid"),
 						h.Div(
-							h.Span(h.Class("hero-label"), g.Text("Tailscale Webhook Setup")),
-							h.H1(g.Text("Webhook ingress readiness")),
-							h.P(g.Text("Verify only Colin's `/webhooks` endpoints are publicly reachable before configuring Linear or GitHub webhooks. The dashboard and metadata pages stay local unless you publish them separately.")),
+							h.Span(h.Class("hero-label"), g.Text("Tailscale Setup")),
+							h.H1(g.Text("UI and webhook readiness")),
+							h.P(g.Text("Verify Colin's UI is available on the tailnet through Tailscale Serve, and expose only Colin's `/webhooks` endpoints publicly through Tailscale Funnel when webhook support is enabled.")),
 						),
 						h.Div(
 							h.Class("shell-meta"),
@@ -272,12 +272,15 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 						h.Div(
 							h.Class("worker-grid"),
 							metadataStatCard("Local UI base URL", fallback(status.LocalBaseURL, "not available")),
+							metadataStatCard("Tailnet UI base URL", fallback(status.TailnetUIBaseURL, "not available")),
+							metadataStatCard("Local webhook base URL", fallback(status.LocalWebhookBaseURL, "disabled")),
 							metadataStatCard("Public webhook base URL", fallback(status.PublicBaseURL, "not available")),
 							metadataStatCard("Linear webhook URL", fallback(status.LinearWebhookURL, "not available")),
 							metadataStatCard("GitHub webhook URL", fallback(status.GitHubWebhookURL, "not available")),
 						),
-						h.P(g.Text("Expose only `/webhooks/*` through Tailscale Funnel. Dashboard pages continue to use the local or explicitly configured UI URL.")),
-						h.P(g.Text("Suggested command: "), h.Code(g.Text(fallback(status.SuggestedCommand, "none")))),
+						h.P(g.Text("Use Tailscale Serve for the UI on `/`. Use Tailscale Funnel only for `/webhooks/*` when `server.webhook_port` is configured.")),
+						h.P(g.Text("Suggested Serve command: "), h.Code(g.Text(fallback(status.SuggestedServeCommand, "none")))),
+						h.P(g.Text("Suggested Funnel command: "), h.Code(g.Text(fallback(status.SuggestedCommand, "none")))),
 					),
 					h.Section(
 						h.Class("table-card"),

@@ -98,7 +98,7 @@ Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale rea
 colin setup tailscale
 ```
 
-That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept. The interactive `colin config` flow asks whether you want webhook setup and, if you answer yes, points you back to this Tailscale step before creating the Linear webhook.
+That command checks Tailscale, explains that Colin uses Tailscale Serve for the UI and Tailscale Funnel only for public webhook exposure, shows the exact `tailscale serve` and `tailscale funnel` commands Colin expects, and prints the final UI and webhook URLs Colin will later use. The interactive `colin config` flow asks whether you want webhook setup and, if you answer yes, writes `server.webhook_port: 8998` by default and points you back to this Tailscale step before creating the Linear webhook.
 
 To create or repair the watched project's Linear webhook after public ingress is ready, run:
 
@@ -347,9 +347,9 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin automatically applies `paused` after 3 consecutive identical failures for the same run type and issue state, including repeated `review_publish` failures such as PR creation loops.
 - Colin treats the PR recorded in Linear metadata as the canonical PR for that issue and will not silently switch to or create another PR if that record conflicts with the current branch or GitHub state.
 - If multiple GitHub PR attachments are already linked to the same Linear issue and no canonical PR is recorded yet, Colin stops and requires human cleanup instead of guessing.
-- The dashboard binds loopback only by default. The default port is `8888`, `server.port: 0` requests an ephemeral port for development/tests, and CLI `--port` overrides `server.port`.
+- The dashboard binds loopback only by default. The default UI port is `8888`, `server.port: 0` requests an ephemeral UI port for development/tests, and CLI `--port` overrides `server.port`.
 - Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
-- Colin uses Tailscale Funnel only for `/webhooks/*`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for the Colin port and derives the public webhook base URL from that Funnel. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
+- Colin uses Tailscale Funnel only for `/webhooks/*`. When webhook support is enabled, `server.webhook_port` controls the dedicated local webhook listener and defaults to `8998` from `colin config`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for that webhook port and derives the public webhook base URL from it. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
 - Watched-project Linear `Issue` `create` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals, and watched-project `Issue` `update` deliveries can do the same when they include scheduling-relevant field changes such as `stateId`, `projectId`, `teamId`, `priority`, `title`, `description`, `branchName`, or `labelIds`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
@@ -363,9 +363,9 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin does not automatically leave `Review`; a human still decides whether the issue goes back to `Todo` for another round or forward to `Merge`.
 - Colin can automatically move an issue out of `Merge` when the Linear team has a git `merge` automation target configured, which this repository currently does (`Merged`).
 
-## Tailscale Funnel Webhook Readiness
+## Tailscale Serve and Funnel Readiness
 
-Colin now includes a dedicated readiness flow for the public ingress you need before configuring incoming webhooks.
+Colin now includes a dedicated readiness flow for both the tailnet UI and the public ingress you need before configuring incoming webhooks.
 
 Use either:
 
@@ -385,14 +385,21 @@ The readiness flow checks:
 
 - `tailscale` is installed and the backend is running
 - MagicDNS is enabled
-- a `/webhooks`-mounted Tailscale Funnel is proxying Colin's local port
-- Colin responds locally at `/webhooks/readyz`
-- Colin responds publicly at `/webhooks/readyz`
+- Tailscale Serve proxies `/` to Colin's local UI port
+- when `server.webhook_port` is set, a `/webhooks`-mounted Tailscale Funnel proxies Colin's local webhook port
+- when `server.webhook_port` is set, Colin responds locally at `/webhooks/readyz`
+- when `server.webhook_port` is set, Colin responds publicly at `/webhooks/readyz`
 
-The recommended command is:
+The recommended UI command is:
 
 ```bash
-tailscale funnel --bg --https=443 --set-path=/webhooks 8888
+tailscale serve --bg 8888
+```
+
+When webhook support is enabled, the recommended webhook command is:
+
+```bash
+tailscale funnel --bg --https=443 --set-path=/webhooks 8998
 ```
 
 If port `443` is already occupied by another Serve or Funnel configuration, Colin suggests `8443` or `10000` instead.
@@ -406,7 +413,7 @@ Tailscale Funnel requirements come from Tailscale itself and currently include:
 
 When Funnel is active and `server.webhook_public_url` is unset, Colin derives its public webhook base URL from the active Funnel automatically. If `server.webhook_public_url` is set, Colin uses that value instead and still shows Funnel diagnostics on the setup page.
 
-Dashboard and issue-metadata pages are not meant to be exposed through Funnel in this setup. If operators need non-local UI links, set `server.ui_url` separately.
+Dashboard and issue-metadata pages are not meant to be exposed through Funnel in this setup. Use Tailscale Serve for the UI, or set `server.ui_url` separately if the operator-facing UI lives at another URL.
 
 The setup page and CLI both show the final URLs you will paste into provider webhook settings later:
 

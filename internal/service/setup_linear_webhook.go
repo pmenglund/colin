@@ -34,7 +34,7 @@ func SetupLinearWebhook(ctx context.Context, workflowPath string, webhookName st
 
 	inspector := tsdiag.NewInspector()
 	status := inspector.Resolve(ctx, tsdiag.Options{
-		LocalPort:                cfg.Server.Port,
+		WebhookPort:              cfg.Server.WebhookPort,
 		ExplicitWebhookPublicURL: webhookPublicURL(cfg.Server),
 	})
 	baseURL := strings.TrimSpace(status.PublicBaseURL)

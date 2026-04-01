@@ -29,8 +29,10 @@ var allowedFunnelPorts = []int{443, 8443, 10000}
 
 // Options configures one Tailscale Funnel readiness inspection.
 type Options struct {
-	LocalPort                *int
-	LocalDashboardURL        string
+	UIPort                   *int
+	LocalUIBaseURL           string
+	WebhookPort              *int
+	LocalWebhookBaseURL      string
 	ExplicitWebhookPublicURL string
 }
 
@@ -72,13 +74,15 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 	}
 	now := i.now()
 	status := domain.FunnelSetupStatus{
-		GeneratedAt:  now,
-		LocalBaseURL: localBaseURL(opts),
+		GeneratedAt:         now,
+		LocalBaseURL:        localUIBaseURL(opts),
+		LocalWebhookBaseURL: localWebhookBaseURL(opts),
 	}
 	status.LocalSetupURL = joinURL(status.LocalBaseURL, setupPath)
-	status.LocalReadyURL = joinURL(status.LocalBaseURL, readyzPath)
+	status.LocalReadyURL = joinURL(status.LocalWebhookBaseURL, readyzPath)
+	status.SuggestedServeCommand = suggestedServeCommand(opts.UIPort)
 
-	checks := make([]domain.SetupCheck, 0, 4)
+	checks := make([]domain.SetupCheck, 0, 6)
 	addCheck := func(id, label, checkStatus, detail, remediation string) {
 		checks = append(checks, domain.SetupCheck{
 			ID:          id,
@@ -99,7 +103,7 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 			err.Error(),
 			"Start Tailscale and confirm the local Tailscale daemon is reachable.",
 		)
-		status.SuggestedCommand = suggestedCommand(nil, opts.LocalPort)
+		status.SuggestedCommand = suggestedCommand(nil, opts.WebhookPort)
 		status.Checks = checks
 		return finalizeStatus(status)
 	}
@@ -134,26 +138,52 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 	serveCfg, err := i.readFunnelStatus(ctx)
 	if err != nil {
 		addCheck(
-			"funnel_route",
-			"Funnel proxies Colin at `/webhooks`",
+			"serve_route",
+			"Serve proxies Colin at `/` on the tailnet",
 			"error",
 			err.Error(),
-			"Run the suggested `tailscale funnel` command after Tailscale is healthy.",
+			serveRemediation(status.SuggestedServeCommand),
 		)
-		status.SuggestedCommand = suggestedCommand(nil, opts.LocalPort)
+		addCheck(
+			"funnel_route",
+			"Funnel proxies Colin at `/webhooks`",
+			webhookCheckStatus(opts.WebhookPort),
+			webhookCheckDetail(opts.WebhookPort, err),
+			webhookCheckRemediation(opts.WebhookPort, ""),
+		)
+		status.SuggestedCommand = suggestedCommand(nil, opts.WebhookPort)
 		status.Checks = checks
 		return finalizeStatus(status)
 	}
 
-	match, usedPorts, matchErr := matchFunnel(serveCfg, opts.LocalPort)
-	status.SuggestedCommand = suggestedCommand(usedPorts, opts.LocalPort)
+	if serveURL, err := matchServe(serveCfg, opts.UIPort); err != nil {
+		addCheck(
+			"serve_route",
+			"Serve proxies Colin at `/` on the tailnet",
+			"error",
+			err.Error(),
+			serveRemediation(status.SuggestedServeCommand),
+		)
+	} else {
+		status.TailnetUIBaseURL = serveURL
+		addCheck(
+			"serve_route",
+			"Serve proxies Colin at `/` on the tailnet",
+			"ok",
+			fmt.Sprintf("Detected `%s` proxying Colin from `/`.", serveURL),
+			"",
+		)
+	}
+
+	match, usedPorts, matchErr := matchFunnel(serveCfg, opts.WebhookPort)
+	status.SuggestedCommand = suggestedCommand(usedPorts, opts.WebhookPort)
 	if matchErr != nil {
 		addCheck(
 			"funnel_route",
 			"Funnel proxies Colin at `/webhooks`",
-			"error",
-			matchErr.Error(),
-			funnelRemediation(status.SuggestedCommand),
+			webhookCheckStatus(opts.WebhookPort),
+			webhookCheckDetail(opts.WebhookPort, matchErr),
+			webhookCheckRemediation(opts.WebhookPort, status.SuggestedCommand),
 		)
 	} else {
 		status.DetectedFunnelURL = match.URL
@@ -185,8 +215,10 @@ func (i *Inspector) Check(ctx context.Context, opts Options) domain.FunnelSetupS
 	status := i.Resolve(ctx, opts)
 	now := status.GeneratedAt
 
-	status.Checks = append(status.Checks, probeCheck(i.httpClient, now, "local_readyz", "Colin responds locally at `/webhooks/readyz`", status.LocalReadyURL, "Start Colin so it serves the local readiness endpoint before enabling Funnel."))
-	status.Checks = append(status.Checks, probeCheck(i.httpClient, now, "public_readyz", "Colin responds publicly at `/webhooks/readyz`", status.PublicReadyURL, publicRemediation(status.SuggestedCommand)))
+	if webhookConfigured(opts.WebhookPort) {
+		status.Checks = append(status.Checks, probeCheck(i.httpClient, now, "local_readyz", "Colin responds locally at `/webhooks/readyz`", status.LocalReadyURL, "Start Colin so it serves the local readiness endpoint before enabling Funnel."))
+		status.Checks = append(status.Checks, probeCheck(i.httpClient, now, "public_readyz", "Colin responds publicly at `/webhooks/readyz`", status.PublicReadyURL, publicRemediation(status.SuggestedCommand)))
+	}
 	return finalizeStatus(status)
 }
 
@@ -237,7 +269,7 @@ func (i *Inspector) readFunnelStatus(ctx context.Context) (*ipn.ServeConfig, err
 
 func matchFunnel(cfg *ipn.ServeConfig, localPort *int) (*funnelMatchInfo, map[int]struct{}, error) {
 	if localPort == nil || *localPort <= 0 {
-		return nil, usedPorts(cfg), errors.New("Colin needs a fixed local `server.port` before Funnel can be configured.")
+		return nil, usedPorts(cfg), errors.New("Colin needs a fixed local `server.webhook_port` before Funnel can be configured.")
 	}
 
 	ports := usedPorts(cfg)
@@ -349,14 +381,24 @@ func finalizeStatus(status domain.FunnelSetupStatus) domain.FunnelSetupStatus {
 	return status
 }
 
-func localBaseURL(opts Options) string {
-	if value := strings.TrimSpace(opts.LocalDashboardURL); value != "" {
+func localUIBaseURL(opts Options) string {
+	if value := strings.TrimSpace(opts.LocalUIBaseURL); value != "" {
 		return strings.TrimRight(value, "/")
 	}
-	if opts.LocalPort == nil || *opts.LocalPort <= 0 {
+	if opts.UIPort == nil || *opts.UIPort <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d", *opts.LocalPort)
+	return fmt.Sprintf("http://127.0.0.1:%d", *opts.UIPort)
+}
+
+func localWebhookBaseURL(opts Options) string {
+	if value := strings.TrimSpace(opts.LocalWebhookBaseURL); value != "" {
+		return strings.TrimRight(value, "/")
+	}
+	if opts.WebhookPort == nil || *opts.WebhookPort <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", *opts.WebhookPort)
 }
 
 func joinURL(base, suffix string) string {
@@ -493,6 +535,52 @@ func proxyTargetsPort(proxy string, localPort int) bool {
 	return port == localPort
 }
 
+func webhookConfigured(port *int) bool {
+	return port != nil && *port > 0
+}
+
+func webhookCheckStatus(port *int) string {
+	if webhookConfigured(port) {
+		return "error"
+	}
+	return "ok"
+}
+
+func webhookCheckDetail(port *int, err error) string {
+	if !webhookConfigured(port) {
+		return "Webhook listener is disabled because `server.webhook_port` is unset."
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func webhookCheckRemediation(port *int, command string) string {
+	if !webhookConfigured(port) {
+		return ""
+	}
+	return funnelRemediation(command)
+}
+
+func matchServe(cfg *ipn.ServeConfig, localPort *int) (string, error) {
+	if localPort == nil || *localPort <= 0 {
+		return "", errors.New("Colin needs a fixed local `server.port` before Serve can be configured.")
+	}
+	baseURL := serveUIBaseURL(cfg, *localPort)
+	if strings.TrimSpace(baseURL) == "" {
+		return "", fmt.Errorf("No Serve proxies `127.0.0.1:%d` from `/` yet.", *localPort)
+	}
+	return baseURL, nil
+}
+
+func suggestedServeCommand(localPort *int) string {
+	if localPort == nil || *localPort <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("tailscale serve --bg %d", *localPort)
+}
+
 func suggestedCommand(used map[int]struct{}, localPort *int) string {
 	if localPort == nil || *localPort <= 0 {
 		return ""
@@ -513,7 +601,14 @@ func suggestedCommand(used map[int]struct{}, localPort *int) string {
 
 func funnelRemediation(command string) string {
 	if strings.TrimSpace(command) == "" {
-		return "Set a fixed Colin `server.port`, then configure a `/webhooks` Funnel for that port."
+		return "Set a fixed Colin `server.webhook_port`, then configure a `/webhooks` Funnel for that port."
+	}
+	return fmt.Sprintf("Run `%s`, then reload this page.", command)
+}
+
+func serveRemediation(command string) string {
+	if strings.TrimSpace(command) == "" {
+		return "Set a fixed Colin `server.port`, then configure Tailscale Serve for that port."
 	}
 	return fmt.Sprintf("Run `%s`, then reload this page.", command)
 }

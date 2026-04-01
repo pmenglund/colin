@@ -56,8 +56,7 @@ func NewServer() (http.Handler, error) {
 	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil, nil)
 }
 
-// NewObservabilityServer returns the embedded dashboard and JSON state API.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+func normalizeServerProviders(provider SnapshotProvider, setupProvider FunnelSetupProvider, logProvider LogProvider) (SnapshotProvider, FunnelSetupProvider, LogProvider) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
@@ -76,13 +75,29 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			return domain.BufferedLogSnapshot{}, nil
 		}
 	}
+	return provider, setupProvider, logProvider
+}
 
+func newAssetsFS() (fs.FS, error) {
 	assets, err := fs.Sub(embeddedAssets, "assets")
 	if err != nil {
 		return nil, err
 	}
+	return assets, nil
+}
 
+// NewUIHandler returns the embedded dashboard and JSON state API without webhook routes.
+func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider) (http.Handler, error) {
+	provider, setupProvider, logProvider = normalizeServerProviders(provider, setupProvider, logProvider)
+	assets, err := newAssetsFS()
+	if err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/webhooks/", notFoundHandler)
+	mux.HandleFunc("/readyz", notFoundHandler)
+	mux.HandleFunc("/linear", notFoundHandler)
+	mux.HandleFunc("/github", notFoundHandler)
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	mux.HandleFunc("/api/v1/logs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -211,26 +226,6 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
-	readyzHandler := func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if r.Method == http.MethodHead {
-			return
-		}
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-	}
-	mux.HandleFunc("/webhooks/readyz", readyzHandler)
-	mux.HandleFunc("/readyz", readyzHandler)
-	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
-	mux.HandleFunc("/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
-	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
-	mux.HandleFunc("/github", reservedWebhookHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -262,6 +257,52 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 	return secureHeaders(mux), nil
 }
 
+func newReadyzHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+}
+
+// NewWebhookHandler returns only the webhook and readiness routes.
+func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) http.Handler {
+	mux := http.NewServeMux()
+	readyzHandler := newReadyzHandler()
+	mux.HandleFunc("/webhooks/readyz", readyzHandler)
+	mux.HandleFunc("/readyz", readyzHandler)
+	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
+	mux.HandleFunc("/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
+	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
+	mux.HandleFunc("/github", reservedWebhookHandler)
+	return secureHeaders(mux)
+}
+
+// NewObservabilityServer returns the combined UI and webhook handler used in tests and previews.
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+	uiHandler, err := NewUIHandler(provider, issueProvider, setupProvider, logProvider)
+	if err != nil {
+		return nil, err
+	}
+	webhookHandler := NewWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger)
+	mux := http.NewServeMux()
+	mux.Handle("/", uiHandler)
+	mux.Handle("/webhooks/", webhookHandler)
+	mux.Handle("/readyz", webhookHandler)
+	mux.Handle("/linear", webhookHandler)
+	mux.Handle("/github", webhookHandler)
+	return secureHeaders(mux), nil
+}
+
 func reservedWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -273,6 +314,10 @@ func reservedWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error": "Webhook endpoint reserved, but not implemented yet.",
 	})
+}
+
+func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
 }
 
 func mergeLiveIssueOutput(issue *domain.Issue, snapshot domain.Snapshot) {
@@ -469,24 +514,34 @@ func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupSta
 	now := time.Now().UTC()
 	baseURL := "https://colin-demo.tail.example.ts.net"
 	return domain.FunnelSetupStatus{
-		GeneratedAt:       now,
-		Ready:             true,
-		PublicURLSource:   "funnel",
-		LocalBaseURL:      "http://127.0.0.1:8888",
-		LocalSetupURL:     "http://127.0.0.1:8888/setup/funnel",
-		LocalReadyURL:     "http://127.0.0.1:8888/webhooks/readyz",
-		PublicBaseURL:     baseURL,
-		PublicReadyURL:    baseURL + "/webhooks/readyz",
-		DetectedFunnelURL: baseURL,
-		SuggestedCommand:  "tailscale funnel --bg --https=443 --set-path=/webhooks 8888",
-		LinearWebhookURL:  baseURL + "/webhooks/linear",
-		GitHubWebhookURL:  baseURL + "/webhooks/github",
+		GeneratedAt:           now,
+		Ready:                 true,
+		PublicURLSource:       "funnel",
+		LocalBaseURL:          "http://127.0.0.1:8888",
+		LocalWebhookBaseURL:   "http://127.0.0.1:8998",
+		TailnetUIBaseURL:      "https://colin-demo.tail.example.ts.net",
+		LocalSetupURL:         "http://127.0.0.1:8888/setup/funnel",
+		LocalReadyURL:         "http://127.0.0.1:8998/webhooks/readyz",
+		PublicBaseURL:         baseURL,
+		PublicReadyURL:        baseURL + "/webhooks/readyz",
+		DetectedFunnelURL:     baseURL,
+		SuggestedServeCommand: "tailscale serve --bg 8888",
+		SuggestedCommand:      "tailscale funnel --bg --https=443 --set-path=/webhooks 8998",
+		LinearWebhookURL:      baseURL + "/webhooks/linear",
+		GitHubWebhookURL:      baseURL + "/webhooks/github",
 		Checks: []domain.SetupCheck{
 			{
 				ID:        "tailscale_local_api",
 				Label:     "Colin can reach the local Tailscale daemon",
 				Status:    "ok",
 				Detail:    "Connected to the local Tailscale daemon.",
+				CheckedAt: now,
+			},
+			{
+				ID:        "serve_route",
+				Label:     "Serve proxies Colin at `/` on the tailnet",
+				Status:    "ok",
+				Detail:    "Detected `https://colin-demo.tail.example.ts.net` proxying Colin from `/`.",
 				CheckedAt: now,
 			},
 			{

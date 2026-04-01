@@ -35,7 +35,8 @@ func LoadFunnelSetupStatus(ctx context.Context, workflowPath string, optionFns .
 	}
 	inspector := tsdiag.NewInspector()
 	return inspector.Check(ctx, tsdiag.Options{
-		LocalPort:                cfg.Server.Port,
+		UIPort:                   cfg.Server.Port,
+		WebhookPort:              cfg.Server.WebhookPort,
 		ExplicitWebhookPublicURL: webhookPublicURL(cfg.Server),
 	}), nil
 }
