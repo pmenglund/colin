@@ -386,10 +386,109 @@ func TestGoGitHubClientReplyAndResolveReviewThreadUseGraphQLMutations(t *testing
 	}
 }
 
+func TestGoGitHubClientGraphQLUsesEnterpriseEndpoint(t *testing.T) {
+	t.Parallel()
+
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v3/repos/acme/widgets/pulls/7":
+			writeJSON(t, w, map[string]any{
+				"number":   7,
+				"html_url": "https://github.example.test/acme/widgets/pull/7",
+				"state":    "open",
+				"head":     map[string]any{"ref": "feature"},
+				"base":     map[string]any{"ref": "main"},
+			})
+		case "/api/graphql":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("ReadAll(graphql body) error = %v", err)
+			}
+			if !strings.Contains(string(body), "ReviewThreads") {
+				t.Fatalf("graphql body = %q, want review threads query", string(body))
+			}
+			writeJSON(t, w, map[string]any{
+				"data": map[string]any{
+					"repository": map[string]any{
+						"pullRequest": map[string]any{
+							"reviewThreads": map[string]any{
+								"nodes": []any{
+									map[string]any{
+										"id":               "thread-1",
+										"isResolved":       false,
+										"isOutdated":       false,
+										"viewerCanReply":   true,
+										"viewerCanResolve": true,
+										"path":             "internal/repohost/github/client.go",
+										"comments": map[string]any{
+											"nodes": []any{
+												map[string]any{
+													"id":     "comment-1",
+													"body":   "please fix",
+													"url":    "https://example.test/comment/1",
+													"author": map[string]any{"login": "reviewer"},
+												},
+											},
+											"pageInfo": map[string]any{
+												"hasNextPage": false,
+												"endCursor":   nil,
+											},
+										},
+									},
+								},
+								"pageInfo": map[string]any{
+									"hasNextPage": false,
+									"endCursor":   nil,
+								},
+							},
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestGoGitHubClientWithBaseURL(t, server, server.URL+"/api/v3/")
+	pr, err := client.PullRequestByNumber(context.Background(), "acme", "widgets", 7)
+	if err != nil {
+		t.Fatalf("PullRequestByNumber() error = %v", err)
+	}
+	if pr == nil || pr.Number != 7 {
+		t.Fatalf("PullRequestByNumber() = %+v, want PR #7", pr)
+	}
+	threads, err := client.ReviewThreads(context.Background(), "acme", "widgets", 7, "")
+	if err != nil {
+		t.Fatalf("ReviewThreads() error = %v", err)
+	}
+	if len(threads.Threads) != 1 {
+		t.Fatalf("ReviewThreads() = %+v, want one thread", threads)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("request count = %d, want 2", len(paths))
+	}
+	if paths[0] != "/api/v3/repos/acme/widgets/pulls/7" {
+		t.Fatalf("REST path = %q, want enterprise REST endpoint", paths[0])
+	}
+	if paths[1] != "/api/graphql" {
+		t.Fatalf("GraphQL path = %q, want enterprise GraphQL endpoint", paths[1])
+	}
+}
+
 func newTestGoGitHubClient(t *testing.T, server *httptest.Server) *goGitHubClient {
 	t.Helper()
 
-	client, err := newGoGitHubClient("test-token", server.Client(), server.URL+"/", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return newTestGoGitHubClientWithBaseURL(t, server, server.URL+"/")
+}
+
+func newTestGoGitHubClientWithBaseURL(t *testing.T, server *httptest.Server, baseURL string) *goGitHubClient {
+	t.Helper()
+
+	client, err := newGoGitHubClient("test-token", server.Client(), baseURL, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("newGoGitHubClient() error = %v", err)
 	}

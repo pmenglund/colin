@@ -19,8 +19,9 @@ const tokenHelp = "missing GitHub token: set repo.api_token, GITHUB_TOKEN, or GH
 const defaultHTTPTimeout = 2 * time.Minute
 
 type Client struct {
-	client *githubapi.Client
-	logger *slog.Logger
+	client          *githubapi.Client
+	logger          *slog.Logger
+	graphQLEndpoint string
 }
 
 func NewClientFromConfig(cfg domain.ServiceConfig, logger *slog.Logger) (repohost.Client, error) {
@@ -35,6 +36,7 @@ func NewClient(token string, httpClient *http.Client, baseURL string, logger *sl
 	httpClient = httpClientWithTimeout(httpClient)
 
 	client := githubapi.NewClient(httpClient).WithAuthToken(token)
+	graphQLEndpoint := "graphql"
 	if strings.TrimSpace(baseURL) != "" {
 		parsed, err := neturl.Parse(ensureTrailingSlash(baseURL))
 		if err != nil {
@@ -42,9 +44,10 @@ func NewClient(token string, httpClient *http.Client, baseURL string, logger *sl
 		}
 		client.BaseURL = parsed
 		client.UploadURL = parsed
+		graphQLEndpoint = graphQLEndpointURL(parsed).String()
 	}
 
-	return &Client{client: client, logger: logger}, nil
+	return &Client{client: client, logger: logger, graphQLEndpoint: graphQLEndpoint}, nil
 }
 
 func (c *Client) ValidateAuth(ctx context.Context) error {
@@ -311,7 +314,12 @@ func (c *Client) ResolveReviewThread(ctx context.Context, threadID string) error
 }
 
 func (c *Client) graphQL(ctx context.Context, query string, vars map[string]any) (map[string]any, error) {
-	req, err := c.client.NewRequest("POST", "graphql", map[string]any{
+	endpoint := strings.TrimSpace(c.graphQLEndpoint)
+	if endpoint == "" {
+		endpoint = "graphql"
+	}
+
+	req, err := c.client.NewRequest("POST", endpoint, map[string]any{
 		"query":     query,
 		"variables": vars,
 	})
@@ -553,6 +561,24 @@ func ensureTrailingSlash(raw string) string {
 		return raw
 	}
 	return raw + "/"
+}
+
+func graphQLEndpointURL(base *neturl.URL) *neturl.URL {
+	endpoint := *base
+	endpoint.RawQuery = ""
+	endpoint.Fragment = ""
+	endpoint.RawPath = ""
+
+	switch path := endpoint.Path; {
+	case strings.HasSuffix(path, "/api/v3/"):
+		endpoint.Path = strings.TrimSuffix(path, "/api/v3/") + "/api/graphql"
+	case strings.HasSuffix(path, "/api/v3"):
+		endpoint.Path = strings.TrimSuffix(path, "/api/v3") + "/api/graphql"
+	default:
+		endpoint.Path = strings.TrimRight(path, "/") + "/graphql"
+	}
+
+	return &endpoint
 }
 
 func isNotFound(err error) bool {
