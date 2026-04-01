@@ -594,6 +594,16 @@ func TestParseCodingSummaryOutcomeLeavesImplicitSummaryUnclassified(t *testing.T
 	}
 }
 
+func TestBuildReviewThreadReplyBodyKeepsReplyCompact(t *testing.T) {
+	t.Parallel()
+
+	reply := buildReviewThreadReplyBody("Before: old layout\nAfter: new layout\nVerification: go test ./...")
+	want := "[colin] Addressed in the latest update. See the Linear issue comment for the before/after summary and verification details."
+	if reply != want {
+		t.Fatalf("buildReviewThreadReplyBody() = %q, want %q", reply, want)
+	}
+}
+
 func TestCodingOutcomeUsesNeedsSpecDirective(t *testing.T) {
 	t.Parallel()
 

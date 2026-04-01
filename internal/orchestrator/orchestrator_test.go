@@ -858,6 +858,30 @@ func TestHandleWorkerExitMergeBlockedInMergeSchedulesHiddenRetry(t *testing.T) {
 	}
 }
 
+func TestPostRunSummaryPreservesMultilineEvidence(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker},
+	}
+	entry := &runningEntry{
+		identifier: "COLIN-149",
+		comment:    &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"},
+	}
+
+	summary := "What changed: tightened the review summary format.\n\nBefore: completion comments were generic.\nAfter: completion comments explain the change in before/after terms.\nVerification: go test ./internal/automation ./internal/orchestrator"
+	orch.postRunSummary(context.Background(), entry, domain.Issue{ID: "issue-1", Identifier: "COLIN-149"}, summary)
+
+	if len(tracker.commentReplies) != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", len(tracker.commentReplies))
+	}
+	if got := tracker.commentReplies[0]; got != "[colin] "+summary {
+		t.Fatalf("summary comment = %q", got)
+	}
+}
+
 func TestHandleWorkerExitCodingRunToReviewDoesNotMarkReviewCompleted(t *testing.T) {
 	t.Parallel()
 

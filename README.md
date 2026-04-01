@@ -62,6 +62,8 @@ Colin runs as a long-lived orchestrator:
 3. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
 4. It posts progress back to Linear and exposes a local dashboard for operators.
 
+When a coding run finishes and Colin hands work off, the Linear issue comment is meant to be reviewable on its own. Colin now asks Codex to describe the change in before/after terms, include verification details, and prefer Playwright screenshots for browser-visible work or terminal or TUI captures for terminal-visible work, with textual fallback because the issue comment itself is text-only.
+
 Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `update` webhooks that change scheduling-relevant fields such as `stateId`, can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react.
 
 ## Getting Started

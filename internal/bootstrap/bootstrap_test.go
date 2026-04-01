@@ -36,6 +36,9 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		"port: 7777",
 		"webhook_port: 8998",
 		"COLIN_OUTCOME: READY_FOR_REVIEW",
+		"before and after",
+		"Playwright screenshots",
+		"text comments to Linear",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("RenderWorkflow() missing %q in output:\n%s", want, got)
