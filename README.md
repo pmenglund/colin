@@ -49,6 +49,8 @@ Colin treats these as terminal states and stops work when an issue enters them:
 
 Colin is built to supervise a queue, not a single foreground session. It keeps one workspace per issue, tracks retries and rate limits, and gives operators a live dashboard so they can monitor fleet-level progress instead of watching individual coding runs. Colin itself is also developed using Colin, so the workflow is exercised continuously in the project that builds it.
 
+When Colin is running, it also starts a local [`gops`](https://github.com/google/gops) agent so you can inspect the live process with commands such as `gops`, `gops stack <pid>`, or `gops memstats <pid>` without changing Colin's normal startup or shutdown flow.
+
 ![Colin dashboard showing active runs, workspace status, and API snapshot](docs/ui.png)
 
 ## How Colin Works

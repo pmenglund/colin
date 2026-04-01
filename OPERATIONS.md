@@ -61,6 +61,8 @@ go run . --verbose
 
 Even without `--verbose`, Colin keeps recent internal logs in memory and serves them from `/api/v1/logs`. Add `?level=info` to hide `debug` records, or `?level=debug` to inspect the full buffer.
 
+Colin also starts a local `gops` agent for the running process. After installing `gops` with `go install github.com/google/gops@latest`, you can list Go processes with `gops`, then inspect Colin with commands such as `gops <pid>`, `gops stack <pid>`, or `gops memstats <pid>`.
+
 To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pass `--port`:
 
 ```bash

@@ -88,6 +88,8 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.startHTTPServer(ctx); err != nil {
 		return err
 	}
+	stopGOPS := startGOPSAgent(ctx, s.logger, defaultGOPSHooks)
+	defer stopGOPS()
 	s.applyUIBaseURLResolver(s.currentRuntime())
 	if err := s.orch.StartupTerminalCleanup(ctx); err != nil {
 		s.logger.Warn("startup cleanup skipped", "error", err)
