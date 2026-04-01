@@ -68,7 +68,7 @@ func PreflightTrackerConfig(ctx context.Context, cfg domain.ServiceConfig) (*lin
 			},
 			{
 				ID:    "github",
-				Label: "GitHub API access",
+				Label: "Repository backend API access",
 			},
 		},
 	}
@@ -104,13 +104,13 @@ func PreflightTrackerConfig(ctx context.Context, cfg domain.ServiceConfig) (*lin
 		return trackerClient, report, nil
 	}
 
-	if err := validateGitHubAccess(cfg, newPreflightRepoManager(cfg)); err != nil {
+	if err := validateRepoAccess(cfg, newPreflightRepoManager(cfg)); err != nil {
 		report.Checks[3].Status = PreflightStatusError
 		report.Checks[3].Detail = err.Error()
 		return nil, report, err
 	}
 	report.Checks[3].Status = PreflightStatusOK
-	report.Checks[3].Detail = "Configured GitHub token can authenticate."
+	report.Checks[3].Detail = "Configured repository backend token can authenticate."
 
 	return trackerClient, report, nil
 }

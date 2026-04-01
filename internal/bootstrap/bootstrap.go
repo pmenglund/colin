@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pmenglund/colin/internal/githubauth"
+	"github.com/pmenglund/colin/internal/repohost"
 )
 
 var ErrAborted = errors.New("bootstrap_aborted")
@@ -25,6 +26,7 @@ type Options struct {
 
 // Answers captures the operator choices used to render WORKFLOW.md.
 type Answers struct {
+	Backend       string
 	ProjectSlug   string
 	RepoURL       string
 	BaseRef       string
@@ -99,6 +101,7 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 	}
 
 	answers := Answers{
+		Backend:       string(repohost.HostKindGitHub),
 		ProjectSlug:   projectSlug,
 		RepoURL:       repoURL,
 		BaseRef:       baseRef,
@@ -225,11 +228,11 @@ func printGitHubSetupGuidance(out io.Writer, repoURL string) {
 	if err != nil {
 		fmt.Fprintln(out, "GitHub token setup:")
 		fmt.Fprintln(out, "- Colin recommends exporting GITHUB_TOKEN before moving issues into `Review` or `Merge`.")
-		fmt.Fprintln(out, "- Run `colin setup github` after configuration for the exact token settings.")
+		fmt.Fprintln(out, "- Run `colin setup repo` after configuration for the exact token settings.")
 		fmt.Fprintln(out)
 		return
 	}
-	fmt.Fprintln(out, githubauth.RenderInstructions(details, "colin setup github"))
+	fmt.Fprintln(out, githubauth.RenderInstructions(details, "colin setup repo"))
 	fmt.Fprintln(out)
 }
 

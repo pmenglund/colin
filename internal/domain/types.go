@@ -59,7 +59,7 @@ type Issue struct {
 	ExecPlanCount        int
 	ReviewCycle          *ReviewCycle
 	ReviewFeedback       []ReviewFeedback
-	ReviewThreads        []GitHubReviewThread
+	ReviewThreads        []ReviewThread
 	AttachedPullRequests []PullRequestRef
 	PullRequest          *PullRequestRef
 	CreatedAt            *time.Time
@@ -145,8 +145,8 @@ type PullRequestRef struct {
 	BaseRef string
 }
 
-// GitHubReviewThread is one unresolved GitHub PR review thread.
-type GitHubReviewThread struct {
+// ReviewThread is one unresolved pull-request review thread.
+type ReviewThread struct {
 	ID         string
 	Path       string
 	Line       *int
@@ -161,6 +161,9 @@ type GitHubReviewThread struct {
 	CanReply   bool
 	CanResolve bool
 }
+
+// GitHubReviewThread is kept as a compatibility alias while the codebase migrates to backend-neutral naming.
+type GitHubReviewThread = ReviewThread
 
 // WorkflowDefinition is the parsed WORKFLOW.md content used for config and prompt rendering.
 type WorkflowDefinition struct {
@@ -202,6 +205,8 @@ type WorkflowWorkspaceConfig struct {
 }
 
 type WorkflowRepoConfig struct {
+	Backend               *string  `yaml:"backend"`
+	APIBaseURL            *string  `yaml:"api_base_url"`
 	PublishStates         []string `yaml:"publish_states"`
 	MergeStates           []string `yaml:"merge_states"`
 	RemoteName            *string  `yaml:"remote_name"`
@@ -287,8 +292,10 @@ type WorkspaceConfig struct {
 	BaseRef string
 }
 
-// RepoConfig configures GitHub publish and merge automation tied to tracker states.
+// RepoConfig configures repository-host publish and merge automation tied to tracker states.
 type RepoConfig struct {
+	Backend               string
+	APIBaseURL            string
 	PublishStates         []string
 	MergeStates           []string
 	RemoteName            string

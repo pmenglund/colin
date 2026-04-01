@@ -35,6 +35,7 @@ workspace:
   base_ref: {{yaml .BaseRef}}
 
 repo:
+  backend: {{yaml .Backend}}
   api_token: $GITHUB_TOKEN
   publish_states:
     - Review
@@ -131,6 +132,9 @@ Output contract:
 
 // RenderWorkflow renders the default workflow file from the collected answers.
 func RenderWorkflow(answers Answers) (string, error) {
+	if strings.TrimSpace(answers.Backend) == "" {
+		answers.Backend = "github"
+	}
 	tpl, err := template.New("workflow").Funcs(template.FuncMap{
 		"yaml": func(value string) string {
 			return strconv.Quote(value)

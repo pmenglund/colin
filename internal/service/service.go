@@ -18,9 +18,9 @@ import (
 	"github.com/pmenglund/colin/internal/automation"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
-	"github.com/pmenglund/colin/internal/githubauth"
 	"github.com/pmenglund/colin/internal/logbuffer"
 	"github.com/pmenglund/colin/internal/orchestrator"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
@@ -207,13 +207,17 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 	}
 }
 
-func validateGitHubAccess(cfg domain.ServiceConfig, manager *repoops.Manager) error {
+func validateRepoAccess(cfg domain.ServiceConfig, manager *repoops.Manager) error {
 	if strings.TrimSpace(cfg.Repo.APIToken) == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), githubStartupValidationTimeout)
 	defer cancel()
-	return manager.ValidateGitHubAccess(ctx)
+	return manager.ValidateRepoAccess(ctx)
+}
+
+func validateGitHubAccess(cfg domain.ServiceConfig, manager *repoops.Manager) error {
+	return validateRepoAccess(cfg, manager)
 }
 
 func (s *Service) startHTTPServer(ctx context.Context) error {
@@ -475,8 +479,8 @@ func DescribeStartupError(err error) string {
 		return fmt.Sprintf("workflow file not found: %v", err)
 	case errors.Is(err, ErrMissingGitHubRepository):
 		return fmt.Sprintf("github repository not found: %v", err)
-	case errors.Is(err, githubauth.ErrUnsupportedRepositoryURL):
-		return fmt.Sprintf("unsupported GitHub repository URL: %v", err)
+	case errors.Is(err, repohost.ErrUnsupportedRepositoryURL):
+		return fmt.Sprintf("unsupported repository URL: %v", err)
 	default:
 		return err.Error()
 	}

@@ -56,7 +56,8 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
 - `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and reserved webhook routes
 - `internal/ui/` - gomponents-based HTML for the dashboard
-- `internal/repoops/` - publish and merge automation via git and the GitHub API client
+- `internal/repoops/` - publish and merge automation via git plus the configured repository backend client
+- `internal/repohost/` - repository backend abstraction and the current GitHub adapter
 
 ## Architecture Rules
 
