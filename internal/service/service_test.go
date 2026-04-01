@@ -776,6 +776,30 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
+func TestResolveWebhookPublicBaseURLPrefersExplicitWebhookPublicURL(t *testing.T) {
+	t.Parallel()
+
+	got := resolveWebhookPublicBaseURL(context.Background(), serviceInspectorStub{}, domain.ServerConfig{
+		WebhookPublicURL: "https://hooks.colin.example.test/",
+	}, "http://127.0.0.1:8998")
+	if got != "https://hooks.colin.example.test" {
+		t.Fatalf("resolveWebhookPublicBaseURL() = %q, want %q", got, "https://hooks.colin.example.test")
+	}
+}
+
+func TestResolveWebhookPublicBaseURLFallsBackToInspector(t *testing.T) {
+	t.Parallel()
+
+	got := resolveWebhookPublicBaseURL(context.Background(), serviceInspectorStub{
+		status: domain.FunnelSetupStatus{
+			PublicBaseURL: "https://colin.tail.example.ts.net",
+		},
+	}, domain.ServerConfig{}, "http://127.0.0.1:8998")
+	if got != "https://colin.tail.example.ts.net" {
+		t.Fatalf("resolveWebhookPublicBaseURL() = %q, want %q", got, "https://colin.tail.example.ts.net")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

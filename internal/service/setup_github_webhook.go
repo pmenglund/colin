@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 )
 
 const GitHubWebhookSigningSecretEnvVar = "GITHUB_WEBHOOK_SECRET"
@@ -47,12 +45,7 @@ func LoadGitHubWebhookSetup(ctx context.Context, workflowPath string, workingDir
 		return GitHubWebhookSetupResult{}, fmt.Errorf("workflow backend is %q, use `colin setup repo` instead", result.Backend)
 	}
 
-	inspector := tsdiag.NewInspector()
-	status := inspector.Resolve(ctx, tsdiag.Options{
-		WebhookPort:              cfg.Server.WebhookPort,
-		ExplicitWebhookPublicURL: webhookPublicURL(cfg.Server),
-	})
-	baseURL := strings.TrimSpace(status.PublicBaseURL)
+	baseURL := resolveWebhookPublicBaseURL(ctx, nil, cfg.Server, "")
 	if baseURL == "" {
 		return GitHubWebhookSetupResult{}, fmt.Errorf("%w: configure `server.webhook_public_url` or run `colin setup tailscale` first", ErrMissingWebhookPublicURL)
 	}

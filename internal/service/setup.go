@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
@@ -39,4 +40,18 @@ func LoadFunnelSetupStatus(ctx context.Context, workflowPath string, optionFns .
 		WebhookPort:              cfg.Server.WebhookPort,
 		ExplicitWebhookPublicURL: webhookPublicURL(cfg.Server),
 	}), nil
+}
+
+func resolveWebhookPublicBaseURL(ctx context.Context, inspector tailscaleInspector, cfg domain.ServerConfig, localWebhookBaseURL string) string {
+	if value := strings.TrimSpace(webhookPublicURL(cfg)); value != "" {
+		return strings.TrimRight(value, "/")
+	}
+	if inspector == nil {
+		inspector = tsdiag.NewInspector()
+	}
+	status := inspector.Resolve(ctx, tsdiag.Options{
+		WebhookPort:         cfg.WebhookPort,
+		LocalWebhookBaseURL: localWebhookBaseURL,
+	})
+	return strings.TrimSpace(status.PublicBaseURL)
 }

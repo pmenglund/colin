@@ -500,16 +500,7 @@ func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatu
 }
 
 func (s *Service) effectiveWebhookPublicBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
-	inspector := s.inspector
-	if inspector == nil {
-		inspector = tsdiag.NewInspector()
-	}
-	status := inspector.Resolve(ctx, tsdiag.Options{
-		WebhookPort:              cfg.WebhookPort,
-		LocalWebhookBaseURL:      s.webhookBaseURL(),
-		ExplicitWebhookPublicURL: webhookPublicURL(cfg),
-	})
-	return strings.TrimSpace(status.PublicBaseURL)
+	return resolveWebhookPublicBaseURL(ctx, s.inspector, cfg, s.webhookBaseURL())
 }
 
 func (s *Service) effectiveUIBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
