@@ -59,7 +59,7 @@ codex:
 server:
   port: 8888
   # Optional: enable a dedicated local webhook listener, typically 8998.
-  # webhook_port: 8998
+  webhook_port: 8998
   # Optional when Colin webhook endpoints are reachable through a reverse proxy or another public host.
   # When unset, Colin will use an active Tailscale Funnel for `webhook_port` if one exists.
   # public_url: https://colin.example.com

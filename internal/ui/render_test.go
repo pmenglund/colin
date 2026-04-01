@@ -314,11 +314,11 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		LocalBaseURL:          "http://127.0.0.1:8888",
 		LocalWebhookBaseURL:   "http://127.0.0.1:8998",
 		TailnetUIBaseURL:      "https://colin.tail.example.ts.net",
-		PublicBaseURL:         "https://colin.tail.example.ts.net",
-		LinearWebhookURL:      "https://colin.tail.example.ts.net/webhooks/linear",
-		GitHubWebhookURL:      "https://colin.tail.example.ts.net/webhooks/github",
+		PublicBaseURL:         "https://colin.tail.example.ts.net:8443",
+		LinearWebhookURL:      "https://colin.tail.example.ts.net:8443/webhooks/linear",
+		GitHubWebhookURL:      "https://colin.tail.example.ts.net:8443/webhooks/github",
 		SuggestedServeCommand: "tailscale serve --bg 8888",
-		SuggestedCommand:      "tailscale funnel --bg --https=443 --set-path=/webhooks 8998",
+		SuggestedCommand:      "tailscale funnel --bg --https=8443 --set-path=/webhooks 8998",
 		Checks: []domain.SetupCheck{
 			{
 				ID:        "tailscale_local_api",
@@ -336,9 +336,9 @@ func TestFunnelSetupPageRendersChecksAndURLs(t *testing.T) {
 		`Tailscale ready`,
 		`Tailnet UI base URL`,
 		`Local webhook base URL`,
-		`https://colin.tail.example.ts.net/webhooks/github`,
+		`https://colin.tail.example.ts.net:8443/webhooks/github`,
 		`tailscale serve --bg 8888`,
-		`tailscale funnel --bg --https=443 --set-path=/webhooks 8998`,
+		`tailscale funnel --bg --https=8443 --set-path=/webhooks 8998`,
 		`data-testid="funnel-check-tailscale_local_api"`,
 	} {
 		if !strings.Contains(html, want) {

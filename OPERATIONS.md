@@ -399,10 +399,10 @@ tailscale serve --bg 8888
 When webhook support is enabled, the recommended webhook command is:
 
 ```bash
-tailscale funnel --bg --https=443 --set-path=/webhooks 8998
+tailscale funnel --bg --https=8443 --set-path=/webhooks 8998
 ```
 
-If port `443` is already occupied by another Serve or Funnel configuration, Colin suggests `8443` or `10000` instead.
+Colin prefers a separate Funnel HTTPS port so the dashboard can stay tailnet-only on the default Serve URL. If `8443` is already occupied, Colin falls back to `10000`, and only uses `443` as a last resort.
 
 Tailscale Funnel requirements come from Tailscale itself and currently include:
 

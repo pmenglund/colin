@@ -512,7 +512,7 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 
 func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupStatus, error) {
 	now := time.Now().UTC()
-	baseURL := "https://colin-demo.tail.example.ts.net"
+	baseURL := "https://colin-demo.tail.example.ts.net:8443"
 	return domain.FunnelSetupStatus{
 		GeneratedAt:           now,
 		Ready:                 true,
@@ -526,7 +526,7 @@ func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupSta
 		PublicReadyURL:        baseURL + "/webhooks/readyz",
 		DetectedFunnelURL:     baseURL,
 		SuggestedServeCommand: "tailscale serve --bg 8888",
-		SuggestedCommand:      "tailscale funnel --bg --https=443 --set-path=/webhooks 8998",
+		SuggestedCommand:      "tailscale funnel --bg --https=8443 --set-path=/webhooks 8998",
 		LinearWebhookURL:      baseURL + "/webhooks/linear",
 		GitHubWebhookURL:      baseURL + "/webhooks/github",
 		Checks: []domain.SetupCheck{

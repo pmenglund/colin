@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		},
 		logs: sampleLogs(3),
 		setup: domain.FunnelSetupStatus{
+			TailnetUIBaseURL: "https://colin.tail.example.ts.net",
 			PublicBaseURL:    "https://colin.example.test",
 			LinearWebhookURL: "https://colin.example.test/webhooks/linear",
 		},
@@ -155,17 +157,25 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	if len(updated.snapshot.Running) != 1 {
 		t.Fatalf("running workers = %d, want 1", len(updated.snapshot.Running))
 	}
-	view := updated.View().Content
+	view := stripANSI(updated.View().Content)
 	for _, want := range []string{
 		"COLIN-147",
 		"In Progress",
 		"http://127.0.0.1:7777",
+		"https://colin.tail.example.ts.net",
+		"linear hook https://colin.example.test/webhooks/linear",
 		"https://colin.example.test/webhooks/linear",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q", view, want)
 		}
 	}
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(value string) string {
+	return ansiPattern.ReplaceAllString(value, "")
 }
 
 func TestRunReturnsServiceError(t *testing.T) {
