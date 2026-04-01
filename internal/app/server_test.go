@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -134,7 +137,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Count:    len(filtered),
 			Entries:  filtered,
 		}, nil
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -422,15 +425,15 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 	})
 
-	t.Run("reserved github webhook endpoints", func(t *testing.T) {
+	t.Run("github webhook endpoints acknowledge posts", func(t *testing.T) {
 		for _, path := range []string{"/webhooks/github", "/github"} {
 			resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(`{}`))
 			if err != nil {
 				t.Fatalf("POST %s error = %v", path, err)
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusNotImplemented {
-				t.Fatalf("%s status = %d, want 501", path, resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200", path, resp.StatusCode)
 			}
 		}
 	})
@@ -445,7 +448,7 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUIHandler() error = %v", err)
 	}
-	webhookHandler := NewWebhookHandler(nil, nil, nil)
+	webhookHandler := NewWebhookHandler(nil, nil, nil, nil, nil)
 
 	uiServer := httptest.NewServer(uiHandler)
 	defer uiServer.Close()
@@ -492,7 +495,7 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -520,7 +523,7 @@ func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *test
 
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(context.Context) string {
 		return "secret"
-	}, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -569,7 +572,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 				events = append(events, event)
 				return LinearWebhookTriggerResult{Relevant: true, Queued: true}
-			}, nil, nil)
+			}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("NewObservabilityServer() error = %v", err)
 			}
@@ -625,7 +628,7 @@ func TestObservabilityServerLinearWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		triggerCalls++
 		return LinearWebhookTriggerResult{Relevant: true, Queued: true}
-	}, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -651,7 +654,7 @@ func TestObservabilityServerLinearWebhookAcknowledgesCoalescedRefresh(t *testing
 
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		return LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
-	}, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -678,7 +681,7 @@ func TestObservabilityServerLinearWebhookLogsRequests(t *testing.T) {
 
 	var output strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, logger)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -714,6 +717,259 @@ func TestObservabilityServerLinearWebhookLogsRequests(t *testing.T) {
 	if strings.Contains(logText, "accepted linear webhook request") {
 		t.Fatalf("log output = %q, want accepted message at debug only", logText)
 	}
+}
+
+func TestObservabilityServerGitHubWebhookVerifiesSignatureWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
+		return "secret"
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/github", strings.NewReader(`{"repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/github error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestObservabilityServerGitHubWebhookTriggersRefreshForRelevantEvents(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name              string
+		eventHeader       string
+		body              string
+		action            string
+		repository        string
+		pullRequestNumber int
+	}{
+		{
+			name:              "pull request review",
+			eventHeader:       "pull_request_review",
+			body:              `{"action":"submitted","repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`,
+			action:            "submitted",
+			repository:        "acme/widgets",
+			pullRequestNumber: 11,
+		},
+		{
+			name:              "reaction on pull request comment",
+			eventHeader:       "reaction",
+			body:              `{"action":"created","repository":{"full_name":"acme/widgets"},"comment":{"pull_request_url":"https://api.github.com/repos/acme/widgets/pulls/11"}}`,
+			action:            "created",
+			repository:        "acme/widgets",
+			pullRequestNumber: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []GitHubWebhookEvent
+			handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+				events = append(events, event)
+				return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
+			}, nil, nil)
+			if err != nil {
+				t.Fatalf("NewObservabilityServer() error = %v", err)
+			}
+
+			server := httptest.NewServer(handler)
+			defer server.Close()
+
+			req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/github", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			req.Header.Set("X-GitHub-Delivery", "delivery-1")
+			req.Header.Set("X-GitHub-Event", tc.eventHeader)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("POST /webhooks/github error = %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+
+			if len(events) != 1 {
+				t.Fatalf("trigger calls = %d, want 1", len(events))
+			}
+			if events[0].DeliveryID != "delivery-1" {
+				t.Fatalf("DeliveryID = %q, want %q", events[0].DeliveryID, "delivery-1")
+			}
+			if events[0].Event != tc.eventHeader {
+				t.Fatalf("Event = %q, want %q", events[0].Event, tc.eventHeader)
+			}
+			if events[0].Action != tc.action {
+				t.Fatalf("Action = %q, want %q", events[0].Action, tc.action)
+			}
+			if events[0].RepositoryFullName != tc.repository {
+				t.Fatalf("RepositoryFullName = %q, want %q", events[0].RepositoryFullName, tc.repository)
+			}
+			if events[0].PullRequestNumber != tc.pullRequestNumber {
+				t.Fatalf("PullRequestNumber = %d, want %d", events[0].PullRequestNumber, tc.pullRequestNumber)
+			}
+			if !events[0].HasPullRequest {
+				t.Fatal("HasPullRequest = false, want true")
+			}
+		})
+	}
+}
+
+func TestObservabilityServerGitHubWebhookIgnoresIrrelevantEvents(t *testing.T) {
+	t.Parallel()
+
+	triggerCalls := 0
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+		triggerCalls++
+		return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/github", strings.NewReader(`{"zen":"Keep it logically awesome.","hook_id":1}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("X-GitHub-Event", "ping")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/github error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if triggerCalls != 0 {
+		t.Fatalf("triggerCalls = %d, want 0", triggerCalls)
+	}
+}
+
+func TestObservabilityServerGitHubWebhookAcknowledgesCoalescedRefresh(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+		return GitHubWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/webhooks/github", "application/json", strings.NewReader(`{"action":"submitted","repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`))
+	if err != nil {
+		t.Fatalf("POST /webhooks/github error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"status":"ok"`) {
+		t.Fatalf("body = %s, want ok status", string(body))
+	}
+}
+
+func TestObservabilityServerGitHubWebhookLogsRequests(t *testing.T) {
+	t.Parallel()
+
+	var output strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, logger)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/github", strings.NewReader(`{"action":"submitted","repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("X-GitHub-Delivery", "delivery-1")
+	req.Header.Set("X-GitHub-Event", "pull_request_review")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/github error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	logText := output.String()
+	if !strings.Contains(logText, "received github webhook request") {
+		t.Fatalf("log output = %q, want received message", logText)
+	}
+	if !strings.Contains(logText, "delivery-1") {
+		t.Fatalf("log output = %q, want delivery id", logText)
+	}
+	if !strings.Contains(logText, "\"github_event\":\"pull_request_review\"") {
+		t.Fatalf("log output = %q, want github event", logText)
+	}
+}
+
+func TestObservabilityServerGitHubWebhookAcceptsValidSignature(t *testing.T) {
+	t.Parallel()
+
+	const secret = "secret"
+	payload := `{"action":"submitted","repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
+		return secret
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/github", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("X-GitHub-Event", "pull_request_review")
+	req.Header.Set("X-Hub-Signature-256", gitHubTestSignature(secret, payload))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/github error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func gitHubTestSignature(secret string, payload string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(payload))
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func ptr(value time.Time) *time.Time {

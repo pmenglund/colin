@@ -108,6 +108,14 @@ colin setup linear
 
 That command creates or repairs one team-scoped Linear webhook for the watched project, points it at `<public-base-url>/webhooks/linear`, and reminds you to store the signing secret as `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
 
+To print the GitHub webhook settings for the watched repository after public ingress is ready, run:
+
+```bash
+colin setup github-webhook
+```
+
+That command prints the watched repository, the final GitHub webhook URL `<public-base-url>/webhooks/github`, the shared-secret env var `GITHUB_WEBHOOK_SECRET`, and the GitHub event subscriptions that wake Colin's orchestrator loop.
+
 Because `--workflow` is a persistent root flag, the same override also applies to setup commands:
 
 ```bash
@@ -351,6 +359,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When webhook support is enabled, `server.webhook_port` controls the dedicated local webhook listener and defaults to `8998` from `colin config`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for that webhook port and derives the public webhook base URL from it. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
+- Colin can print the watched repository's GitHub webhook settings with `colin setup github-webhook`. The GitHub signing secret should be stored via `repo.webhook_signing_secret: $GITHUB_WEBHOOK_SECRET`.
 - Watched-project Linear `Issue` `create` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals, and watched-project `Issue` `update` deliveries can do the same when they include scheduling-relevant field changes such as `stateId`, `projectId`, `teamId`, `priority`, `title`, `description`, `branchName`, or `labelIds`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
 - `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
@@ -420,4 +429,4 @@ The setup page and CLI both show the final URLs you will paste into provider web
 - GitHub: `<public-base-url>/webhooks/github`
 - Linear: `<public-base-url>/webhooks/linear`
 
-Colin now acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and queues an immediate best-effort reconciliation only for watched-project Linear `Issue` `create` deliveries and watched-project `Issue` `update` deliveries that include scheduling-relevant field changes. The webhook never dispatches a worker directly; it only wakes the orchestrator's normal event loop, which still applies the usual `running` and `claimed` duplicate-work guards. If a webhook arrives before the orchestrator is ready to accept immediate refreshes, Colin suppresses the fast path and relies on the normal startup or polling reconciliation instead. Polling remains active as the fallback path when a webhook is delayed or dropped. GitHub webhook paths remain reserved and still return `501 Not Implemented`. The readiness endpoint is live today at `/webhooks/readyz`.
+Colin now acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and queues an immediate best-effort reconciliation only for watched-project Linear `Issue` `create` deliveries and watched-project `Issue` `update` deliveries that include scheduling-relevant field changes. Colin also acknowledges `POST` requests to `/webhooks/github`, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and queues an immediate best-effort reconciliation for relevant watched-repository pull request, review, review-thread, review-comment, and PR-reaction deliveries. The webhook never dispatches a worker directly; it only wakes the orchestrator's normal event loop, which still applies the usual `running` and `claimed` duplicate-work guards. If a webhook arrives before the orchestrator is ready to accept immediate refreshes, Colin suppresses the fast path and relies on the normal startup or polling reconciliation instead. Polling remains active as the fallback path when a webhook is delayed or dropped. The readiness endpoint is live today at `/webhooks/readyz`.

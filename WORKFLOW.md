@@ -26,6 +26,8 @@ workspace:
 
 repo:
   api_token: $GITHUB_TOKEN
+  # Optional once you configure the GitHub webhook with `colin setup github-webhook`.
+  webhook_signing_secret: $GITHUB_WEBHOOK_SECRET
   publish_states:
     - Review
   merge_states:

@@ -160,6 +160,30 @@ func TestBuildReadsTrackerWebhookSigningSecretFromEnv(t *testing.T) {
 	}
 }
 
+func TestBuildReadsRepoWebhookSigningSecretFromEnv(t *testing.T) {
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "github-secret-from-env")
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"repo": map[string]any{
+			"webhook_signing_secret": "$GITHUB_WEBHOOK_SECRET",
+		},
+	},
+	)
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Repo.WebhookSigningSecret; got != "github-secret-from-env" {
+		t.Fatalf("cfg.Repo.WebhookSigningSecret = %q, want %q", got, "github-secret-from-env")
+	}
+}
+
 func TestBuildReadsDeprecatedServerPublicURLFallback(t *testing.T) {
 	t.Parallel()
 

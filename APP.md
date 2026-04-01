@@ -6,7 +6,7 @@ This file captures the stable, repo-specific architecture context for Colin.
 
 Colin is a long-running Go service that watches a Linear project, prepares a per-issue workspace, runs Codex for active issues, moves successful coding runs into the publish handoff state, and performs publish and merge automation from there.
 
-An embedded loopback HTTP server exposes the orchestrator snapshot for live operator inspection, a Tailscale Funnel setup/readiness flow, and stable reserved webhook paths. It still does not participate in orchestration correctness.
+An embedded loopback HTTP server exposes the orchestrator snapshot for live operator inspection, a Tailscale Funnel setup/readiness flow, and live Linear and GitHub webhook paths. It still does not participate in orchestration correctness.
 
 The runtime contract lives in `WORKFLOW.md`:
 
@@ -55,7 +55,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/agent/codex/` - Codex app-server integration, transport, and protocol/event normalization
 - `internal/automation/` - issue-run orchestration, workflow handoff policy, ExecPlan decisions, and merge-recovery automation
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
-- `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and reserved webhook routes
+- `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and live Linear and GitHub webhook routes
 - `internal/ui/` - gomponents-based HTML for the dashboard
 - `internal/repoops/` - publish and merge automation via git plus the configured repository backend client
 - `internal/repohost/` - repository backend abstraction and the current GitHub adapter

@@ -298,6 +298,9 @@ func applyRepoConfig(cfg *domain.ServiceConfig, raw domain.WorkflowRepoConfig) e
 	if value := stringValue(raw.APIToken); value != "" {
 		cfg.Repo.APIToken = resolveEnvToken(value)
 	}
+	if value := stringValue(raw.WebhookSigningSecret); value != "" {
+		cfg.Repo.WebhookSigningSecret = resolveEnvToken(value)
+	}
 	if raw.CodexPRReviewsEnabled != nil {
 		cfg.Repo.CodexPRReviewsEnabled = *raw.CodexPRReviewsEnabled
 	}
