@@ -114,6 +114,49 @@ go run . --workflow /path/to/WORKFLOW.md setup tailscale
 
 `setup github` accepts the same `--workflow` override. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
 
+## Releasing Colin
+
+Colin uses GoReleaser to package the checked-in `colin` CLI and GitHub Actions to publish those packages as a GitHub Release when you push a version tag.
+
+To validate the release packaging locally from the repository root without publishing anything, run:
+
+```bash
+task release-check
+task release-snapshot
+```
+
+`task release-snapshot` runs GoReleaser in snapshot mode, which means it builds the release archives and `checksums.txt` into `dist/` but does not create a GitHub Release.
+
+To publish a real release after the release workflow has been merged to the default branch, create and push an annotated tag whose name starts with `v`, such as:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+That tag push triggers `.github/workflows/release.yml`. The workflow runs `go test ./...` and then runs GoReleaser in release mode, which creates a GitHub Release and uploads the built archives plus `checksums.txt`.
+
+### Manual GitHub repository setup for releases
+
+This release workflow depends on a few GitHub repository settings that are outside the repository itself.
+
+1. GitHub Actions must be enabled for the repository. In GitHub, open `Settings -> Actions -> General` and make sure Actions are allowed for this repository or inherited from the organization.
+2. If the repository or organization restricts which actions may run, allow the actions used by this workflow: `actions/checkout`, `actions/setup-go`, and `goreleaser/goreleaser-action`.
+3. In `Settings -> Actions -> General -> Workflow permissions`, set the repository to allow `Read and write permissions`. The workflow uses the built-in `GITHUB_TOKEN` to create the GitHub Release and upload assets, so read-only permissions will cause the publish step to fail.
+4. If the repository or organization uses tag protection or repository rulesets, make sure the people cutting releases are allowed to push version tags that match the release pattern, such as `v0.1.0`.
+5. No additional repository secret is required for this workflow. Publishing uses the built-in `secrets.GITHUB_TOKEN`.
+
+### Recovering from a bad release tag
+
+If you push the wrong release tag, delete it locally and on GitHub before reusing the same version:
+
+```bash
+git tag -d v0.1.0
+git push origin :refs/tags/v0.1.0
+```
+
+If GitHub already created a Release for that tag, delete the unwanted GitHub Release as well. If tag deletion is blocked by repository policy, leave the bad tag in place, fix the problem, and publish a new version number instead.
+
 ## Terminal Recordings with VHS
 
 This repository includes `github.com/charmbracelet/vhs` in `go.mod` as a Go tool for recording terminal demos from `.tape` files.

@@ -53,6 +53,16 @@ tasks:
     cmds:
       - go build -o ./colin .
 
+  release-check:
+    desc: Validate the GoReleaser release configuration
+    cmds:
+      - go run github.com/goreleaser/goreleaser/v2@v2.15.2 check
+
+  release-snapshot:
+    desc: Build local snapshot release artifacts into `dist/`
+    cmds:
+      - go run github.com/goreleaser/goreleaser/v2@v2.15.2 release --snapshot --clean
+
   vhs.wizard:
     desc: Build `colin` and render the VHS setup wizard GIF
     deps:

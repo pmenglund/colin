@@ -177,6 +177,28 @@ Once that webhook is configured, Colin acknowledges `POST` requests to `/webhook
 
 Linear metadata attachments point at `server.ui_url` when configured. If that is unset but Tailscale Serve proxies Colin from `/`, Colin uses the preferred Tailscale Serve URL for metadata links, favoring HTTPS when available; otherwise it falls back to the local loopback dashboard URL.
 
+## Releasing
+
+Colin releases are built with GoReleaser and published from GitHub Actions when you push a version tag that starts with `v`, for example `v0.1.0`.
+
+To validate the release packaging locally without publishing anything, run:
+
+```bash
+task release-check
+task release-snapshot
+```
+
+That writes release archives and `checksums.txt` into `dist/`.
+
+To cut a real release after the release workflow is present on the default branch, create and push an annotated tag:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+GitHub Actions should then run the `release` workflow and publish a GitHub Release for that tag with downloadable archives and checksums. For the manual repository settings this workflow depends on, see [OPERATIONS.md](OPERATIONS.md).
+
 ## Further Reading
 
 The root README stays intentionally short. For the full operational reference, use:
