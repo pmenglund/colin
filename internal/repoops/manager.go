@@ -50,6 +50,7 @@ type ReviewContext struct {
 	PullRequest            domain.PullRequestRef
 	Threads                []domain.ReviewThread
 	CodexReviewThreads     []domain.ReviewThread
+	CodexReviewObserved    bool
 	CodexReviewRequestedAt *time.Time
 	CodexReviewApprovedAt  *time.Time
 }
@@ -227,7 +228,7 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 		return ReviewContext{}, err
 	}
 
-	threads, codexThreads, err := m.fetchReviewThreads(ctx, workspacePath, owner, name, pr.Number)
+	threads, codexThreads, codexObserved, err := m.fetchReviewThreads(ctx, workspacePath, owner, name, pr.Number)
 	if err != nil {
 		return ReviewContext{}, err
 	}
@@ -245,6 +246,7 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 		},
 		Threads:                threads,
 		CodexReviewThreads:     codexThreads,
+		CodexReviewObserved:    codexObserved,
 		CodexReviewRequestedAt: requestedAt,
 		CodexReviewApprovedAt:  approvedAt,
 	}, nil
@@ -627,35 +629,42 @@ func parseRemoteRepository(remoteURL string) (string, string, error) {
 	return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
 }
 
-func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.ReviewThread, []domain.ReviewThread, error) {
+func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.ReviewThread, []domain.ReviewThread, bool, error) {
 	var (
 		cursor       string
 		threads      []domain.ReviewThread
 		codexThreads []domain.ReviewThread
+		codexSeen    bool
 	)
 	client, err := m.repoHostClient()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	for {
 		resp, err := client.ReviewThreads(ctx, owner, name, prNumber, cursor)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 
 		if len(resp.Threads) == 0 && !resp.HasNextPage {
-			return threads, codexThreads, nil
+			return threads, codexThreads, codexSeen, nil
 		}
 		for _, node := range resp.Threads {
 			thread, ok := parseReviewThread(node)
-			if !ok || thread.IsResolved {
+			if !ok {
+				continue
+			}
+			containsAuthor, err := m.reviewThreadContainsCodexAuthor(ctx, workspacePath, node)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			if containsAuthor {
+				codexSeen = true
+			}
+			if thread.IsResolved {
 				continue
 			}
 			threads = append(threads, thread)
-			containsAuthor, err := m.reviewThreadContainsCodexAuthor(ctx, workspacePath, node)
-			if err != nil {
-				return nil, nil, err
-			}
 			if containsAuthor {
 				codexThreads = append(codexThreads, thread)
 			}
@@ -668,7 +677,7 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 		}
 		cursor = resp.EndCursor
 	}
-	return threads, codexThreads, nil
+	return threads, codexThreads, codexSeen, nil
 }
 
 func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node repohost.ReviewThread) (bool, error) {

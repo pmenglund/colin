@@ -79,6 +79,23 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 			want: CodexReviewStateApproved,
 		},
 		{
+			name: "none when codex review was observed without explicit approval",
+			context: ReviewContext{
+				PullRequest:         domain.PullRequestRef{State: "OPEN"},
+				CodexReviewObserved: true,
+			},
+			want: CodexReviewStateNone,
+		},
+		{
+			name: "none when codex review was observed after request without explicit approval",
+			context: ReviewContext{
+				PullRequest:            domain.PullRequestRef{State: "OPEN"},
+				CodexReviewObserved:    true,
+				CodexReviewRequestedAt: &requestedAt,
+			},
+			want: CodexReviewStateNone,
+		},
+		{
 			name: "unresolved feedback takes precedence",
 			context: ReviewContext{
 				PullRequest:            domain.PullRequestRef{State: "OPEN"},

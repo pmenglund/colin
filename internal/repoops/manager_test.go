@@ -262,11 +262,49 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 	if len(reviewContext.CodexReviewThreads) != 1 {
 		t.Fatalf("codex review threads length = %d, want 1", len(reviewContext.CodexReviewThreads))
 	}
+	if !reviewContext.CodexReviewObserved {
+		t.Fatal("CodexReviewObserved = false, want true")
+	}
 	if reviewContext.CodexReviewRequestedAt == nil {
 		t.Fatal("CodexReviewRequestedAt = nil, want timestamp")
 	}
 	if reviewContext.CodexReviewApprovedAt == nil {
 		t.Fatal("CodexReviewApprovedAt = nil, want timestamp")
+	}
+}
+
+func TestReviewContextMarksResolvedCodexReviewAsObservedWithoutReactions(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []repoops.GitHubReviewThread{
+			reviewThreadNode("thread-1", "chatgpt-codex-connector", "Please fix this.", true, false),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address Codex review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewContext() error = %v", err)
+	}
+	if !reviewContext.CodexReviewObserved {
+		t.Fatal("CodexReviewObserved = false, want true")
+	}
+	if len(reviewContext.CodexReviewThreads) != 0 {
+		t.Fatalf("codex review threads length = %d, want 0", len(reviewContext.CodexReviewThreads))
+	}
+	if reviewContext.CodexReviewRequestedAt != nil {
+		t.Fatalf("CodexReviewRequestedAt = %v, want nil", reviewContext.CodexReviewRequestedAt)
+	}
+	if reviewContext.CodexReviewApprovedAt != nil {
+		t.Fatalf("CodexReviewApprovedAt = %v, want nil", reviewContext.CodexReviewApprovedAt)
 	}
 }
 

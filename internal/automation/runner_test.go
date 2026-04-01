@@ -370,6 +370,88 @@ func TestBlockMergeForCodexReviewAllowsMergeWhenApprovalExistsWithoutPickupMarke
 	}
 }
 
+func TestBlockMergeForCodexReviewAllowsMergeWhenReviewWasObservedWithoutReactions(t *testing.T) {
+	t.Parallel()
+
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{
+				PublishStates:         []string{"Review"},
+				CodexPRReviewsEnabled: true,
+			},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-143",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest:         domain.PullRequestRef{Number: 35, URL: "https://example.test/pr/35", State: "OPEN"},
+		CodexReviewObserved: true,
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if blocked {
+		t.Fatal("blocked = true, want false")
+	}
+	if summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
+	}
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
+	}
+}
+
+func TestBlockMergeForCodexReviewAllowsMergeAfterObservedFeedbackWithoutThumbsUp(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, time.April, 1, 2, 9, 55, 0, time.UTC)
+	tracker := &stubTracker{}
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Repo: domain.RepoConfig{
+				PublishStates:         []string{"Review"},
+				CodexPRReviewsEnabled: true,
+			},
+		},
+		tracker: tracker,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	issue, summary, blocked, err := runner.blockMergeForCodexReview(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-144",
+		State:      "Merge",
+	}, repoops.ReviewContext{
+		PullRequest:            domain.PullRequestRef{Number: 36, URL: "https://example.test/pr/36", State: "OPEN"},
+		CodexReviewObserved:    true,
+		CodexReviewRequestedAt: &requestedAt,
+	})
+	if err != nil {
+		t.Fatalf("blockMergeForCodexReview() error = %v", err)
+	}
+	if blocked {
+		t.Fatal("blocked = true, want false")
+	}
+	if summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+	if issue.State != "Merge" {
+		t.Fatalf("issue.State = %q, want %q", issue.State, "Merge")
+	}
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
+	}
+}
+
 func TestBlockMergeForCodexReviewSkipsPickupWaitWhenDisabled(t *testing.T) {
 	t.Parallel()
 

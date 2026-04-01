@@ -27,6 +27,9 @@ func CodexReviewStateFromContext(reviewContext ReviewContext) CodexReviewState {
 	if reviewContext.CodexReviewApprovedAt != nil && (reviewContext.CodexReviewRequestedAt == nil || reviewContext.CodexReviewApprovedAt.After(*reviewContext.CodexReviewRequestedAt)) {
 		return CodexReviewStateApproved
 	}
+	if reviewContext.CodexReviewObserved {
+		return CodexReviewStateNone
+	}
 	if reviewContext.CodexReviewRequestedAt != nil && (reviewContext.CodexReviewApprovedAt == nil || !reviewContext.CodexReviewApprovedAt.After(*reviewContext.CodexReviewRequestedAt)) {
 		return CodexReviewStatePending
 	}

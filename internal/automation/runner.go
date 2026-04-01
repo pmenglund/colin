@@ -1161,6 +1161,9 @@ func mergeReviewBlockDisposition(cfg domain.ServiceConfig, reviewContext repoops
 		block.MoveToReview = true
 		return block
 	}
+	if reviewContext.CodexReviewObserved {
+		return block
+	}
 	if reviewContext.CodexReviewRequestedAt == nil {
 		if reviewContext.CodexReviewApprovedAt != nil {
 			return block
