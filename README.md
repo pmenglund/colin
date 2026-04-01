@@ -2,14 +2,14 @@
 
 Colin turns a Linear board into a managed delivery pipeline for coding work. Instead of manually driving one task at a time, you can keep many issues moving in parallel while Colin picks up ready work, hands implementation off to [Codex](https://platform.openai.com/docs/codex/overview), maintains a dedicated workspace for each issue, and pushes each task toward the next useful outcome.
 
-The value is operational leverage: more tasks advancing at once, less branch and PR babysitting, and clearer handoffs for the moments where human judgment actually matters. Because Colin is driven through Linear state changes, you can manage the flow from the Linear app on your phone instead of being tied to a laptop session. Colin also works best with [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled on your GitHub repos so reviewable PRs get an additional automated pass before merge; OpenAI's setup instructions are [here](https://help.openai.com/en/articles/11369540/).
+The value is operational leverage: more tasks advancing at once, less branch and PR babysitting, and clearer handoffs for the moments where human judgment actually matters. Because Colin is driven through Linear state changes, you can manage the flow from the Linear app on your phone instead of being tied to a laptop session. Colin currently ships with a GitHub repository backend, and now routes repository-host setup and API access through a backend abstraction so GitLab or Gitea can be added later without rewriting all of setup and repo automation. Colin also works best with [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled on your GitHub repos so reviewable PRs get an additional automated pass before merge; OpenAI's setup instructions are [here](https://help.openai.com/en/articles/11369540/).
 
 ## Prerequisites
 
 Before you run Colin, make sure you have:
 
 - access to [Codex](https://platform.openai.com/docs/codex/overview) and a GitHub account or organization connected to it
-- a GitHub token available to Colin via `repo.api_token`, `GITHUB_TOKEN`, or `GH_TOKEN` so publish and merge automation can talk to the GitHub API; `GITHUB_TOKEN` is the recommended env var, and when a token is configured Colin validates it during startup and workflow reload so broken credentials fail fast
+- a repository backend token available to Colin via `repo.api_token`, `GITHUB_TOKEN`, or `GH_TOKEN` so publish and merge automation can talk to the configured backend API; today the only supported backend is GitHub, `GITHUB_TOKEN` is the recommended env var, and when a token is configured Colin validates it during startup and workflow reload so broken credentials fail fast
 - a Linear project and workflow with the states Colin uses for active work and handoffs
 
 Optional but encouraged:
@@ -89,7 +89,7 @@ In an interactive terminal, `colin config` launches a Bubble Tea wizard that:
 
 ![`colin config` starting the interactive setup wizard before guiding the operator through project selection, validation, and workflow creation](docs/wizard.gif)
 
-The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. Valid Linear keys must start with `lin_api_`, and GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
+The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. New workflows write `repo.backend: github` explicitly so the repository backend is no longer implicit. Valid Linear keys must start with `lin_api_`, and GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
 
 ### 1. Export the required secrets
 
@@ -107,7 +107,7 @@ export GITHUB_TOKEN=github_pat_...
 Run `colin config` or `go run . config`. The wizard will guide you through:
 
 - the Linear project Colin should watch
-- the GitHub repository Colin should prepare branches and PRs for
+- the repository Colin should prepare branches and PRs for
 - the base branch Colin should branch and merge from
 - the workspace root Colin should use for per-issue worktrees
 - the local dashboard port
@@ -118,21 +118,21 @@ At the review step Colin runs live checks when it has the required credentials:
 - Linear config validation
 - required Linear workflow states
 - required managed Linear labels
-- GitHub API access
+- repository backend API access
 
 Once the review passes, the wizard writes `WORKFLOW.md`.
 
 Once the workflow file and `LINEAR_API_KEY` are available, Colin validates that the configured Linear states exist and ensures its managed labels exist before startup completes.
 
-### 3. Create the GitHub token if you do not already have one
+### 3. Create the repository backend token if you do not already have one
 
-For the GitHub token itself, the fastest path is:
+For the current GitHub backend, the fastest path is:
 
 ```bash
-go run . setup github
+go run . setup repo
 ```
 
-That command prints a pre-filled GitHub fine-grained token link for the watched repo and the exact settings Colin expects:
+That command dispatches through the configured repository backend. Today it prints a pre-filled GitHub fine-grained token link for the watched repo and the exact settings Colin expects:
 
 - resource owner: the repo owner or org
 - repository access: `Only select repositories`

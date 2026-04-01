@@ -24,6 +24,7 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.AddCommand(newSetupRepoCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupGitHubCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupLinearWebhookCmd(stdin, stdout, stderr, opts, deps))
@@ -31,12 +32,30 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 	return cmd
 }
 
+func newSetupRepoCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "repo",
+		Short: "Print the easiest repository backend token setup for this workflow",
+		Long: "Inspect the watched repository from WORKFLOW.md or the current checkout and print the recommended token settings for the configured repository backend.\n\n" +
+			"This command is backend-aware. Today Colin only implements GitHub, but this generic entrypoint is the stable setup surface for future backends.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(deps.runSetupRepo(cmd, opts.workflowPath))
+		},
+	}
+	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.Example = "  colin setup repo\n  colin --workflow /path/to/WORKFLOW.md setup repo"
+	return cmd
+}
+
 func newSetupGitHubCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "github",
-		Short: "Print the easiest GitHub token setup for this workflow",
+		Short: "Print the GitHub token setup for this workflow",
 		Long: "Inspect the watched repository from WORKFLOW.md or the current checkout and print the recommended GitHub token settings for Colin.\n\n" +
-			"This command prefers a fine-grained personal access token scoped to the watched repository, with `Contents` and `Pull requests` set to `Read and write`, and prints a pre-filled GitHub token creation URL that you can open directly. Export the resulting token as `GITHUB_TOKEN` for the generated workflow.",
+			"This command prefers a fine-grained personal access token scoped to the watched repository, with `Contents` and `Pull requests` set to `Read and write`, and expects you to export it as `GITHUB_TOKEN`. It is a compatibility alias; prefer `colin setup repo`, which dispatches through the configured repository backend.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
+	_ "github.com/pmenglund/colin/internal/repohost/github"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -46,19 +48,19 @@ type Result struct {
 // ReviewContext captures the PR, unresolved review threads, and Codex review signals for an issue branch.
 type ReviewContext struct {
 	PullRequest            domain.PullRequestRef
-	Threads                []domain.GitHubReviewThread
-	CodexReviewThreads     []domain.GitHubReviewThread
+	Threads                []domain.ReviewThread
+	CodexReviewThreads     []domain.ReviewThread
 	CodexReviewRequestedAt *time.Time
 	CodexReviewApprovedAt  *time.Time
 }
 
-// Manager performs git and GitHub operations for a workspace.
+// Manager performs git and repository-host operations for a workspace.
 type Manager struct {
-	cfg        domain.ServiceConfig
-	logger     *slog.Logger
-	github     GitHubClient
-	githubOnce sync.Once
-	githubErr  error
+	cfg      domain.ServiceConfig
+	logger   *slog.Logger
+	host     repohost.Client
+	hostOnce sync.Once
+	hostErr  error
 }
 
 // NewManager constructs a repository automation manager.
@@ -66,21 +68,31 @@ func NewManager(cfg domain.ServiceConfig, logger *slog.Logger) *Manager {
 	return &Manager{cfg: cfg, logger: logger}
 }
 
-// NewManagerWithGitHubClient constructs a repository automation manager with an injected GitHub client.
-func NewManagerWithGitHubClient(cfg domain.ServiceConfig, logger *slog.Logger, client GitHubClient) *Manager {
-	return &Manager{cfg: cfg, logger: logger, github: client}
+// NewManagerWithRepoHostClient constructs a repository automation manager with an injected repository-host client.
+func NewManagerWithRepoHostClient(cfg domain.ServiceConfig, logger *slog.Logger, client repohost.Client) *Manager {
+	return &Manager{cfg: cfg, logger: logger, host: client}
 }
 
-// ValidateGitHubAccess verifies that a configured GitHub token can authenticate before startup continues.
-func (m *Manager) ValidateGitHubAccess(ctx context.Context) error {
+// NewManagerWithGitHubClient constructs a repository automation manager with an injected GitHub client.
+func NewManagerWithGitHubClient(cfg domain.ServiceConfig, logger *slog.Logger, client GitHubClient) *Manager {
+	return NewManagerWithRepoHostClient(cfg, logger, client)
+}
+
+// ValidateRepoAccess verifies that a configured repository-host token can authenticate before startup continues.
+func (m *Manager) ValidateRepoAccess(ctx context.Context) error {
 	if m == nil || strings.TrimSpace(m.cfg.Repo.APIToken) == "" {
 		return nil
 	}
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return err
 	}
 	return client.ValidateAuth(ctx)
+}
+
+// ValidateGitHubAccess is kept as a compatibility wrapper while the codebase migrates to backend-neutral naming.
+func (m *Manager) ValidateGitHubAccess(ctx context.Context) error {
+	return m.ValidateRepoAccess(ctx)
 }
 
 // Publish commits workspace changes, pushes the issue branch, and creates or reuses a PR.
@@ -188,7 +200,7 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 	if err != nil {
 		return result, err
 	}
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return result, err
 	}
@@ -256,7 +268,7 @@ func (m *Manager) ReviewableArtifact(ctx context.Context, workspacePath string) 
 }
 
 // ReplyAndResolveReviewThread posts a reply and resolves a review thread.
-func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath string, thread domain.GitHubReviewThread, body string) error {
+func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath string, thread domain.ReviewThread, body string) error {
 	if strings.TrimSpace(thread.ID) == "" {
 		return errors.New("missing review thread id")
 	}
@@ -270,7 +282,7 @@ func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath
 	if replyBody == "" {
 		return errors.New("missing review reply body")
 	}
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return err
 	}
@@ -394,7 +406,7 @@ func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch str
 	if err != nil {
 		return nil, err
 	}
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +421,7 @@ func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath str
 	if err != nil {
 		return nil, err
 	}
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return nil, err
 	}
@@ -427,8 +439,12 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	if err != nil {
 		return nil, false, err
 	}
+	adapter, err := repohost.Lookup(m.cfg.Repo.Backend)
+	if err != nil {
+		return nil, false, err
+	}
 
-	attached := attachedPullRequestsForRepository(issue.AttachedPullRequests, owner, name)
+	attached := attachedPullRequestsForRepository(issue.AttachedPullRequests, owner, name, adapter)
 	switch len(attached) {
 	case 0:
 	case 1:
@@ -492,13 +508,13 @@ func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath s
 		return nil, fmt.Errorf("tracked pull request #%d not found", tracked.Number)
 	}
 	if value := strings.TrimSpace(tracked.URL); value != "" && value != strings.TrimSpace(pr.URL) {
-		return nil, fmt.Errorf("%w: tracked pull request url %q does not match GitHub url %q", ErrTrackedPullRequestMismatch, value, pr.URL)
+		return nil, fmt.Errorf("%w: tracked pull request url %q does not match repository url %q", ErrTrackedPullRequestMismatch, value, pr.URL)
 	}
 	if value := strings.TrimSpace(tracked.HeadRef); value != "" && value != strings.TrimSpace(pr.HeadRefName) {
-		return nil, fmt.Errorf("%w: tracked pull request head %q does not match GitHub head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
+		return nil, fmt.Errorf("%w: tracked pull request head %q does not match repository head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
 	}
 	if value := strings.TrimSpace(tracked.BaseRef); value != "" && value != strings.TrimSpace(pr.BaseRefName) {
-		return nil, fmt.Errorf("%w: tracked pull request base %q does not match GitHub base %q", ErrTrackedPullRequestMismatch, value, pr.BaseRefName)
+		return nil, fmt.Errorf("%w: tracked pull request base %q does not match repository base %q", ErrTrackedPullRequestMismatch, value, pr.BaseRefName)
 	}
 	if value := strings.TrimSpace(currentBranch); value != "" && strings.TrimSpace(pr.HeadRefName) != "" && value != strings.TrimSpace(pr.HeadRefName) {
 		return nil, fmt.Errorf("%w: current branch %q does not match tracked pull request head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
@@ -519,14 +535,14 @@ func trackedPullRequest(issue domain.Issue) (domain.PullRequestRef, bool) {
 	}, true
 }
 
-func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name string) []domain.PullRequestRef {
+func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name string, adapter repohost.Adapter) []domain.PullRequestRef {
 	if strings.EqualFold(owner, "local") {
 		return prs
 	}
 
 	filtered := make([]domain.PullRequestRef, 0, len(prs))
 	for _, pr := range prs {
-		prOwner, prName, number, ok := parseGitHubPullRequestURL(pr.URL)
+		prOwner, prName, number, ok := adapter.ParsePullRequestURL(pr.URL)
 		if !ok || pr.Number <= 0 || pr.Number != number {
 			continue
 		}
@@ -536,25 +552,6 @@ func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name 
 		filtered = append(filtered, pr)
 	}
 	return filtered
-}
-
-func parseGitHubPullRequestURL(rawURL string) (string, string, int, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return "", "", 0, false
-	}
-	if !strings.EqualFold(parsed.Host, "github.com") {
-		return "", "", 0, false
-	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) != 4 || !strings.EqualFold(parts[2], "pull") {
-		return "", "", 0, false
-	}
-	number, err := strconv.Atoi(parts[3])
-	if err != nil || number <= 0 {
-		return "", "", 0, false
-	}
-	return parts[0], parts[1], number, true
 }
 
 func duplicatePullRequestsError(prs []domain.PullRequestRef) error {
@@ -575,7 +572,7 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 	if err != nil {
 		return "", err
 	}
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return "", err
 	}
@@ -630,13 +627,13 @@ func parseRemoteRepository(remoteURL string) (string, string, error) {
 	return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
 }
 
-func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.GitHubReviewThread, []domain.GitHubReviewThread, error) {
+func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.ReviewThread, []domain.ReviewThread, error) {
 	var (
 		cursor       string
-		threads      []domain.GitHubReviewThread
-		codexThreads []domain.GitHubReviewThread
+		threads      []domain.ReviewThread
+		codexThreads []domain.ReviewThread
 	)
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -674,7 +671,7 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 	return threads, codexThreads, nil
 }
 
-func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node GitHubReviewThread) (bool, error) {
+func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node repohost.ReviewThread) (bool, error) {
 	if reviewThreadPageContainsCodexAuthor(node) {
 		return true, nil
 	}
@@ -689,7 +686,7 @@ func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspace
 }
 
 func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID string) (bool, error) {
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return false, err
 	}
@@ -720,7 +717,7 @@ func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, 
 		requested *time.Time
 		approved  *time.Time
 	)
-	client, err := m.githubClient()
+	client, err := m.repoHostClient()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -759,16 +756,16 @@ func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, 
 	return requested, approved, nil
 }
 
-func parseReviewThread(node GitHubReviewThread) (domain.GitHubReviewThread, bool) {
+func parseReviewThread(node repohost.ReviewThread) (domain.ReviewThread, bool) {
 	if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Path) == "" {
-		return domain.GitHubReviewThread{}, false
+		return domain.ReviewThread{}, false
 	}
 	if len(node.Comments.Comments) == 0 {
-		return domain.GitHubReviewThread{}, false
+		return domain.ReviewThread{}, false
 	}
 	comment := node.Comments.Comments[len(node.Comments.Comments)-1]
 
-	thread := domain.GitHubReviewThread{
+	thread := domain.ReviewThread{
 		ID:         node.ID,
 		Path:       node.Path,
 		CommentID:  comment.ID,
@@ -786,7 +783,7 @@ func parseReviewThread(node GitHubReviewThread) (domain.GitHubReviewThread, bool
 	return thread, true
 }
 
-func reviewThreadPageContainsCodexAuthor(node GitHubReviewThread) bool {
+func reviewThreadPageContainsCodexAuthor(node repohost.ReviewThread) bool {
 	for _, comment := range node.Comments.Comments {
 		if isCodexReviewAuthor(comment.AuthorLogin) {
 			return true
@@ -804,7 +801,7 @@ func isCodexReviewAuthor(login string) bool {
 	return false
 }
 
-func reviewThreadCommentsHasNextPage(node GitHubReviewThread) bool {
+func reviewThreadCommentsHasNextPage(node repohost.ReviewThread) bool {
 	return node.Comments.HasNextPage
 }
 
@@ -901,15 +898,20 @@ func truncateOutput(value string) string {
 	return value[:4096]
 }
 
-func (m *Manager) githubClient() (GitHubClient, error) {
-	m.githubOnce.Do(func() {
-		if m.github != nil {
+func (m *Manager) repoHostClient() (repohost.Client, error) {
+	m.hostOnce.Do(func() {
+		if m.host != nil {
 			return
 		}
-		m.github, m.githubErr = NewGitHubClientFromConfig(m.cfg, m.logger)
+		adapter, err := repohost.Lookup(m.cfg.Repo.Backend)
+		if err != nil {
+			m.hostErr = err
+			return
+		}
+		m.host, m.hostErr = adapter.NewClient(m.cfg, m.logger)
 	})
-	if m.githubErr != nil {
-		return nil, m.githubErr
+	if m.hostErr != nil {
+		return nil, m.hostErr
 	}
-	return m.github, nil
+	return m.host, nil
 }

@@ -4,7 +4,7 @@ This document holds the detailed operational and workflow reference that used to
 
 ## Colin and Symphony
 
-Colin is this repository's Go implementation of the service model described by [openai/symphony](https://github.com/openai/symphony). The upstream Symphony project defines the language-agnostic orchestration model and also ships an experimental reference implementation; Colin applies that model to this repository's current Linear, GitHub, and Codex workflow.
+Colin is this repository's Go implementation of the service model described by [openai/symphony](https://github.com/openai/symphony). The upstream Symphony project defines the language-agnostic orchestration model and also ships an experimental reference implementation; Colin applies that model to this repository's current Linear, GitHub, and Codex workflow. GitHub is the only repository backend implemented today, but Colin now routes repository-host setup and API access through a backend abstraction so other git forges can be added later.
 
 `SPEC.md` is the local copy of the Symphony service specification that Colin uses as a design reference and conformance checklist when the service is changed. It is not loaded at runtime. The file Colin actually reads at startup and on reload is `WORKFLOW.md`, whose front matter provides typed runtime configuration and whose Markdown body provides the prompt template for coding runs.
 
@@ -18,7 +18,7 @@ Colin runs as a long-lived process:
 4. When ExecPlan support is enabled, it decides whether each issue should be handled as a one-shot change or should get a stored ExecPlan, persists that decision on the issue, and only creates a plan for the second case.
 5. It runs Codex for issues in coding states.
 6. It moves a successful coding run into `Review`, or into `Refine` when human clarification is still needed.
-7. It performs git and GitHub automation for issues in publish or merge states.
+7. It performs git and repository-backend automation for issues in publish or merge states.
 8. It logs progress locally and posts high-level progress updates back to Linear as a comment thread on the issue.
 
 ## Startup and Setup Details
@@ -35,7 +35,7 @@ This uses `--workflow WORKFLOW.md` implicitly. If the selected workflow file is 
 go run . config
 ```
 
-In an interactive terminal, that setup flow now runs as a Bubble Tea wizard with inline validation, a final review screen, and live Linear preflight checks when `LINEAR_API_KEY` is available. If the shell does not already provide that key, the wizard asks for one for the current setup session without writing it to `WORKFLOW.md`; valid Linear keys must start with `lin_api_`. The wizard also checks for a GitHub token and, when needed, asks for a session-only `GITHUB_TOKEN`; valid GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. When a valid Linear key is present, the wizard fetches accessible Linear projects and presents a searchable selector before falling back to manual slug entry when needed. In non-interactive contexts, Colin keeps the previous line-oriented prompt flow for scripted use. The generated file still keeps secrets out of `WORKFLOW.md`: it references `$LINEAR_API_KEY`, `$LINEAR_WEBHOOK_SECRET`, and `$GITHUB_TOKEN`, so operators should export those variables in their shell or environment manager.
+In an interactive terminal, that setup flow now runs as a Bubble Tea wizard with inline validation, a final review screen, and live Linear preflight checks when `LINEAR_API_KEY` is available. If the shell does not already provide that key, the wizard asks for one for the current setup session without writing it to `WORKFLOW.md`; valid Linear keys must start with `lin_api_`. The wizard also checks for a GitHub token and, when needed, asks for a session-only `GITHUB_TOKEN`; valid GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. New workflows now write `repo.backend: github` explicitly so the repository backend is no longer implicit. When a valid Linear key is present, the wizard fetches accessible Linear projects and presents a searchable selector before falling back to manual slug entry when needed. In non-interactive contexts, Colin keeps the previous line-oriented prompt flow for scripted use. The generated file still keeps secrets out of `WORKFLOW.md`: it references `$LINEAR_API_KEY`, `$LINEAR_WEBHOOK_SECRET`, and `$GITHUB_TOKEN`, so operators should export those variables in their shell or environment manager.
 
 Once the workflow file and `LINEAR_API_KEY` are present, Colin validates the configured Linear states and ensures its managed Linear labels exist before startup or workflow reload completes.
 
@@ -67,15 +67,15 @@ To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pas
 go run . --port 9999
 ```
 
-GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`. When a token is configured, Colin validates it during startup and workflow reload with an authenticated GitHub API call so invalid or expired credentials fail before publish or merge work begins.
+GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`. `repo.backend` now selects the repository backend, and currently `github` is the only supported value. When a token is configured, Colin validates it during startup and workflow reload with an authenticated backend API call so invalid or expired credentials fail before publish or merge work begins.
 
 The easiest way to create the right token is:
 
 ```bash
-go run . setup github
+go run . setup repo
 ```
 
-That command inspects the watched repo and prints a pre-filled GitHub fine-grained token URL plus the exact settings Colin expects:
+That command inspects the watched repo and dispatches through the configured repository backend. Today it prints a pre-filled GitHub fine-grained token URL plus the exact settings Colin expects:
 
 - token type: fine-grained personal access token
 - resource owner: the watched repo owner or org
@@ -112,7 +112,7 @@ Because `--workflow` is a persistent root flag, the same override also applies t
 go run . --workflow /path/to/WORKFLOW.md setup tailscale
 ```
 
-`setup github` accepts the same `--workflow` override. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
+`setup repo` accepts the same `--workflow` override. `setup github` remains as a compatibility alias for GitHub-backed workflows. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
 
 ## Releasing Colin
 

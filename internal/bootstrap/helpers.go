@@ -187,7 +187,7 @@ func completionText(result Result, autoStart bool) string {
 	} else if result.Prereqs.GitHubTokenConfigured {
 		lines = append(lines, "GITHUB_TOKEN or GH_TOKEN is already configured in this shell.")
 	} else {
-		lines = append(lines, "Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`. Run `colin setup github` for the exact token settings.")
+		lines = append(lines, "Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`. Run `colin setup repo` for the exact token settings.")
 	}
 	if !result.Prereqs.CodexAvailable {
 		lines = append(lines, "Warning: `codex` was not found in PATH. Install or expose Codex before expecting Colin to launch coding runs.")

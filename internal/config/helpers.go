@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
-	"github.com/pmenglund/colin/internal/githubauth"
+	"github.com/pmenglund/colin/internal/repohost"
 )
 
 func normalizeSandboxPolicy(policy domain.SandboxPolicy) domain.SandboxPolicy {
@@ -15,8 +15,8 @@ func normalizeSandboxPolicy(policy domain.SandboxPolicy) domain.SandboxPolicy {
 	return policy
 }
 
-func currentGitHubToken() string {
-	return githubauth.CurrentToken()
+func currentRepoToken(backend string) string {
+	return repohost.CurrentToken(backend)
 }
 
 func stringValue(value *string) string {

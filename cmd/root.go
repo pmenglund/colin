@@ -21,6 +21,7 @@ type rootOptions struct {
 type commandDeps struct {
 	runRoot               func(*cobra.Command, rootOptions) int
 	runConfig             func(*cobra.Command, configOptions) int
+	runSetupRepo          func(*cobra.Command, string) int
 	runSetupGitHub        func(*cobra.Command, string) int
 	runSetupTailscale     func(*cobra.Command, string, bool) int
 	runSetupLinearWebhook func(*cobra.Command, string, string) int
@@ -139,6 +140,7 @@ func defaultCommandDeps() commandDeps {
 	return commandDeps{
 		runRoot:               runRoot,
 		runConfig:             runConfig,
+		runSetupRepo:          runSetupRepo,
 		runSetupGitHub:        runSetupGitHub,
 		runSetupTailscale:     runSetupTailscale,
 		runSetupLinearWebhook: runSetupLinearWebhook,

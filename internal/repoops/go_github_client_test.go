@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
 )
@@ -76,8 +77,8 @@ func TestNewGitHubClientFromConfigAppliesDefaultHTTPTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("client type = %T, want *goGitHubClient", client)
 	}
-	if got := goClient.client.Client().Timeout; got != defaultGitHubHTTPTimeout {
-		t.Fatalf("http timeout = %s, want %s", got, defaultGitHubHTTPTimeout)
+	if got := goClient.HTTPTimeout(); got != 2*time.Minute {
+		t.Fatalf("http timeout = %s, want %s", got, 2*time.Minute)
 	}
 }
 

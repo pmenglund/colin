@@ -378,6 +378,44 @@ func TestRunPassesWorkflowFlagToSetupGitHub(t *testing.T) {
 	}
 }
 
+func TestRunPassesWorkflowFlagToSetupRepo(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupRepo: func(cmd *cobra.Command, workflowPath string) int {
+			gotWorkflow = workflowPath
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "repo", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup repo --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+}
+
 func TestSetupGitHubHelpExplainsPurpose(t *testing.T) {
 	t.Parallel()
 

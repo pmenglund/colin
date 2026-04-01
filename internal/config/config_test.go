@@ -33,15 +33,15 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "github-token-from-env")
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "cli",
-				"api_key":      "$LINEAR_API_KEY",
-			},
-			"workspace": map[string]any{
-				"root": "$WS_ROOT",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "$LINEAR_API_KEY",
 		},
+		"workspace": map[string]any{
+			"root": "$WS_ROOT",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -66,6 +66,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Repo.APIToken != "github-token-from-env" {
 		t.Fatalf("cfg.Repo.APIToken = %q", cfg.Repo.APIToken)
 	}
+	if cfg.Repo.Backend != "github" {
+		t.Fatalf("cfg.Repo.Backend = %q, want %q", cfg.Repo.Backend, "github")
+	}
 	if cfg.Repo.CodexPRReviewsEnabled {
 		t.Fatal("cfg.Repo.CodexPRReviewsEnabled = true, want false by default")
 	}
@@ -81,16 +84,16 @@ func TestBuildReadsServerWebhookAndUIURLs(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"server": map[string]any{
-				"webhook_public_url": "https://hooks.colin.example.test",
-				"ui_url":             "https://ui.colin.example.test",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"server": map[string]any{
+			"webhook_public_url": "https://hooks.colin.example.test",
+			"ui_url":             "https://ui.colin.example.test",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -109,13 +112,13 @@ func TestBuildReadsTrackerWebhookSigningSecretFromEnv(t *testing.T) {
 	t.Setenv("LINEAR_WEBHOOK_SECRET", "secret-from-env")
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":                   "linear",
-				"project_slug":           "project-1",
-				"api_key":                "token",
-				"webhook_signing_secret": "$LINEAR_WEBHOOK_SECRET",
-			},
+		"tracker": map[string]any{
+			"kind":                   "linear",
+			"project_slug":           "project-1",
+			"api_key":                "token",
+			"webhook_signing_secret": "$LINEAR_WEBHOOK_SECRET",
 		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -131,15 +134,15 @@ func TestBuildReadsDeprecatedServerPublicURLFallback(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"server": map[string]any{
-				"public_url": "https://colin.example.test",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"server": map[string]any{
+			"public_url": "https://colin.example.test",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -155,15 +158,15 @@ func TestBuildReadsServerLogBufferLines(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"server": map[string]any{
-				"log_buffer_lines": 250,
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"server": map[string]any{
+			"log_buffer_lines": 250,
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -179,10 +182,10 @@ func TestBuildRejectsPartialWorkspaceGitConfig(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"workspace": map[string]any{
-				"repo_url": "git@example.com/repo.git",
-			},
+		"workspace": map[string]any{
+			"repo_url": "git@example.com/repo.git",
 		},
+	},
 	)
 
 	_, err := Build(def, "WORKFLOW.md")
@@ -212,17 +215,17 @@ func TestBuildNormalizesTurnSandboxPolicy(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "cli",
-				"api_key":      "token",
-			},
-			"codex": map[string]any{
-				"turn_sandbox_policy": map[string]any{
-					"mode": "danger-full-access",
-				},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"codex": map[string]any{
+			"turn_sandbox_policy": map[string]any{
+				"mode": "danger-full-access",
 			},
 		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -238,15 +241,15 @@ func TestBuildMakesWorkspaceRootAbsolute(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "cli",
-				"api_key":      "token",
-			},
-			"workspace": map[string]any{
-				"root": "./.colin/workspaces",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
 		},
+		"workspace": map[string]any{
+			"root": "./.colin/workspaces",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -290,15 +293,15 @@ func TestBuildReadsPRTemplate(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"repo": map[string]any{
-				"pr_template": "Issue {{.issue.identifier}}",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"repo": map[string]any{
+			"pr_template": "Issue {{.issue.identifier}}",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -314,15 +317,15 @@ func TestBuildReadsBranchTemplate(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"repo": map[string]any{
-				"branch_template": "feature/{{.issue.identifier}}",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"repo": map[string]any{
+			"branch_template": "feature/{{.issue.identifier}}",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -339,15 +342,15 @@ func TestBuildReadsRepoAPITokenFromConfig(t *testing.T) {
 	t.Setenv("COLIN_GITHUB_TOKEN", "config-token")
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"repo": map[string]any{
-				"api_token": "$COLIN_GITHUB_TOKEN",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"repo": map[string]any{
+			"api_token": "$COLIN_GITHUB_TOKEN",
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -359,17 +362,44 @@ func TestBuildReadsRepoAPITokenFromConfig(t *testing.T) {
 	}
 }
 
+func TestBuildReadsRepoBackendAndAPIBaseURL(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"repo": map[string]any{
+			"backend":      "github",
+			"api_base_url": "https://github.example.test/api/v3/",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Repo.Backend; got != "github" {
+		t.Fatalf("cfg.Repo.Backend = %q, want %q", got, "github")
+	}
+	if got := cfg.Repo.APIBaseURL; got != "https://github.example.test/api/v3/" {
+		t.Fatalf("cfg.Repo.APIBaseURL = %q, want %q", got, "https://github.example.test/api/v3/")
+	}
+}
+
 func TestBuildFallsBackToGHToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "gh-token")
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -385,15 +415,15 @@ func TestBuildReadsCreateExecPlan(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"agent": map[string]any{
-				"create_exec_plan": true,
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"agent": map[string]any{
+			"create_exec_plan": true,
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")
@@ -409,15 +439,15 @@ func TestBuildReadsCodexPRReviewsEnabled(t *testing.T) {
 	t.Parallel()
 
 	def := workflowDefinition(t, map[string]any{
-			"tracker": map[string]any{
-				"kind":         "linear",
-				"project_slug": "project-1",
-				"api_key":      "token",
-			},
-			"repo": map[string]any{
-				"codex_pr_reviews_enabled": true,
-			},
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
 		},
+		"repo": map[string]any{
+			"codex_pr_reviews_enabled": true,
+		},
+	},
 	)
 
 	cfg, err := Build(def, "WORKFLOW.md")

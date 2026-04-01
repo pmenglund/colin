@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
+	_ "github.com/pmenglund/colin/internal/repohost/github"
 )
 
 var (
@@ -19,6 +21,7 @@ var (
 	ErrInvalidWorkflowConfig   = errors.New("invalid_workflow_config")
 	ErrInvalidWorkspaceGitConf = errors.New("invalid_workspace_git_config")
 	ErrInvalidRepoMergeMethod  = errors.New("invalid_repo_merge_method")
+	ErrUnsupportedRepoBackend  = errors.New("unsupported_repo_backend")
 )
 
 const defaultPRTemplate = `## Summary
@@ -48,6 +51,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			Root: filepath.Join(os.TempDir(), "symphony_workspaces"),
 		},
 		Repo: domain.RepoConfig{
+			Backend:               string(repohost.HostKindGitHub),
 			PublishStates:         []string{"Review"},
 			MergeStates:           []string{"Merge"},
 			RemoteName:            "origin",
@@ -123,6 +127,9 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 	if !validMergeMethod(cfg.Repo.MergeMethod) {
 		return domain.ServiceConfig{}, ErrInvalidRepoMergeMethod
 	}
+	if _, err := repohost.Lookup(cfg.Repo.Backend); err != nil {
+		return domain.ServiceConfig{}, ErrUnsupportedRepoBackend
+	}
 	cfg.Codex.TurnSandboxPolicy = normalizeSandboxPolicy(cfg.Codex.TurnSandboxPolicy)
 
 	return cfg, nil
@@ -144,6 +151,9 @@ func ValidateDispatch(cfg domain.ServiceConfig) error {
 	}
 	if strings.TrimSpace(cfg.Codex.Command) == "" {
 		return ErrMissingCodexCommand
+	}
+	if _, err := repohost.Lookup(cfg.Repo.Backend); err != nil {
+		return ErrUnsupportedRepoBackend
 	}
 	return nil
 }
@@ -261,6 +271,12 @@ func applyHooksConfig(cfg *domain.ServiceConfig, raw domain.WorkflowHookConfig) 
 }
 
 func applyRepoConfig(cfg *domain.ServiceConfig, raw domain.WorkflowRepoConfig) error {
+	if value := stringValue(raw.Backend); value != "" {
+		cfg.Repo.Backend = repohost.NormalizeBackend(value)
+	}
+	if value := stringValue(raw.APIBaseURL); value != "" {
+		cfg.Repo.APIBaseURL = resolveEnvToken(value)
+	}
 	if len(raw.PublishStates) > 0 {
 		cfg.Repo.PublishStates = append([]string(nil), raw.PublishStates...)
 	}
@@ -286,7 +302,7 @@ func applyRepoConfig(cfg *domain.ServiceConfig, raw domain.WorkflowRepoConfig) e
 		cfg.Repo.CodexPRReviewsEnabled = *raw.CodexPRReviewsEnabled
 	}
 	if cfg.Repo.APIToken == "" {
-		cfg.Repo.APIToken = currentGitHubToken()
+		cfg.Repo.APIToken = currentRepoToken(cfg.Repo.Backend)
 	}
 	return nil
 }

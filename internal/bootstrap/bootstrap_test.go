@@ -192,7 +192,7 @@ func TestRunPrintsGitHubSetupGuidanceWhenTokenMissing(t *testing.T) {
 		"GITHUB_TOKEN or GH_TOKEN configured: no",
 		"fine-grained personal access token",
 		"Contents: Read and write; Pull requests: Read and write",
-		"colin setup github",
+		"colin setup repo",
 		"Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`.",
 	} {
 		if !strings.Contains(got, want) {
