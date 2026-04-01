@@ -50,10 +50,34 @@ type LinearWebhookTriggerResult struct {
 // LinearWebhookTrigger queues any follow-up work for a validated webhook delivery.
 type LinearWebhookTrigger func(context.Context, LinearWebhookEvent) LinearWebhookTriggerResult
 
+// GitHubWebhookEvent captures the minimal webhook context needed to trigger orchestration.
+type GitHubWebhookEvent struct {
+	DeliveryID         string
+	Event              string
+	Action             string
+	RepositoryFullName string
+	PullRequestNumber  int
+	HasPullRequest     bool
+}
+
+// GitHubWebhookTriggerResult describes how the service handled a validated webhook delivery.
+type GitHubWebhookTriggerResult struct {
+	Relevant   bool
+	Queued     bool
+	Coalesced  bool
+	Suppressed bool
+}
+
+// GitHubWebhookTrigger queues any follow-up work for a validated webhook delivery.
+type GitHubWebhookTrigger func(context.Context, GitHubWebhookEvent) GitHubWebhookTriggerResult
+
+// GitHubWebhookSecretProvider returns the configured GitHub webhook secret for request validation.
+type GitHubWebhookSecretProvider func(context.Context) string
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil, nil)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil, nil, nil, nil)
 }
 
 func normalizeServerProviders(provider SnapshotProvider, setupProvider FunnelSetupProvider, logProvider LogProvider) (SnapshotProvider, FunnelSetupProvider, LogProvider) {
@@ -275,25 +299,25 @@ func newReadyzHandler() http.HandlerFunc {
 }
 
 // NewWebhookHandler returns only the webhook and readiness routes.
-func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) http.Handler {
+func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	readyzHandler := newReadyzHandler()
 	mux.HandleFunc("/webhooks/readyz", readyzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)
 	mux.HandleFunc("/webhooks/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
 	mux.HandleFunc("/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
-	mux.HandleFunc("/webhooks/github", reservedWebhookHandler)
-	mux.HandleFunc("/github", reservedWebhookHandler)
+	mux.HandleFunc("/webhooks/github", githubWebhookHandler(githubWebhookTrigger, githubSecretProvider, logger))
+	mux.HandleFunc("/github", githubWebhookHandler(githubWebhookTrigger, githubSecretProvider, logger))
 	return secureHeaders(mux)
 }
 
 // NewObservabilityServer returns the combined UI and webhook handler used in tests and previews.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
 	uiHandler, err := NewUIHandler(provider, issueProvider, setupProvider, logProvider)
 	if err != nil {
 		return nil, err
 	}
-	webhookHandler := NewWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger)
+	webhookHandler := NewWebhookHandler(linearWebhookTrigger, linearSecretProvider, githubWebhookTrigger, githubSecretProvider, logger)
 	mux := http.NewServeMux()
 	mux.Handle("/", uiHandler)
 	mux.Handle("/webhooks/", webhookHandler)
@@ -301,19 +325,6 @@ func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvid
 	mux.Handle("/linear", webhookHandler)
 	mux.Handle("/github", webhookHandler)
 	return secureHeaders(mux), nil
-}
-
-func reservedWebhookHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusNotImplemented)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error": "Webhook endpoint reserved, but not implemented yet.",
-	})
 }
 
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {

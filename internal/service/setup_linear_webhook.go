@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-
-	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
+	"strings"
 )
 
 var ErrMissingWebhookPublicURL = errors.New("missing_webhook_public_url")
@@ -32,12 +30,7 @@ func SetupLinearWebhook(ctx context.Context, workflowPath string, webhookName st
 		return LinearWebhookSetupResult{}, err
 	}
 
-	inspector := tsdiag.NewInspector()
-	status := inspector.Resolve(ctx, tsdiag.Options{
-		WebhookPort:              cfg.Server.WebhookPort,
-		ExplicitWebhookPublicURL: webhookPublicURL(cfg.Server),
-	})
-	baseURL := strings.TrimSpace(status.PublicBaseURL)
+	baseURL := resolveWebhookPublicBaseURL(ctx, nil, cfg.Server, "")
 	if baseURL == "" {
 		return LinearWebhookSetupResult{}, fmt.Errorf("%w: configure `server.webhook_public_url` or run `colin setup tailscale` first", ErrMissingWebhookPublicURL)
 	}

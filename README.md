@@ -15,7 +15,7 @@ Before you run Colin, make sure you have:
 Optional but encouraged:
 
 - [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests, with `repo.codex_pr_reviews_enabled: true` set in `WORKFLOW.md` when you want Colin to wait for that review before merging
-- public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md)
+- public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md), plus `LINEAR_WEBHOOK_SECRET` and `GITHUB_WEBHOOK_SECRET` exported when you enable signed provider webhooks
 
 ## What Using Colin Looks Like
 
@@ -75,7 +75,7 @@ Run these commands from the root of the git repository Colin should manage so `W
 1. Export a valid `LINEAR_API_KEY` and `GITHUB_TOKEN` in your shell.
 2. Run `colin config` to generate `WORKFLOW.md`.
 3. Start Colin with `colin`.
-4. Optionally set up Tailscale and the watched-project Linear webhook if you want immediate refreshes between polling intervals.
+4. Optionally set up Tailscale plus the watched-project Linear and GitHub webhooks if you want immediate refreshes between polling intervals.
 
 The explicit setup command is:
 
@@ -104,6 +104,8 @@ Colin keeps secrets out of `WORKFLOW.md`. Export them in your shell before runni
 ```bash
 export LINEAR_API_KEY=lin_api_...
 export GITHUB_TOKEN=github_pat_...
+export LINEAR_WEBHOOK_SECRET=...
+export GITHUB_WEBHOOK_SECRET=...
 ```
 
 `GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`. Fine-grained `github_pat_...` tokens are preferred, but classic `ghp_...` PATs also work.
@@ -175,13 +177,14 @@ If you opted into webhooks during setup, Colin will remind you that webhook expo
 colin setup tailscale
 ```
 
-After public ingress is available, create or repair the watched project's Linear webhook:
+After public ingress is available, create or repair the watched project's Linear webhook and print the GitHub webhook settings:
 
 ```bash
 colin setup linear
+colin setup github-webhook
 ```
 
-Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses watched-project Linear `Issue` `create` deliveries plus watched-project `Issue` `update` deliveries with scheduling-relevant field changes to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
+Once those webhooks are configured, Colin acknowledges `POST` requests to `/webhooks/linear` and `/webhooks/github`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and uses relevant watched-project Linear issue deliveries plus relevant watched-repository GitHub pull-request review deliveries to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
 
 `server.port` controls the local Colin UI. When webhook setup is enabled, `colin config` also writes `server.webhook_port`, which defaults to `8998`, so Tailscale Serve can proxy the UI while Tailscale Funnel proxies `/webhooks` on a separate public HTTPS port such as `8443`.
 

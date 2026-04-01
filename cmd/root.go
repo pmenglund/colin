@@ -23,6 +23,7 @@ type commandDeps struct {
 	runConfig             func(*cobra.Command, configOptions) int
 	runSetupRepo          func(*cobra.Command, string) int
 	runSetupGitHub        func(*cobra.Command, string) int
+	runSetupGitHubWebhook func(*cobra.Command, string) int
 	runSetupTailscale     func(*cobra.Command, string, bool) int
 	runSetupLinearWebhook func(*cobra.Command, string, string) int
 	isInteractive         func(*cobra.Command) bool
@@ -142,6 +143,7 @@ func defaultCommandDeps() commandDeps {
 		runConfig:             runConfig,
 		runSetupRepo:          runSetupRepo,
 		runSetupGitHub:        runSetupGitHub,
+		runSetupGitHubWebhook: runSetupGitHubWebhook,
 		runSetupTailscale:     runSetupTailscale,
 		runSetupLinearWebhook: runSetupLinearWebhook,
 	}

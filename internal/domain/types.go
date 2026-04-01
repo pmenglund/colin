@@ -214,6 +214,7 @@ type WorkflowRepoConfig struct {
 	BranchTemplate        *string  `yaml:"branch_template"`
 	PRTemplate            *string  `yaml:"pr_template"`
 	APIToken              *string  `yaml:"api_token"`
+	WebhookSigningSecret  *string  `yaml:"webhook_signing_secret"`
 	CodexPRReviewsEnabled *bool    `yaml:"codex_pr_reviews_enabled"`
 }
 
@@ -304,6 +305,7 @@ type RepoConfig struct {
 	BranchTemplate        string
 	PRTemplate            string
 	APIToken              string
+	WebhookSigningSecret  string
 	CodexPRReviewsEnabled bool
 }
 

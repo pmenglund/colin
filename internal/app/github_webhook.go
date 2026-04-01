@@ -1,0 +1,203 @@
+package app
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strings"
+)
+
+type gitHubWebhookEnvelope struct {
+	Action     string `json:"action"`
+	Repository struct {
+		FullName string `json:"full_name"`
+	} `json:"repository"`
+	PullRequest *struct {
+		Number int `json:"number"`
+	} `json:"pull_request"`
+	Issue *struct {
+		PullRequest *struct{} `json:"pull_request"`
+	} `json:"issue"`
+	Comment *struct {
+		PullRequestURL string `json:"pull_request_url"`
+	} `json:"comment"`
+}
+
+func githubWebhookHandler(trigger GitHubWebhookTrigger, secretProvider GitHubWebhookSecretProvider, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		secret := ""
+		if secretProvider != nil {
+			secret = strings.TrimSpace(secretProvider(r.Context()))
+		}
+		logGitHubWebhookRequest(logger, slog.LevelInfo, "received github webhook request", r, len(secret) > 0, nil)
+
+		if r.Method != http.MethodPost {
+			logGitHubWebhookRequest(logger, slog.LevelWarn, "rejected github webhook request with unsupported method", r, len(secret) > 0, []any{"status", http.StatusMethodNotAllowed})
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, err := ioReadAll(r.Body)
+		if err != nil {
+			logGitHubWebhookRequest(logger, slog.LevelWarn, "failed to read github webhook request body", r, len(secret) > 0, []any{"error", err})
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if secret != "" && !validGitHubWebhookSignature(r.Header.Get("X-Hub-Signature-256"), body, secret) {
+			logGitHubWebhookRequest(logger, slog.LevelWarn, "rejected github webhook request with invalid signature", r, true, []any{"status", http.StatusUnauthorized, "body_bytes", len(body)})
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+
+		envelope, err := parseGitHubWebhookEnvelope(body)
+		if err != nil {
+			logGitHubWebhookRequest(logger, slog.LevelWarn, "rejected github webhook request with invalid payload", r, len(secret) > 0, []any{"status", http.StatusBadRequest, "body_bytes", len(body), "error", err})
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		event := gitHubWebhookEventFromRequest(r, envelope)
+		if shouldTriggerGitHubWebhook(event) {
+			result := GitHubWebhookTriggerResult{}
+			if trigger != nil {
+				result = trigger(r.Context(), event)
+			}
+			extra := []any{
+				"action", event.Action,
+				"repository", event.RepositoryFullName,
+				"pull_request_number", event.PullRequestNumber,
+				"has_pull_request", event.HasPullRequest,
+				"queued", result.Queued,
+				"coalesced", result.Coalesced,
+			}
+			switch {
+			case !result.Relevant:
+				logGitHubWebhookRequest(logger, slog.LevelDebug, "ignored github webhook delivery that does not affect orchestration", r, len(secret) > 0, extra)
+			case result.Queued:
+				logGitHubWebhookRequest(logger, slog.LevelInfo, "queued immediate orchestrator refresh from github webhook", r, len(secret) > 0, extra)
+			case result.Suppressed:
+				logGitHubWebhookRequest(logger, slog.LevelDebug, "suppressed immediate orchestrator refresh from github webhook; polling fallback remains active", r, len(secret) > 0, extra)
+			default:
+				logGitHubWebhookRequest(logger, slog.LevelWarn, "could not queue immediate orchestrator refresh from github webhook", r, len(secret) > 0, extra)
+			}
+		} else {
+			logGitHubWebhookRequest(logger, slog.LevelDebug, "ignored github webhook delivery that does not affect orchestration", r, len(secret) > 0, []any{
+				"action", event.Action,
+				"repository", event.RepositoryFullName,
+				"pull_request_number", event.PullRequestNumber,
+				"has_pull_request", event.HasPullRequest,
+			})
+		}
+
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
+func logGitHubWebhookRequest(logger *slog.Logger, level slog.Level, message string, r *http.Request, secretConfigured bool, extra []any) {
+	if logger == nil || r == nil {
+		return
+	}
+	args := []any{
+		"method", r.Method,
+		"path", r.URL.Path,
+		"github_delivery", strings.TrimSpace(r.Header.Get("X-GitHub-Delivery")),
+		"github_event", strings.TrimSpace(r.Header.Get("X-GitHub-Event")),
+		"signature_present", strings.TrimSpace(r.Header.Get("X-Hub-Signature-256")) != "",
+		"secret_configured", secretConfigured,
+	}
+	args = append(args, extra...)
+	logger.Log(r.Context(), level, message, args...)
+}
+
+func validGitHubWebhookSignature(header string, body []byte, secret string) bool {
+	header = strings.TrimSpace(header)
+	secret = strings.TrimSpace(secret)
+	if header == "" || secret == "" {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(header), "sha256=") {
+		return false
+	}
+	expected, err := hex.DecodeString(strings.TrimSpace(header[len("sha256="):]))
+	if err != nil || len(expected) == 0 {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(body)
+	computed := mac.Sum(nil)
+	if len(computed) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare(computed, expected) == 1
+}
+
+func parseGitHubWebhookEnvelope(body []byte) (gitHubWebhookEnvelope, error) {
+	var envelope gitHubWebhookEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return gitHubWebhookEnvelope{}, err
+	}
+	return envelope, nil
+}
+
+func gitHubWebhookEventFromRequest(r *http.Request, envelope gitHubWebhookEnvelope) GitHubWebhookEvent {
+	eventName := ""
+	deliveryID := ""
+	if r != nil {
+		eventName = strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
+		deliveryID = strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
+	}
+	event := GitHubWebhookEvent{
+		DeliveryID:         deliveryID,
+		Event:              eventName,
+		Action:             strings.TrimSpace(envelope.Action),
+		RepositoryFullName: strings.TrimSpace(envelope.Repository.FullName),
+	}
+	if envelope.PullRequest != nil {
+		event.PullRequestNumber = envelope.PullRequest.Number
+		event.HasPullRequest = true
+	}
+	if envelope.Issue != nil && envelope.Issue.PullRequest != nil {
+		event.HasPullRequest = true
+	}
+	if envelope.Comment != nil && strings.TrimSpace(envelope.Comment.PullRequestURL) != "" {
+		event.HasPullRequest = true
+	}
+	return event
+}
+
+func shouldTriggerGitHubWebhook(event GitHubWebhookEvent) bool {
+	if strings.TrimSpace(event.RepositoryFullName) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(event.Event)) {
+	case "pull_request":
+		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "opened", "reopened", "ready_for_review", "synchronize", "edited", "closed")
+	case "pull_request_review":
+		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "submitted", "edited", "dismissed")
+	case "pull_request_review_comment":
+		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "created", "edited", "deleted")
+	case "pull_request_review_thread":
+		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "resolved", "unresolved")
+	case "reaction":
+		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "created", "deleted")
+	default:
+		return false
+	}
+}
+
+func isRelevantGitHubAction(action string, want ...string) bool {
+	action = strings.ToLower(strings.TrimSpace(action))
+	for _, candidate := range want {
+		if action == candidate {
+			return true
+		}
+	}
+	return false
+}

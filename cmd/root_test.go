@@ -442,6 +442,44 @@ func TestSetupGitHubHelpExplainsPurpose(t *testing.T) {
 	}
 }
 
+func TestRunPassesWorkflowFlagToSetupGitHubWebhook(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupGitHubWebhook: func(cmd *cobra.Command, workflowPath string) int {
+			gotWorkflow = workflowPath
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "github-webhook", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup github-webhook --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+}
+
 func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 	t.Parallel()
 
@@ -478,6 +516,34 @@ func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 	}
 	if gotName != "colin" {
 		t.Fatalf("webhook name = %q, want %q", gotName, "colin")
+	}
+}
+
+func TestSetupGitHubWebhookHelpExplainsPurpose(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "github-webhook", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup github-webhook --help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "/webhooks/github") {
+		t.Fatalf("help output = %q, want github webhook path", got)
+	}
+	if !strings.Contains(got, "GITHUB_WEBHOOK_SECRET") {
+		t.Fatalf("help output = %q, want secret env var", got)
+	}
+	if !strings.Contains(got, "pull_request_review") {
+		t.Fatalf("help output = %q, want event subscription", got)
+	}
+	if !strings.Contains(got, "github-webhook") {
+		t.Fatalf("help output = %q, want command name", got)
 	}
 }
 

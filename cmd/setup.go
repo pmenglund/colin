@@ -26,6 +26,7 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.AddCommand(newSetupRepoCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupGitHubCmd(stdin, stdout, stderr, opts, deps))
+	cmd.AddCommand(newSetupGitHubWebhookCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupLinearWebhookCmd(stdin, stdout, stderr, opts, deps))
 
@@ -65,6 +66,24 @@ func newSetupGitHubCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOpti
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.Example = "  colin setup github\n  colin --workflow /path/to/WORKFLOW.md setup github"
+	return cmd
+}
+
+func newSetupGitHubWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "github-webhook",
+		Short: "Print the GitHub webhook settings for this workflow",
+		Long: "Inspect the watched GitHub repository and current webhook public URL, then print the settings needed to configure GitHub to call Colin at `/webhooks/github`.\n\n" +
+			"This command uses `server.webhook_public_url` when configured, or the current Tailscale Funnel public base URL when available. It also reminds you to store the shared secret in `repo.webhook_signing_secret` via `$GITHUB_WEBHOOK_SECRET` and prints the GitHub event subscriptions that wake Colin's orchestrator loop, including `pull_request`, `pull_request_review`, `pull_request_review_comment`, `pull_request_review_thread`, and `reaction`.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(deps.runSetupGitHubWebhook(cmd, opts.workflowPath))
+		},
+	}
+	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.Example = "  colin setup github-webhook\n  colin --workflow /path/to/WORKFLOW.md setup github-webhook"
 	return cmd
 }
 

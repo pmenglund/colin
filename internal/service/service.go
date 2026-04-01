@@ -303,7 +303,7 @@ func (s *Service) startWebhookServer(ctx context.Context) error {
 		return nil
 	}
 
-	handler := app.NewWebhookHandler(s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.logger)
+	handler := app.NewWebhookHandler(s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.logger)
 
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*s.webhookPort)))
 	if err != nil {
@@ -396,7 +396,7 @@ func (s *Service) newDashboardHandler() (http.Handler, error) {
 		return s.logBuffer.Snapshot(minLevel), nil
 	}
 	if !hasEnabledPort(s.webhookPort) {
-		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.logger)
+		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.logger)
 	}
 	return app.NewUIHandler(provider, issueProvider, setupProvider, logProvider)
 }
@@ -431,6 +431,36 @@ func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
 func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider {
 	return func(context.Context) string {
 		return s.currentRuntime().Config.Tracker.WebhookSigningSecret
+	}
+}
+
+func (s *Service) githubWebhookTrigger() app.GitHubWebhookTrigger {
+	return func(_ context.Context, event app.GitHubWebhookEvent) app.GitHubWebhookTriggerResult {
+		runtime := s.currentRuntime()
+		if !shouldQueueImmediateGitHubRefresh(event, watchedRepositoryFullName(runtime.Config)) {
+			return app.GitHubWebhookTriggerResult{}
+		}
+		reason := fmt.Sprintf("github webhook delivery=%s event=%s action=%s repository=%s", event.DeliveryID, event.Event, event.Action, event.RepositoryFullName)
+		if event.PullRequestNumber > 0 {
+			reason += fmt.Sprintf(" pull_request_number=%d", event.PullRequestNumber)
+		}
+		if s.orch == nil {
+			return app.GitHubWebhookTriggerResult{Relevant: true}
+		}
+		queued, coalesced := s.orch.RequestRefresh(reason)
+		if queued {
+			return app.GitHubWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: coalesced}
+		}
+		if !s.orch.RefreshReady() {
+			return app.GitHubWebhookTriggerResult{Relevant: true, Suppressed: true}
+		}
+		return app.GitHubWebhookTriggerResult{Relevant: true}
+	}
+}
+
+func (s *Service) githubWebhookSecretProvider() app.GitHubWebhookSecretProvider {
+	return func(context.Context) string {
+		return s.currentRuntime().Config.Repo.WebhookSigningSecret
 	}
 }
 
@@ -470,16 +500,7 @@ func (s *Service) funnelSetupStatus(ctx context.Context) domain.FunnelSetupStatu
 }
 
 func (s *Service) effectiveWebhookPublicBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
-	inspector := s.inspector
-	if inspector == nil {
-		inspector = tsdiag.NewInspector()
-	}
-	status := inspector.Resolve(ctx, tsdiag.Options{
-		WebhookPort:              cfg.WebhookPort,
-		LocalWebhookBaseURL:      s.webhookBaseURL(),
-		ExplicitWebhookPublicURL: webhookPublicURL(cfg),
-	})
-	return strings.TrimSpace(status.PublicBaseURL)
+	return resolveWebhookPublicBaseURL(ctx, s.inspector, cfg, s.webhookBaseURL())
 }
 
 func (s *Service) effectiveUIBaseURL(ctx context.Context, cfg domain.ServerConfig) string {
@@ -532,6 +553,61 @@ func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProj
 	default:
 		return false
 	}
+}
+
+func watchedRepositoryFullName(cfg domain.ServiceConfig) string {
+	if strings.TrimSpace(cfg.Workspace.RepoURL) == "" {
+		return ""
+	}
+	adapter, err := repohost.Lookup(cfg.Repo.Backend)
+	if err != nil {
+		return ""
+	}
+	repo, err := adapter.ParseRepositoryURL(cfg.Workspace.RepoURL)
+	if err != nil {
+		return ""
+	}
+	if strings.TrimSpace(repo.Owner) == "" || strings.TrimSpace(repo.Name) == "" {
+		return ""
+	}
+	return normalizeRepositoryFullName(repo.Owner + "/" + repo.Name)
+}
+
+func shouldQueueImmediateGitHubRefresh(event app.GitHubWebhookEvent, watchedRepo string) bool {
+	if strings.TrimSpace(watchedRepo) == "" {
+		return false
+	}
+	if normalizeRepositoryFullName(event.RepositoryFullName) != normalizeRepositoryFullName(watchedRepo) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(event.Event)) {
+	case "pull_request":
+		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "opened", "reopened", "ready_for_review", "synchronize", "edited", "closed")
+	case "pull_request_review":
+		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "submitted", "edited", "dismissed")
+	case "pull_request_review_comment":
+		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "created", "edited", "deleted")
+	case "pull_request_review_thread":
+		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "resolved", "unresolved")
+	case "reaction":
+		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "created", "deleted")
+	default:
+		return false
+	}
+}
+
+func normalizeRepositoryFullName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func hasRelevantGitHubAction(action string, want ...string) bool {
+	action = strings.ToLower(strings.TrimSpace(action))
+	for _, candidate := range want {
+		if action == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func hasRelevantIssueChange(changedFields []string) bool {

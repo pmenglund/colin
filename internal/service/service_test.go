@@ -696,6 +696,110 @@ func TestLoadGitHubTokenSetupFailsWithoutRepositorySource(t *testing.T) {
 	}
 }
 
+func TestLoadGitHubWebhookSetupUsesWorkflowRepositoryAndPublicWebhookURL(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  project_slug: test-project
+workspace:
+  repo_url: git@github.com:acme/widgets.git
+  base_ref: main
+repo:
+  backend: github
+  webhook_signing_secret: $GITHUB_WEBHOOK_SECRET
+codex:
+  command: codex app-server
+server:
+  webhook_public_url: https://hooks.colin.example.test
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "secret")
+
+	result, err := LoadGitHubWebhookSetup(context.Background(), workflowPath, t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadGitHubWebhookSetup() error = %v", err)
+	}
+	if result.RepositoryOwner != "acme" || result.RepositoryName != "widgets" {
+		t.Fatalf("repository = %s/%s, want acme/widgets", result.RepositoryOwner, result.RepositoryName)
+	}
+	if result.WebhookURL != "https://hooks.colin.example.test/webhooks/github" {
+		t.Fatalf("WebhookURL = %q, want %q", result.WebhookURL, "https://hooks.colin.example.test/webhooks/github")
+	}
+	if !result.SigningSecretConfigured {
+		t.Fatal("SigningSecretConfigured = false, want true")
+	}
+	if result.SigningSecretEnvVar != GitHubWebhookSigningSecretEnvVar {
+		t.Fatalf("SigningSecretEnvVar = %q, want %q", result.SigningSecretEnvVar, GitHubWebhookSigningSecretEnvVar)
+	}
+	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread,reaction" {
+		t.Fatalf("Events = %q", got)
+	}
+}
+
+func TestLoadGitHubWebhookSetupReportsMissingSigningSecret(t *testing.T) {
+	t.Parallel()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  project_slug: test-project
+workspace:
+  repo_url: git@github.com:acme/widgets.git
+  base_ref: main
+repo:
+  backend: github
+codex:
+  command: codex app-server
+server:
+  webhook_public_url: https://hooks.colin.example.test
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := LoadGitHubWebhookSetup(context.Background(), workflowPath, t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadGitHubWebhookSetup() error = %v", err)
+	}
+	if result.SigningSecretConfigured {
+		t.Fatal("SigningSecretConfigured = true, want false")
+	}
+}
+
+func TestResolveWebhookPublicBaseURLPrefersExplicitWebhookPublicURL(t *testing.T) {
+	t.Parallel()
+
+	got := resolveWebhookPublicBaseURL(context.Background(), serviceInspectorStub{}, domain.ServerConfig{
+		WebhookPublicURL: "https://hooks.colin.example.test/",
+	}, "http://127.0.0.1:8998")
+	if got != "https://hooks.colin.example.test" {
+		t.Fatalf("resolveWebhookPublicBaseURL() = %q, want %q", got, "https://hooks.colin.example.test")
+	}
+}
+
+func TestResolveWebhookPublicBaseURLFallsBackToInspector(t *testing.T) {
+	t.Parallel()
+
+	got := resolveWebhookPublicBaseURL(context.Background(), serviceInspectorStub{
+		status: domain.FunnelSetupStatus{
+			PublicBaseURL: "https://colin.tail.example.ts.net",
+		},
+	}, domain.ServerConfig{}, "http://127.0.0.1:8998")
+	if got != "https://colin.tail.example.ts.net" {
+		t.Fatalf("resolveWebhookPublicBaseURL() = %q, want %q", got, "https://colin.tail.example.ts.net")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -949,6 +1053,108 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 				t.Fatalf("shouldQueueImmediateLinearRefresh() = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		event       app.GitHubWebhookEvent
+		watchedRepo string
+		want        bool
+	}{
+		{
+			name: "pull request review in watched repository",
+			event: app.GitHubWebhookEvent{
+				Event:              "pull_request_review",
+				Action:             "submitted",
+				RepositoryFullName: "acme/widgets",
+				HasPullRequest:     true,
+			},
+			watchedRepo: "acme/widgets",
+			want:        true,
+		},
+		{
+			name: "repository name match is case insensitive",
+			event: app.GitHubWebhookEvent{
+				Event:              "pull_request",
+				Action:             "synchronize",
+				RepositoryFullName: "Acme/Widgets",
+				HasPullRequest:     true,
+			},
+			watchedRepo: "acme/widgets",
+			want:        true,
+		},
+		{
+			name: "irrelevant action",
+			event: app.GitHubWebhookEvent{
+				Event:              "pull_request",
+				Action:             "assigned",
+				RepositoryFullName: "acme/widgets",
+				HasPullRequest:     true,
+			},
+			watchedRepo: "acme/widgets",
+			want:        false,
+		},
+		{
+			name: "different repository",
+			event: app.GitHubWebhookEvent{
+				Event:              "pull_request_review_comment",
+				Action:             "created",
+				RepositoryFullName: "acme/other",
+				HasPullRequest:     true,
+			},
+			watchedRepo: "acme/widgets",
+			want:        false,
+		},
+		{
+			name: "missing watched repository",
+			event: app.GitHubWebhookEvent{
+				Event:              "pull_request_review",
+				Action:             "submitted",
+				RepositoryFullName: "acme/widgets",
+				HasPullRequest:     true,
+			},
+			watchedRepo: "",
+			want:        false,
+		},
+		{
+			name: "missing pull request context",
+			event: app.GitHubWebhookEvent{
+				Event:              "reaction",
+				Action:             "created",
+				RepositoryFullName: "acme/widgets",
+			},
+			watchedRepo: "acme/widgets",
+			want:        false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldQueueImmediateGitHubRefresh(tc.event, tc.watchedRepo); got != tc.want {
+				t.Fatalf("shouldQueueImmediateGitHubRefresh() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWatchedRepositoryFullNameUsesConfiguredRepoURL(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			RepoURL: "git@github.com:acme/widgets.git",
+		},
+		Repo: domain.RepoConfig{
+			Backend: "github",
+		},
+	}
+
+	if got := watchedRepositoryFullName(cfg); got != "acme/widgets" {
+		t.Fatalf("watchedRepositoryFullName() = %q, want %q", got, "acme/widgets")
 	}
 }
 
