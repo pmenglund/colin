@@ -112,6 +112,8 @@ github.com/google/go-github/v79 v79.0.0 h1:MdodQojuFPBhmtwHiBcIGLw/e/wei2PvFX9nd
 github.com/google/go-github/v79 v79.0.0/go.mod h1:OAFbNhq7fQwohojb06iIIQAB9CBGYLq999myfUFnrS4=
 github.com/google/go-querystring v1.1.0 h1:AnCroh3fv4ZBgVIf1Iwtovgjaw/GiKJo8M8yD/fhyJ8=
 github.com/google/go-querystring v1.1.0/go.mod h1:Kcdr2DB4koayq7X8pmAG4sNG59So17icRSOU623lUBU=
+github.com/google/gops v0.3.29 h1:n98J2qSOK1NJvRjdLDcjgDryjpIBGhbaqph1mXKL0rY=
+github.com/google/gops v0.3.29/go.mod h1:8N3jZftuPazvUwtYY/ncG4iPrjp15ysNKLfq+QQPiwc=
 github.com/gorilla/css v1.0.1 h1:ntNaBIghp6JmvWnxbZKANoLyuXTPZ4cAMlo6RyhlbO8=
 github.com/gorilla/css v1.0.1/go.mod h1:BvnYkspnSzMmwRK+b8/xgNPLiIuNZr6vbZBTPQ2A3b0=
 github.com/hashicorp/go-version v1.8.0 h1:KAkNb1HAiZd1ukkxDFGmokVZe1Xy9HG6NUp+bPle2i4=
