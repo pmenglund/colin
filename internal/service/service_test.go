@@ -426,6 +426,47 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
+func TestNewFailsWhenUIAndWebhookPortsMatch(t *testing.T) {
+	t.Parallel()
+
+	server := newServiceLinearPreflightServer(t)
+	defer server.Close()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  endpoint: ` + server.URL + `
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+codex:
+  command: codex app-server
+server:
+  port: 8998
+  webhook_port: 8998
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	if !errors.Is(err, errDuplicateListenerPorts) {
+		t.Fatalf("New() error = %v, want errDuplicateListenerPorts", err)
+	}
+}
+
 func TestEnsureManagedLabelsEnsuresPausedAndCodexReviewLabels(t *testing.T) {
 	t.Parallel()
 
@@ -713,6 +754,71 @@ func TestEffectiveUIBaseURLFallsBackToLocalDashboard(t *testing.T) {
 	})
 	if got != "http://127.0.0.1:9999" {
 		t.Fatalf("effectiveUIBaseURL() = %q", got)
+	}
+}
+
+func TestDashboardHandlerServesWebhookRoutesWhenWebhookPortUnset(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		serverPort: intPtr(8888),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Server:  domain.ServerConfig{Port: intPtr(8888)},
+				Tracker: domain.TrackerConfig{},
+			},
+		},
+	}
+
+	handler, err := svc.newDashboardHandler()
+	if err != nil {
+		t.Fatalf("newDashboardHandler() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/webhooks/linear", "application/json", strings.NewReader(`{"webhookTimestamp":1735689600000}`))
+	if err != nil {
+		t.Fatalf("POST /webhooks/linear error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestDashboardHandlerDoesNotServeWebhookRoutesWhenDedicatedWebhookPortConfigured(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		serverPort:  intPtr(8888),
+		webhookPort: intPtr(8998),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Server:  domain.ServerConfig{Port: intPtr(8888), WebhookPort: intPtr(8998)},
+				Tracker: domain.TrackerConfig{},
+			},
+		},
+	}
+
+	handler, err := svc.newDashboardHandler()
+	if err != nil {
+		t.Fatalf("newDashboardHandler() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/webhooks/linear", "application/json", strings.NewReader(`{"webhookTimestamp":1735689600000}`))
+	if err != nil {
+		t.Fatalf("POST /webhooks/linear error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
 
