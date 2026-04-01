@@ -14,7 +14,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	gopsagent "github.com/google/gops/agent"
 
 	"github.com/pmenglund/colin/internal/app"
 	"github.com/pmenglund/colin/internal/domain"
@@ -710,6 +714,67 @@ func TestEffectiveUIBaseURLFallsBackToLocalDashboard(t *testing.T) {
 	if got != "http://127.0.0.1:9999" {
 		t.Fatalf("effectiveUIBaseURL() = %q", got)
 	}
+}
+
+func TestStartGOPSAgentStartsWithServiceManagedCleanup(t *testing.T) {
+	var mu sync.Mutex
+	listenCalls := 0
+	gotOptions := gopsagent.Options{}
+	closeCalls := 0
+	closed := make(chan struct{}, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := startGOPSAgent(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), gopsHooks{
+		listen: func(opts gopsagent.Options) error {
+			mu.Lock()
+			defer mu.Unlock()
+			listenCalls++
+			gotOptions = opts
+			return nil
+		},
+		close: func() {
+			mu.Lock()
+			closeCalls++
+			mu.Unlock()
+			closed <- struct{}{}
+		},
+	})
+	cancel()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("gops close was not triggered after context cancellation")
+	}
+
+	stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if listenCalls != 1 {
+		t.Fatalf("listen calls = %d, want 1", listenCalls)
+	}
+	if gotOptions.ShutdownCleanup {
+		t.Fatal("ShutdownCleanup = true, want false so Colin keeps signal ownership")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestStartGOPSAgentReturnsNoopStopWhenListenFails(t *testing.T) {
+	t.Parallel()
+
+	stop := startGOPSAgent(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), gopsHooks{
+		listen: func(gopsagent.Options) error {
+			return errors.New("boom")
+		},
+		close: func() {
+			t.Fatal("close should not be called when listen fails")
+		},
+	})
+
+	stop()
 }
 
 func TestShouldQueueImmediateLinearRefresh(t *testing.T) {

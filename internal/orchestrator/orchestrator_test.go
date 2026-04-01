@@ -19,8 +19,10 @@ type trackerStub struct {
 	candidateCalls      int
 	candidateInvoked    chan struct{}
 	candidateCallCh     chan int
+	candidateHook       func(*trackerStub)
 	issuesByState       []domain.Issue
 	issuesByStateCalls  int
+	issuesByStateHook   func(*trackerStub)
 	issuesByID          []domain.Issue
 	rateLimits          domain.RateLimitSnapshot
 	issueComments       []string
@@ -36,6 +38,9 @@ type trackerStub struct {
 
 func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
 	s.candidateCalls++
+	if s.candidateHook != nil {
+		s.candidateHook(s)
+	}
 	if s.candidateInvoked != nil {
 		select {
 		case <-s.candidateInvoked:
@@ -54,6 +59,9 @@ func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, err
 
 func (s *trackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
 	s.issuesByStateCalls++
+	if s.issuesByStateHook != nil {
+		s.issuesByStateHook(s)
+	}
 	return s.issuesByState, nil
 }
 
@@ -1153,6 +1161,116 @@ func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T)
 	}
 	if tracker.candidateCalls != 0 {
 		t.Fatalf("FetchCandidateIssues() calls = %d, want 0", tracker.candidateCalls)
+	}
+}
+
+func TestHandleTickPrioritizesCandidateFetchBeforeStateCountRefresh(t *testing.T) {
+	t.Parallel()
+
+	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
+	issue := domain.Issue{ID: "1", Identifier: "COLIN-143", Title: "github interface", State: "Todo"}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+		issuesByState:   []domain.Issue{issue},
+		issuesByStateHook: func(s *trackerStub) {
+			s.rateLimits = domain.RateLimitSnapshot{
+				"linear_requests": {
+					NextAllowedAt: unixTimePtr(nextAllowedAt),
+				},
+			}
+		},
+	}
+	runner := &runnerStub{invoked: make(chan struct{})}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Polling: domain.PollingConfig{Interval: 30 * time.Second},
+			Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+			Tracker: domain.TrackerConfig{
+				Kind:         "linear",
+				APIKey:       "test-key",
+				ProjectSlug:  "test-project",
+				ActiveStates: []string{"Todo"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}, Tracker: tracker, Runner: runner},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+		eventCh:           make(chan any, 4),
+	}
+
+	orch.handleTick(context.Background())
+
+	if tracker.candidateCalls != 1 {
+		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+	}
+	if tracker.issuesByStateCalls != 1 {
+		t.Fatalf("FetchIssuesByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+	}
+	select {
+	case <-runner.invoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not invoked for eligible Todo issue")
+	}
+	if _, ok := orch.running["1"]; !ok {
+		t.Fatal("expected issue to be marked running after dispatch")
+	}
+}
+
+func TestHandleTickRefreshesStateCountsAfterCandidateFetchUsesBudget(t *testing.T) {
+	t.Parallel()
+
+	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
+	issue := domain.Issue{ID: "1", Identifier: "COLIN-143", Title: "github interface", State: "Todo"}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{},
+		issuesByState:   []domain.Issue{issue},
+		candidateHook: func(s *trackerStub) {
+			s.rateLimits = domain.RateLimitSnapshot{
+				"linear_requests": {
+					NextAllowedAt: unixTimePtr(nextAllowedAt),
+				},
+			}
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Polling: domain.PollingConfig{Interval: 30 * time.Second},
+			Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+			Tracker: domain.TrackerConfig{
+				Kind:         "linear",
+				APIKey:       "test-key",
+				ProjectSlug:  "test-project",
+				ActiveStates: []string{"Todo"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}, Tracker: tracker},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+		eventCh:           make(chan any, 4),
+	}
+
+	orch.handleTick(context.Background())
+
+	if tracker.candidateCalls != 1 {
+		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+	}
+	if tracker.issuesByStateCalls != 1 {
+		t.Fatalf("FetchIssuesByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+	}
+	if got := orch.issueStates["Todo"]; got != 1 {
+		t.Fatalf("issueStates[Todo] = %d, want 1", got)
 	}
 }
 

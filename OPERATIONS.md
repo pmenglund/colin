@@ -26,13 +26,13 @@ Colin runs as a long-lived process:
 By default Colin is started with:
 
 ```bash
-go run .
+colin
 ```
 
 This uses `--workflow WORKFLOW.md` implicitly. If the selected workflow file is missing and Colin has an interactive terminal, Colin starts an interactive first-run setup that writes that file and then continues into normal startup. This applies to the default `WORKFLOW.md` and to custom `--workflow` paths. In non-interactive runs, Colin fails clearly and tells you to run the config command manually. To create or refresh the workflow file explicitly without starting the service, run:
 
 ```bash
-go run . config
+colin config
 ```
 
 In an interactive terminal, that setup flow now runs as a Bubble Tea wizard with inline validation, a final review screen, and live Linear preflight checks when `LINEAR_API_KEY` is available. If the shell does not already provide that key, the wizard asks for one for the current setup session without writing it to `WORKFLOW.md`; valid Linear keys must start with `lin_api_`. The wizard also checks for a GitHub token and, when needed, asks for a session-only `GITHUB_TOKEN`; valid GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. New workflows now write `repo.backend: github` explicitly so the repository backend is no longer implicit. When a valid Linear key is present, the wizard fetches accessible Linear projects and presents a searchable selector before falling back to manual slug entry when needed. In non-interactive contexts, Colin keeps the previous line-oriented prompt flow for scripted use. The generated file still keeps secrets out of `WORKFLOW.md`: it references `$LINEAR_API_KEY`, `$LINEAR_WEBHOOK_SECRET`, and `$GITHUB_TOKEN`, so operators should export those variables in their shell or environment manager.
@@ -42,13 +42,13 @@ Once the workflow file and `LINEAR_API_KEY` are present, Colin validates the con
 To point Colin at a different workflow file, pass the shared `--workflow` flag:
 
 ```bash
-go run . --workflow /path/to/WORKFLOW.md
+colin --workflow /path/to/WORKFLOW.md
 ```
 
 The same override also applies to the explicit config command:
 
 ```bash
-go run . --workflow /path/to/WORKFLOW.md config
+colin --workflow /path/to/WORKFLOW.md config
 ```
 
 By default Colin prints a single startup line with both the local dashboard URL and the local Funnel setup page, for example `Colin is running. Web UI: http://127.0.0.1:8888 Setup: http://127.0.0.1:8888/setup/funnel`.
@@ -56,15 +56,17 @@ By default Colin prints a single startup line with both the local dashboard URL 
 To keep the previous structured log stream on the terminal, pass `--verbose`:
 
 ```bash
-go run . --verbose
+colin --verbose
 ```
 
 Even without `--verbose`, Colin keeps recent internal logs in memory and serves them from `/api/v1/logs`. Add `?level=info` to hide `debug` records, or `?level=debug` to inspect the full buffer.
 
+Colin also starts a local `gops` agent for the running process. After installing `gops` with `go install github.com/google/gops@latest`, you can list Go processes with `gops`, then inspect Colin with commands such as `gops <pid>`, `gops stack <pid>`, or `gops memstats <pid>`.
+
 To override the dashboard port, either set `server.port` in `WORKFLOW.md` or pass `--port`:
 
 ```bash
-go run . --port 9999
+colin --port 9999
 ```
 
 GitHub publish and merge automation now talks to the GitHub API directly instead of shelling out to GitHub CLI. Provide a token through `repo.api_token` in `WORKFLOW.md`, or through the environment variables `GITHUB_TOKEN` or `GH_TOKEN`, before moving issues into `Review` or `Merge`. `repo.backend` now selects the repository backend, and currently `github` is the only supported value. When a token is configured, Colin validates it during startup and workflow reload with an authenticated backend API call so invalid or expired credentials fail before publish or merge work begins.
@@ -72,7 +74,7 @@ GitHub publish and merge automation now talks to the GitHub API directly instead
 The easiest way to create the right token is:
 
 ```bash
-go run . setup repo
+colin setup repo
 ```
 
 That command inspects the watched repo and dispatches through the configured repository backend. Today it prints a pre-filled GitHub fine-grained token URL plus the exact settings Colin expects:
@@ -93,15 +95,15 @@ If operators need explicit URLs instead of Colin's defaults, set `server.webhook
 Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the webhook endpoints are publicly reachable:
 
 ```bash
-go run . setup tailscale
+colin setup tailscale
 ```
 
-That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept. The interactive `go run . config` flow asks whether you want webhook setup and, if you answer yes, points you back to this Tailscale step before creating the Linear webhook.
+That command checks Tailscale, explains that Colin uses Tailscale Funnel only for public webhook exposure, shows the exact `tailscale funnel` command Colin expects, and prints the final webhook URLs Colin will later accept. The interactive `colin config` flow asks whether you want webhook setup and, if you answer yes, points you back to this Tailscale step before creating the Linear webhook.
 
 To create or repair the watched project's Linear webhook after public ingress is ready, run:
 
 ```bash
-go run . setup linear
+colin setup linear
 ```
 
 That command creates or repairs one team-scoped Linear webhook for the watched project, points it at `<public-base-url>/webhooks/linear`, and reminds you to store the signing secret as `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
@@ -109,7 +111,7 @@ That command creates or repairs one team-scoped Linear webhook for the watched p
 Because `--workflow` is a persistent root flag, the same override also applies to setup commands:
 
 ```bash
-go run . --workflow /path/to/WORKFLOW.md setup tailscale
+colin --workflow /path/to/WORKFLOW.md setup tailscale
 ```
 
 `setup repo` accepts the same `--workflow` override. `setup github` remains as a compatibility alias for GitHub-backed workflows. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
@@ -336,7 +338,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 
 ## Operational Notes
 
-- By default `go run .` stays quiet after startup and only prints the single `Colin is running. Web UI: ...` line.
+- By default `colin` stays quiet after startup and only prints the single `Colin is running. Web UI: ...` line.
 - Pass `--verbose` to restore the structured service log stream for startup, dispatches, retries, Codex session progress, and handoff automation.
 - Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
 - Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
@@ -368,7 +370,7 @@ Colin now includes a dedicated readiness flow for the public ingress you need be
 Use either:
 
 ```bash
-go run . setup tailscale
+colin setup tailscale
 ```
 
 or the browser page at `/setup/funnel` once Colin is running.
@@ -376,7 +378,7 @@ or the browser page at `/setup/funnel` once Colin is running.
 To inspect readiness against a non-default workflow file, use:
 
 ```bash
-go run . --workflow /path/to/WORKFLOW.md setup tailscale
+colin --workflow /path/to/WORKFLOW.md setup tailscale
 ```
 
 The readiness flow checks:

@@ -49,6 +49,8 @@ Colin treats these as terminal states and stops work when an issue enters them:
 
 Colin is built to supervise a queue, not a single foreground session. It keeps one workspace per issue, tracks retries and rate limits, and gives operators a live dashboard so they can monitor fleet-level progress instead of watching individual coding runs. Colin itself is also developed using Colin, so the workflow is exercised continuously in the project that builds it.
 
+When Colin is running, it also starts a local [`gops`](https://github.com/google/gops) agent so you can inspect the live process with commands such as `gops`, `gops stack <pid>`, or `gops memstats <pid>` without changing Colin's normal startup or shutdown flow.
+
 ![Colin dashboard showing active runs, workspace status, and API snapshot](docs/ui.png)
 
 ## How Colin Works
@@ -66,15 +68,17 @@ Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `
 
 The fastest way to get Colin running is:
 
+Run these commands from the root of the git repository Colin should manage so `WORKFLOW.md` and any git-derived defaults apply to the correct checkout.
+
 1. Export a valid `LINEAR_API_KEY` and `GITHUB_TOKEN` in your shell.
-2. Run `colin config` or `go run . config` to generate `WORKFLOW.md`.
-3. Start Colin with `colin` or `go run .`.
+2. Run `colin config` to generate `WORKFLOW.md`.
+3. Start Colin with `colin`.
 4. Optionally set up Tailscale and the watched-project Linear webhook if you want immediate refreshes between polling intervals.
 
-If you are running from source, the explicit setup command is:
+The explicit setup command is:
 
 ```bash
-go run . config
+colin config
 ```
 
 If the selected workflow file is missing and Colin is running in an interactive terminal, Colin starts the same first-run setup automatically instead of failing immediately. This applies both to the default `WORKFLOW.md` and to custom paths passed with `--workflow`.
@@ -104,7 +108,7 @@ export GITHUB_TOKEN=github_pat_...
 
 ### 2. Generate or refresh `WORKFLOW.md`
 
-Run `colin config` or `go run . config`. The wizard will guide you through:
+Run `colin config`. The wizard will guide you through:
 
 - the Linear project Colin should watch
 - the repository Colin should prepare branches and PRs for
@@ -129,7 +133,7 @@ Once the workflow file and `LINEAR_API_KEY` are available, Colin validates that 
 For the current GitHub backend, the fastest path is:
 
 ```bash
-go run . setup repo
+colin setup repo
 ```
 
 That command dispatches through the configured repository backend. Today it prints a pre-filled GitHub fine-grained token link for the watched repo and the exact settings Colin expects:
@@ -147,30 +151,30 @@ If fine-grained personal access tokens are blocked by org policy or approval flo
 Start Colin with the checked-in or newly generated workflow:
 
 ```bash
-go run .
+colin
 ```
 
-If you prefer a built binary, build `./colin` and run that directly.
+These docs assume `colin` is installed on your `PATH`.
 
 Useful flags:
 
-- `go run . --verbose` restores the structured service log stream in the terminal.
-- `go run . --workflow /path/to/WORKFLOW.md` points Colin at a different workflow file.
-- `go run . --port 9999` overrides the dashboard port.
-- `go run . config --workflow /path/to/WORKFLOW.md` generates or refreshes a workflow file at a custom path.
+- `colin --verbose` restores the structured service log stream in the terminal.
+- `colin --workflow /path/to/WORKFLOW.md` points Colin at a different workflow file.
+- `colin --port 9999` overrides the dashboard port.
+- `colin --workflow /path/to/WORKFLOW.md config` generates or refreshes a workflow file at a custom path.
 
 ### 5. Optional: enable webhook-driven refreshes
 
 If you opted into webhooks during setup, Colin will remind you that webhook exposure requires Tailscale. Before configuring webhooks, make sure public ingress is ready:
 
 ```bash
-go run . setup tailscale
+colin setup tailscale
 ```
 
 After public ingress is available, create or repair the watched project's Linear webhook:
 
 ```bash
-go run . setup linear
+colin setup linear
 ```
 
 Once that webhook is configured, Colin acknowledges `POST` requests to `/webhooks/linear`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, and uses watched-project Linear `Issue` `create` deliveries plus watched-project `Issue` `update` deliveries with scheduling-relevant field changes to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.

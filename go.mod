@@ -10,6 +10,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/google/go-github/v79 v79.0.0
+	github.com/google/gops v0.3.29
 	github.com/spf13/cobra v1.10.2
 	maragu.dev/gomponents v1.2.0
 	tailscale.com v1.96.5
