@@ -1,0 +1,22 @@
+name: pr-health
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pr-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Run CI checks
+        run: go tool task ci
