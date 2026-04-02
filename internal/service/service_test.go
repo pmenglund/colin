@@ -776,6 +776,75 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
+func TestLoadLinearAppSetupUsesPublicWebhookURL(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
+  project_slug: test-project
+codex:
+  command: codex app-server
+server:
+  webhook_public_url: https://hooks.colin.example.test
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("LINEAR_WEBHOOK_SECRET", "secret")
+
+	result, err := LoadLinearAppSetup(context.Background(), workflowPath)
+	if err != nil {
+		t.Fatalf("LoadLinearAppSetup() error = %v", err)
+	}
+	if result.ProjectSlug != "test-project" {
+		t.Fatalf("ProjectSlug = %q, want %q", result.ProjectSlug, "test-project")
+	}
+	if result.WebhookURL != "https://hooks.colin.example.test/webhooks/linear" {
+		t.Fatalf("WebhookURL = %q, want %q", result.WebhookURL, "https://hooks.colin.example.test/webhooks/linear")
+	}
+	if result.ActorType != "app" {
+		t.Fatalf("ActorType = %q, want %q", result.ActorType, "app")
+	}
+	if !result.SigningSecretConfigured {
+		t.Fatal("SigningSecretConfigured = false, want true")
+	}
+	if result.SigningSecretEnvVar != LinearWebhookSigningSecretEnvVar {
+		t.Fatalf("SigningSecretEnvVar = %q, want %q", result.SigningSecretEnvVar, LinearWebhookSigningSecretEnvVar)
+	}
+	if got := strings.Join(result.RequiredWebhookCategories, ","); got != "AgentSessionEvent" {
+		t.Fatalf("RequiredWebhookCategories = %q, want %q", got, "AgentSessionEvent")
+	}
+	if got := strings.Join(result.OptionalWakeupEvents, ","); got != "Issue create,Issue update" {
+		t.Fatalf("OptionalWakeupEvents = %q, want %q", got, "Issue create,Issue update")
+	}
+}
+
+func TestLoadLinearAppSetupRequiresPublicWebhookURL(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  project_slug: test-project
+codex:
+  command: codex app-server
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadLinearAppSetup(context.Background(), workflowPath)
+	if !errors.Is(err, ErrMissingWebhookPublicURL) {
+		t.Fatalf("LoadLinearAppSetup() error = %v, want ErrMissingWebhookPublicURL", err)
+	}
+}
+
 func TestResolveWebhookPublicBaseURLPrefersExplicitWebhookPublicURL(t *testing.T) {
 	t.Parallel()
 

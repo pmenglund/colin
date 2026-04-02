@@ -519,6 +519,44 @@ func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 	}
 }
 
+func TestRunPassesWorkflowFlagToSetupLinearApp(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupLinearApp: func(cmd *cobra.Command, workflowPath string) int {
+			gotWorkflow = workflowPath
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "linear-app", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup linear-app --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+}
+
 func TestSetupGitHubWebhookHelpExplainsPurpose(t *testing.T) {
 	t.Parallel()
 
@@ -605,6 +643,34 @@ func TestSetupLinearWebhookHelpExplainsPurpose(t *testing.T) {
 		t.Fatalf("help output = %q, want name flag", got)
 	}
 	if !strings.Contains(got, "setup linear") {
+		t.Fatalf("help output = %q, want command name", got)
+	}
+}
+
+func TestSetupLinearAppHelpExplainsPurpose(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "linear-app", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup linear-app --help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "/webhooks/linear") {
+		t.Fatalf("help output = %q, want webhook URL context", got)
+	}
+	if !strings.Contains(got, "AgentSessionEvent") {
+		t.Fatalf("help output = %q, want agent webhook category", got)
+	}
+	if !strings.Contains(got, "should not disable Colin's existing issue-webhook or polling wake-up path") {
+		t.Fatalf("help output = %q, want webhook guidance", got)
+	}
+	if !strings.Contains(got, "setup linear-app") {
 		t.Fatalf("help output = %q, want command name", got)
 	}
 }

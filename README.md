@@ -181,10 +181,13 @@ After public ingress is available, create or repair the watched project's Linear
 
 ```bash
 colin setup linear
+colin setup linear-app
 colin setup github-webhook
 ```
 
 Once those webhooks are configured, Colin acknowledges `POST` requests to `/webhooks/linear` and `/webhooks/github`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and uses relevant watched-project Linear issue deliveries plus relevant watched-repository GitHub pull-request review deliveries to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
+
+`colin setup linear-app` prints the current self-hosted Linear app sketch for this workflow: use an assignable app user, point the app at the same `/webhooks/linear` endpoint, subscribe the app to `AgentSessionEvent`, and keep the existing issue-webhook wake-up path enabled. The answer to "should it disable the webhook?" is no. App-triggered sessions should be additive to Colin's current poll-plus-webhook scheduling, not a replacement for it.
 
 `server.port` controls the local Colin UI. When webhook setup is enabled, `colin config` also writes `server.webhook_port`, which defaults to `8998`, so Tailscale Serve can proxy the UI while Tailscale Funnel proxies `/webhooks` on a separate public HTTPS port such as `8443`.
 

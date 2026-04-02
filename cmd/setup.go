@@ -28,6 +28,7 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 	cmd.AddCommand(newSetupGitHubCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupGitHubWebhookCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
+	cmd.AddCommand(newSetupLinearAppCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupLinearWebhookCmd(stdin, stdout, stderr, opts, deps))
 
 	return cmd
@@ -116,7 +117,8 @@ func newSetupLinearWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *r
 		Use:   "linear",
 		Short: "Create or repair the Linear webhook for this workflow",
 		Long: "Create or repair the watched project's Linear webhook so it points at Colin's public `/webhooks/linear` endpoint.\n\n" +
-			"This command uses `server.webhook_public_url` when configured, or the current Tailscale Funnel public base URL when available. It manages one team-scoped Linear webhook for the watched project, sets the webhook label with `--name`, and reminds you to store the Linear signing secret in `tracker.webhook_signing_secret` via `$LINEAR_WEBHOOK_SECRET`.",
+			"This command uses `server.webhook_public_url` when configured, or the current Tailscale Funnel public base URL when available. It manages one team-scoped Linear webhook for the watched project, sets the webhook label with `--name`, and reminds you to store the Linear signing secret in `tracker.webhook_signing_secret` via `$LINEAR_WEBHOOK_SECRET`.\n\n" +
+			"For the self-hosted Linear app sketch, use `colin setup linear-app` instead. App-owned webhooks should be configured from the Linear app setup, not replaced through this legacy team-webhook helper.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
@@ -127,5 +129,23 @@ func newSetupLinearWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *r
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.Example = "  colin setup linear\n  colin --workflow /path/to/WORKFLOW.md setup linear"
 	cmd.Flags().StringVar(&webhookName, "name", "colin", "Linear webhook label to create or repair")
+	return cmd
+}
+
+func newSetupLinearAppCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "linear-app",
+		Short: "Print the self-hosted Linear app sketch for this workflow",
+		Long: "Print the expected Linear app shape for Colin when you want an assignable app user that can both be delegated work and act on its own.\n\n" +
+			"This command resolves the public Colin webhook URL, points the Linear app at `/webhooks/linear`, lists the required `AgentSessionEvent` webhook category, and explains that app mode should not disable Colin's existing issue-webhook or polling wake-up path.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(deps.runSetupLinearApp(cmd, opts.workflowPath))
+		},
+	}
+	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.Example = "  colin setup linear-app\n  colin --workflow /path/to/WORKFLOW.md setup linear-app"
 	return cmd
 }
