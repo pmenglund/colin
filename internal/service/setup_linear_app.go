@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/pmenglund/colin/internal/config"
 )
 
 const LinearWebhookSigningSecretEnvVar = "LINEAR_WEBHOOK_SECRET"
@@ -27,6 +29,10 @@ func LoadLinearAppSetup(ctx context.Context, workflowPath string, optionFns ...O
 	if err != nil {
 		return LinearAppSetupResult{}, err
 	}
+	projectSlug := strings.TrimSpace(cfg.Tracker.ProjectSlug)
+	if projectSlug == "" {
+		return LinearAppSetupResult{}, config.ErrMissingTrackerProject
+	}
 
 	baseURL := resolveWebhookPublicBaseURL(ctx, nil, cfg.Server, "")
 	if baseURL == "" {
@@ -34,7 +40,7 @@ func LoadLinearAppSetup(ctx context.Context, workflowPath string, optionFns ...O
 	}
 
 	return LinearAppSetupResult{
-		ProjectSlug:               strings.TrimSpace(cfg.Tracker.ProjectSlug),
+		ProjectSlug:               projectSlug,
 		WebhookURL:                strings.TrimRight(baseURL, "/") + "/webhooks/linear",
 		ActorType:                 "app",
 		AssignmentBehavior:        "assigning an issue to Colin should delegate the work while the human owner remains accountable",

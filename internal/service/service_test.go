@@ -21,6 +21,7 @@ import (
 	gopsagent "github.com/google/gops/agent"
 
 	"github.com/pmenglund/colin/internal/app"
+	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/repoops"
@@ -842,6 +843,29 @@ Work on {{ .issue.identifier }}.
 	_, err := LoadLinearAppSetup(context.Background(), workflowPath)
 	if !errors.Is(err, ErrMissingWebhookPublicURL) {
 		t.Fatalf("LoadLinearAppSetup() error = %v, want ErrMissingWebhookPublicURL", err)
+	}
+}
+
+func TestLoadLinearAppSetupRequiresProjectSlug(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+codex:
+  command: codex app-server
+server:
+  webhook_public_url: https://hooks.colin.example.test
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadLinearAppSetup(context.Background(), workflowPath)
+	if !errors.Is(err, config.ErrMissingTrackerProject) {
+		t.Fatalf("LoadLinearAppSetup() error = %v, want ErrMissingTrackerProject", err)
 	}
 }
 
