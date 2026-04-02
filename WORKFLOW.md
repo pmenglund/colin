@@ -2,7 +2,7 @@
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  # Optional once you create a Linear webhook with `colin setup linear`.
+  # Optional once you create a Linear webhook with `colin setup linear webhook`.
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
   project_slug: 0ece25450f8d
   active_states:
@@ -26,7 +26,7 @@ workspace:
 
 repo:
   api_token: $GITHUB_TOKEN
-  # Optional once you configure the GitHub webhook with `colin setup github-webhook`.
+  # Optional once you configure the GitHub webhook with `colin setup github webhook`.
   webhook_signing_secret: $GITHUB_WEBHOOK_SECRET
   publish_states:
     - Review

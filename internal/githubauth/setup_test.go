@@ -99,12 +99,12 @@ func TestRenderInstructionsMentionsFallbackAndSetupCommand(t *testing.T) {
 		Owner: "acme",
 		Name:  "widgets",
 		URL:   "git@github.com:acme/widgets.git",
-	}), "colin setup github")
+	}), "colin setup github token")
 
 	for _, want := range []string{
 		"fine-grained personal access token",
 		"Contents: Read and write; Pull requests: Read and write",
-		"colin setup github",
+		"colin setup github token",
 		"classic personal access token with the `repo` scope",
 		"GITHUB_TOKEN",
 	} {

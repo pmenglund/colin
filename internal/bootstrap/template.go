@@ -12,7 +12,7 @@ const defaultWorkflowTemplate = `---
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  # Optional once you create a Linear webhook with ` + "`colin setup linear`" + `.
+  # Optional once you create a Linear webhook with ` + "`colin setup linear webhook`" + `.
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
   project_slug: {{yaml .ProjectSlug}}
   active_states:

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/pmenglund/colin/internal/githubauth"
 	"github.com/pmenglund/colin/internal/repohost"
 )
@@ -222,29 +223,48 @@ func commandExists(name string) bool {
 }
 
 func printPrerequisiteSummary(out io.Writer, prereqs Prerequisites) {
-	fmt.Fprintln(out, "Prerequisite check:")
-	fmt.Fprintf(out, "- LINEAR_API_KEY configured: %s\n", yesNo(prereqs.LinearAPIKeyConfigured))
-	fmt.Fprintf(out, "- GITHUB_TOKEN or GH_TOKEN configured: %s\n", yesNo(prereqs.GitHubTokenConfigured))
-	fmt.Fprintf(out, "- git available: %s\n", yesNo(prereqs.GitAvailable))
-	fmt.Fprintf(out, "- codex available: %s\n", yesNo(prereqs.CodexAvailable))
-	fmt.Fprintln(out)
+	renderer := newBootstrapRenderer(out)
+	renderer.Section("Prerequisites")
+	if prereqs.LinearAPIKeyConfigured {
+		renderer.Status(clioutput.StatusOK, "LINEAR_API_KEY", "configured")
+	} else {
+		renderer.Status(clioutput.StatusAction, "LINEAR_API_KEY", "export it before running Colin")
+	}
+	if prereqs.GitHubTokenConfigured {
+		renderer.Status(clioutput.StatusOK, "GITHUB_TOKEN or GH_TOKEN", "configured")
+	} else {
+		renderer.Status(clioutput.StatusAction, "GITHUB_TOKEN or GH_TOKEN", "export it before moving issues into `Review` or `Merge`")
+	}
+	if prereqs.GitAvailable {
+		renderer.Status(clioutput.StatusOK, "git", "available")
+	} else {
+		renderer.Status(clioutput.StatusWarn, "git", "not found in PATH")
+	}
+	if prereqs.CodexAvailable {
+		renderer.Status(clioutput.StatusOK, "codex", "available")
+	} else {
+		renderer.Status(clioutput.StatusWarn, "codex", "not found in PATH")
+	}
+	renderer.Line("")
 }
 
 func printCompletion(out io.Writer, result Result, autoStart bool) {
-	fmt.Fprintln(out, completionText(result, autoStart))
+	renderCompletion(out, result, autoStart)
 }
 
 func printGitHubSetupGuidance(out io.Writer, repoURL string) {
 	details, err := githubSetupDetails(repoURL)
 	if err != nil {
-		fmt.Fprintln(out, "GitHub token setup:")
-		fmt.Fprintln(out, "- Colin recommends exporting GITHUB_TOKEN before moving issues into `Review` or `Merge`.")
-		fmt.Fprintln(out, "- Run `colin setup repo` after configuration for the exact token settings.")
-		fmt.Fprintln(out)
+		renderer := newBootstrapRenderer(out)
+		renderer.Section("GitHub token setup")
+		renderer.Status(clioutput.StatusAction, "", "Colin recommends exporting GITHUB_TOKEN before moving issues into `Review` or `Merge`")
+		renderer.Status(clioutput.StatusAction, "", "Run `colin setup repo` after configuration for the exact token settings")
+		renderer.Line("")
 		return
 	}
-	fmt.Fprintln(out, githubauth.RenderInstructions(details, "colin setup repo"))
-	fmt.Fprintln(out)
+	renderInstructionSection(out, "GitHub token setup", githubauth.RenderInstructions(details, "colin setup repo"))
+	renderer := newBootstrapRenderer(out)
+	renderer.Line("")
 }
 
 func githubSetupDetails(repoURL string) (githubauth.SetupDetails, error) {
@@ -347,6 +367,79 @@ func yesNo(value bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func renderCompletion(out io.Writer, result Result, autoStart bool) {
+	renderer := newBootstrapRenderer(out)
+	renderer.Section("Overview")
+	renderer.Item("Workflow file", result.WorkflowPath)
+
+	renderer.Section("Checks")
+	if result.SessionLinearAPIKeyLoaded {
+		renderer.Status(clioutput.StatusAction, "LINEAR_API_KEY", "loaded for this setup session only; export it in your shell before the next Colin run")
+	} else if result.Prereqs.LinearAPIKeyConfigured {
+		renderer.Status(clioutput.StatusOK, "LINEAR_API_KEY", "already configured in this shell")
+	} else {
+		renderer.Status(clioutput.StatusAction, "LINEAR_API_KEY", "export it in your shell before running Colin")
+	}
+	if result.SessionGitHubTokenLoaded {
+		renderer.Status(clioutput.StatusAction, "GITHUB_TOKEN", "loaded for this setup session only; export it in your shell before the next Colin run")
+	} else if result.Prereqs.GitHubTokenConfigured {
+		renderer.Status(clioutput.StatusOK, "GITHUB_TOKEN or GH_TOKEN", "already configured in this shell")
+	} else {
+		renderer.Status(clioutput.StatusAction, "GITHUB_TOKEN", "export it before moving issues into `Review` or `Merge`. Run `colin setup repo` for the exact token settings")
+	}
+	if !result.Prereqs.CodexAvailable {
+		renderer.Status(clioutput.StatusWarn, "codex", "not found in PATH. Install or expose Codex before expecting Colin to launch coding runs")
+	}
+	if !result.Prereqs.GitAvailable {
+		renderer.Status(clioutput.StatusWarn, "git", "not found in PATH. Colin needs git for workspace preparation")
+	}
+
+	if result.Answers.WantsWebhook {
+		renderer.Section("Next steps")
+		if autoStart {
+			renderer.Status(clioutput.StatusAction, "Webhooks", "Webhook setup requires Tailscale. Once the setup URL is printed, open it and then run `colin setup linear webhook` after Funnel is ready")
+		} else {
+			renderer.Status(clioutput.StatusAction, "Webhooks", "Webhook setup requires Tailscale. After Colin is running, use `colin setup tailscale` and then `colin setup linear webhook`, or open `/setup/funnel` from the local UI")
+		}
+		return
+	}
+
+	renderer.Section("Notes")
+	renderer.Status(clioutput.StatusInfo, "Webhooks", "setup skipped")
+}
+
+func renderInstructionSection(out io.Writer, title string, instructions string) {
+	renderer := newBootstrapRenderer(out)
+	renderer.Section(title)
+	for _, line := range strings.Split(strings.TrimSpace(instructions), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasSuffix(trimmed, "setup:") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			renderer.Status(clioutput.StatusAction, "", strings.TrimPrefix(trimmed, "- "))
+			continue
+		}
+		renderer.Line(trimmed)
+	}
+}
+
+func newBootstrapRenderer(out io.Writer) *clioutput.Renderer {
+	return clioutput.New(out, bootstrapIsTerminalStream(out))
+}
+
+func bootstrapIsTerminalStream(stream any) bool {
+	file, ok := stream.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func firstNonEmpty(values ...string) string {

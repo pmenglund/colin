@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/pmenglund/colin/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -21,11 +22,7 @@ func runSetupRepo(cmd *cobra.Command, workflowPath string) int {
 		return 1
 	}
 
-	cmd.Printf("%s repository: %s/%s\n", result.BackendDisplayName, result.RepositoryOwner, result.RepositoryName)
-	cmd.Printf("Repository source: %s\n", result.RepositorySource)
-	cmd.Printf("Repository URL: %s\n", result.RepositoryURL)
-	cmd.Println()
-	cmd.Println(result.Instructions)
+	renderRepoTokenSetup(cmd, result, result.Instructions)
 	return 0
 }
 
@@ -46,10 +43,36 @@ func runSetupGitHub(cmd *cobra.Command, workflowPath string) int {
 		return 1
 	}
 
-	cmd.Printf("%s repository: %s/%s\n", result.BackendDisplayName, result.RepositoryOwner, result.RepositoryName)
-	cmd.Printf("Repository source: %s\n", result.RepositorySource)
-	cmd.Printf("Repository URL: %s\n", result.RepositoryURL)
-	cmd.Println()
-	cmd.Println(strings.ReplaceAll(result.Instructions, "colin setup repo", "colin setup github"))
+	renderRepoTokenSetup(cmd, result, strings.ReplaceAll(result.Instructions, "colin setup repo", "colin setup github token"))
 	return 0
+}
+
+func renderRepoTokenSetup(cmd *cobra.Command, result service.RepoTokenSetupResult, instructions string) {
+	renderer := newCommandRenderer(cmd)
+	renderer.Section("Overview")
+	renderer.Item(result.BackendDisplayName+" repository", result.RepositoryOwner+"/"+result.RepositoryName)
+	renderer.Item("Repository source", result.RepositorySource)
+	renderer.Item("Repository URL", result.RepositoryURL)
+	if result.RecommendedEnvVar != "" {
+		renderer.Item("Recommended env var", result.RecommendedEnvVar)
+	}
+
+	lines := linesWithoutHeading(instructions)
+	if len(lines) == 0 {
+		return
+	}
+
+	renderer.Section("Next steps")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			renderer.Line("")
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			renderer.Status(clioutput.StatusAction, "", strings.TrimPrefix(trimmed, "- "))
+			continue
+		}
+		renderer.Line(trimmed)
+	}
 }

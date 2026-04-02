@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/spf13/cobra"
 
 	"github.com/pmenglund/colin/internal/service"
@@ -19,16 +20,22 @@ func runSetupLinearWebhook(cmd *cobra.Command, workflowPath string, webhookName 
 		return 1
 	}
 
-	cmd.Printf("Linear webhook: %s\n", result.Action)
-	cmd.Printf("Webhook name: %s\n", result.WebhookName)
-	cmd.Printf("Team: %s (%s)\n", result.TeamName, result.TeamID)
-	cmd.Printf("Webhook URL: %s\n", result.WebhookURL)
-	cmd.Printf("Webhook ID: %s\n", result.WebhookID)
+	renderer := newCommandRenderer(cmd)
+	renderer.Section("Overview")
+	renderer.Item("Linear webhook", result.Action)
+	renderer.Item("Webhook name", result.WebhookName)
+	renderer.Item("Team", result.TeamName+" ("+result.TeamID+")")
+	renderer.Item("Webhook URL", result.WebhookURL)
+	renderer.Item("Webhook ID", result.WebhookID)
+
+	renderer.Section("Checks")
 	if result.SigningSecretConfigured {
-		cmd.Println("Signing secret: configured")
+		renderer.Status(clioutput.StatusOK, "Signing secret", "configured")
 	} else {
-		cmd.Printf("Next step: copy the Linear signing secret from the webhook detail page into `%s`, then reference it from `WORKFLOW.md` as `tracker.webhook_signing_secret: $%s`.\n", result.SigningSecretEnvVar, result.SigningSecretEnvVar)
+		renderer.Status(clioutput.StatusAction, "Signing secret", "copy the Linear signing secret from the webhook detail page into `"+result.SigningSecretEnvVar+"`, then reference it from `WORKFLOW.md` as `tracker.webhook_signing_secret: $"+result.SigningSecretEnvVar+"`")
 	}
-	cmd.Printf("Note: Colin uses relevant Linear issue webhooks to queue an immediate reconciliation pass, while polling remains active as a fallback.\n")
+
+	renderer.Section("Notes")
+	renderer.Status(clioutput.StatusInfo, "", "Colin uses relevant Linear issue webhooks to queue an immediate reconciliation pass, while polling remains active as a fallback")
 	return 0
 }

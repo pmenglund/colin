@@ -217,9 +217,9 @@ func completionText(result Result, autoStart bool) string {
 	}
 	if result.Answers.WantsWebhook {
 		if autoStart {
-			lines = append(lines, "Webhook setup requires Tailscale. Colin will continue starting; once the setup URL is printed, open it and then run `colin setup linear` after Funnel is ready.")
+			lines = append(lines, "Webhook setup requires Tailscale. Colin will continue starting; once the setup URL is printed, open it and then run `colin setup linear webhook` after Funnel is ready.")
 		} else {
-			lines = append(lines, "Webhook setup requires Tailscale. After Colin is running, use `colin setup tailscale` and then `colin setup linear`, or open `/setup/funnel` from the local UI.")
+			lines = append(lines, "Webhook setup requires Tailscale. After Colin is running, use `colin setup tailscale` and then `colin setup linear webhook`, or open `/setup/funnel` from the local UI.")
 		}
 	} else {
 		lines = append(lines, "Webhook setup skipped.")

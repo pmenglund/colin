@@ -89,10 +89,10 @@ func TestRunWritesWorkflowAndPrintsWebhookSkip(t *testing.T) {
 	}
 
 	gotOutput := output.String()
-	if !strings.Contains(gotOutput, "Wrote "+filepath.Join(tempDir, "WORKFLOW.md")) {
-		t.Fatalf("output = %q, want written message", gotOutput)
+	if !strings.Contains(gotOutput, "Workflow file: "+filepath.Join(tempDir, "WORKFLOW.md")) {
+		t.Fatalf("output = %q, want workflow file summary", gotOutput)
 	}
-	if !strings.Contains(gotOutput, "Webhook setup skipped.") {
+	if !strings.Contains(gotOutput, "Webhooks: setup skipped") {
 		t.Fatalf("output = %q, want webhook skipped message", gotOutput)
 	}
 }
@@ -167,7 +167,7 @@ func TestRunPrintsAutoStartWebhookGuidance(t *testing.T) {
 	if !strings.Contains(got, "Webhook setup requires Tailscale.") {
 		t.Fatalf("output = %q, want webhook guidance", got)
 	}
-	if !strings.Contains(got, "run `colin setup linear`") {
+	if !strings.Contains(got, "run `colin setup linear webhook`") {
 		t.Fatalf("output = %q, want setup linear guidance", got)
 	}
 	data, err := os.ReadFile(filepath.Join(tempDir, "WORKFLOW.md"))
@@ -206,11 +206,11 @@ func TestRunPrintsGitHubSetupGuidanceWhenTokenMissing(t *testing.T) {
 
 	got := output.String()
 	for _, want := range []string{
-		"GITHUB_TOKEN or GH_TOKEN configured: no",
+		"[ACTION] GITHUB_TOKEN or GH_TOKEN: export it before moving issues into `Review` or `Merge`",
 		"fine-grained personal access token",
 		"Contents: Read and write; Pull requests: Read and write",
 		"colin setup repo",
-		"Next step: export GITHUB_TOKEN before moving issues into `Review` or `Merge`.",
+		"[ACTION] GITHUB_TOKEN: export it before moving issues into `Review` or `Merge`.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output = %q, want %q", got, want)
@@ -243,7 +243,7 @@ func TestRunPrintsGitHubTokenConfiguredWhenPresent(t *testing.T) {
 	}
 
 	got := output.String()
-	if !strings.Contains(got, "GITHUB_TOKEN or GH_TOKEN is already configured in this shell.") {
+	if !strings.Contains(got, "[OK] GITHUB_TOKEN or GH_TOKEN: already configured in this shell") {
 		t.Fatalf("output = %q, want configured token message", got)
 	}
 }
