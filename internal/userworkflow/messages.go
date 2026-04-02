@@ -35,6 +35,15 @@ func ReviewSyncTimedOut(pr domain.PullRequestRef, timeout time.Duration, pollInt
 	return strings.Join(lines, "\n")
 }
 
+func ReviewSyncReady(pr domain.PullRequestRef, unresolvedThreads int) string {
+	lines := []string{"GitHub review feedback synced, so Colin is starting work now."}
+	lines = appendPullRequest(lines, &pr)
+	lines = append(lines, fmt.Sprintf("- Unresolved review threads: `%d`", unresolvedThreads))
+	lines = append(lines, "- What Colin is doing next: starting the next coding round with the synced GitHub review feedback.")
+	lines = append(lines, "- What you should do: nothing yet unless Colin later reports that more review follow-up is needed.")
+	return strings.Join(lines, "\n")
+}
+
 func ReviewBlocked(pr *domain.PullRequestRef, handled int, remaining int, reason string, codexSummary string) string {
 	lines := []string{"Staying in `Todo` until GitHub review feedback is fully addressed."}
 	lines = appendPullRequest(lines, pr)

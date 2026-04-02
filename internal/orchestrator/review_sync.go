@@ -63,11 +63,7 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	if len(reviewContext.Threads) > 0 {
 		issue.ReviewThreads = reviewContext.Threads
 		if state != nil && state.comment != nil && state.comment.RootCommentID != "" {
-			state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
-				"GitHub review feedback synced.\n\n- Pull request: `#%d`\n- Unresolved review threads: `%d`\n- Colin is starting work now.",
-				reviewContext.PullRequest.Number,
-				len(reviewContext.Threads),
-			))
+			state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, userworkflow.ReviewSyncReady(reviewContext.PullRequest, len(reviewContext.Threads)))
 		}
 		delete(o.reviewSync, issue.ID)
 		return issue, true

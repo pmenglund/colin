@@ -52,6 +52,27 @@ func TestReviewBlockedExplainsHumanFollowUp(t *testing.T) {
 	}
 }
 
+func TestReviewSyncReadyExplainsAutomaticResume(t *testing.T) {
+	t.Parallel()
+
+	got := ReviewSyncReady(domain.PullRequestRef{
+		Number: 17,
+		URL:    "https://example.test/pr/17",
+	}, 2)
+
+	for _, want := range []string{
+		"GitHub review feedback synced, so Colin is starting work now.",
+		"- PR: `#17`",
+		"- Unresolved review threads: `2`",
+		"- What Colin is doing next: starting the next coding round with the synced GitHub review feedback.",
+		"- What you should do: nothing yet unless Colin later reports that more review follow-up is needed.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ReviewSyncReady() = %q, want substring %q", got, want)
+		}
+	}
+}
+
 func TestMergeWaitingForReviewExplainsAutomaticRetry(t *testing.T) {
 	t.Parallel()
 
