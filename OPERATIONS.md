@@ -108,6 +108,14 @@ colin setup linear
 
 That command creates or repairs one team-scoped Linear webhook for the watched project, points it at `<public-base-url>/webhooks/linear`, and reminds you to store the signing secret as `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
 
+To sketch the self-hosted Linear app shape for the same workflow, run:
+
+```bash
+colin setup linear-app
+```
+
+That command does not mutate Linear. It prints the app-facing webhook URL, reminds you that the app should be an assignable `actor=app` installation, lists `AgentSessionEvent` as the required webhook category, and explicitly says that Colin should keep its existing issue-webhook and polling wake-up path enabled. The app should share `/webhooks/linear`; it should not disable the webhook.
+
 To print the GitHub webhook settings for the watched repository after public ingress is ready, run:
 
 ```bash
@@ -365,6 +373,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When webhook support is enabled, `server.webhook_port` controls the dedicated local webhook listener and defaults to `8998` from `colin config`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for that webhook port and derives the public webhook base URL from it. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
 - Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
+- Colin can also print a self-hosted Linear app sketch with `colin setup linear-app`. That sketch keeps `/webhooks/linear` as the callback URL and treats app-triggered agent sessions as additive to the existing issue-webhook wake-up path.
 - Colin can print the watched repository's GitHub webhook settings with `colin setup github-webhook`. The GitHub signing secret should be stored via `repo.webhook_signing_secret: $GITHUB_WEBHOOK_SECRET`.
 - Watched-project Linear `Issue` `create` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals, and watched-project `Issue` `update` deliveries can do the same when they include scheduling-relevant field changes such as `stateId`, `projectId`, `teamId`, `priority`, `title`, `description`, `branchName`, or `labelIds`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
