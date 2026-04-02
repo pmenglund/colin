@@ -285,6 +285,9 @@ func TestBlockMergeForCodexReviewKeepsIssueInMergeWhenApprovalPending(t *testing
 	if !strings.Contains(summary, "Keeping issue in `Merge`") {
 		t.Fatalf("summary = %q, want keep in merge message", summary)
 	}
+	if !strings.Contains(summary, "What Colin is doing next: retrying merge automation automatically after the Codex review state changes.") {
+		t.Fatalf("summary = %q, want automatic-retry guidance", summary)
+	}
 }
 
 func TestBlockMergeForCodexReviewKeepsIssueInMergeWhileWaitingForPickup(t *testing.T) {
@@ -326,6 +329,9 @@ func TestBlockMergeForCodexReviewKeepsIssueInMergeWhileWaitingForPickup(t *testi
 	}
 	if !strings.Contains(summary, "eyes") {
 		t.Fatalf("summary = %q, want eyes reaction guidance", summary)
+	}
+	if !strings.Contains(summary, "What you should do: leave the issue in `Merge` unless Colin later returns it to `Review`.") {
+		t.Fatalf("summary = %q, want human guidance", summary)
 	}
 }
 
@@ -567,6 +573,9 @@ func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenThreadsRemain(t *testin
 	}
 	if !strings.Contains(summary, "Unresolved Codex review threads") {
 		t.Fatalf("summary = %q, want unresolved thread blocker", summary)
+	}
+	if !strings.Contains(summary, "What you should do: resolve the remaining Codex PR feedback, then move the issue back to `Merge`.") {
+		t.Fatalf("summary = %q, want human guidance", summary)
 	}
 }
 
@@ -1009,8 +1018,11 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 	if !strings.Contains(result.Summary, "waiting for a `thumbs up` reaction") {
 		t.Fatalf("result.Summary = %q, want thumbs up blocker", result.Summary)
 	}
-	if !strings.Contains(result.Summary, "Keep the issue in `Merge`") {
+	if !strings.Contains(result.Summary, "What you should do: leave the issue in `Merge` unless Colin later returns it to `Review`.") {
 		t.Fatalf("result.Summary = %q, want keep in merge instruction", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "What Colin is doing next: retrying merge automation automatically after the Codex review state changes.") {
+		t.Fatalf("result.Summary = %q, want automatic-retry guidance", result.Summary)
 	}
 
 	if got := fakeGitHub.MergePullRequestCallCount(); got != 1 {

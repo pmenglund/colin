@@ -220,12 +220,115 @@ func TestPrepareReviewIssueWaitsWhenTrackedPullRequestExistsButThreadsHaveNotSyn
 	if !strings.Contains(tracker.issueComments[0], "PR: `#11`") {
 		t.Fatalf("issue comment = %q, want PR reference", tracker.issueComments[0])
 	}
+	if !strings.Contains(tracker.issueComments[0], "What Colin is doing next: polling GitHub for unresolved review threads before starting the next coding round.") {
+		t.Fatalf("issue comment = %q, want next-step guidance", tracker.issueComments[0])
+	}
+	if !strings.Contains(tracker.issueComments[0], "What you should do: nothing yet unless Colin later reports that the sync timed out.") {
+		t.Fatalf("issue comment = %q, want human guidance", tracker.issueComments[0])
+	}
 	state, ok := orch.reviewSync[issue.ID]
 	if !ok {
 		t.Fatal("reviewSync state missing")
 	}
 	if state.comment == nil || state.comment.RootCommentID == "" {
 		t.Fatalf("comment state = %#v, want persisted root comment id", state.comment)
+	}
+}
+
+func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testing.T) {
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+		Number:      11,
+		URL:         "https://example.test/pr/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []repoops.GitHubReviewThread{
+			{
+				ID:               "thread-1",
+				IsResolved:       false,
+				IsOutdated:       false,
+				ViewerCanReply:   true,
+				ViewerCanResolve: true,
+				Path:             "internal/foo.go",
+				Comments: repoops.GitHubReviewCommentConnection{
+					Comments: []repoops.GitHubReviewComment{
+						{ID: "comment-1", Body: "Please fix this.", AuthorLogin: "reviewer"},
+					},
+				},
+			},
+		},
+	}, nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithGitHubClient(cfg, logger, fakeGitHub),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		reviewSync: map[string]*reviewSyncState{
+			"1": {
+				firstObserved: time.Date(2026, time.March, 30, 18, 55, 0, 0, time.UTC),
+				comment:       &commentThreadState{RootCommentID: "root"},
+			},
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	branch := "colin-123"
+	now := time.Date(2026, time.March, 30, 19, 0, 0, 0, time.UTC)
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "COLIN-123",
+		Title:      "Resume coding after review threads sync",
+		State:      "Todo",
+		BranchName: &branch,
+		ReviewCycle: &domain.ReviewCycle{
+			EnteredReviewAt:  now.Add(-2 * time.Hour),
+			ReturnedToTodoAt: now.Add(-time.Hour),
+		},
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:  11,
+			PullRequestURL:     "https://example.test/pr/11",
+			PullRequestHeadRef: "colin-123",
+			PullRequestBaseRef: "symphony",
+		},
+	}
+
+	prepared, ready := orch.prepareReviewIssue(context.Background(), issue, now)
+
+	if !ready {
+		t.Fatal("prepareReviewIssue() ready = false, want true")
+	}
+	if prepared.PullRequest == nil || prepared.PullRequest.Number != 11 {
+		t.Fatalf("PullRequest = %#v, want tracked PR #11", prepared.PullRequest)
+	}
+	if got := len(prepared.ReviewThreads); got != 1 {
+		t.Fatalf("ReviewThreads length = %d, want 1", got)
+	}
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
+	}
+	if !strings.Contains(tracker.commentReplies[0], "GitHub review feedback synced, so Colin is starting work now.") {
+		t.Fatalf("comment reply = %q, want sync-ready message", tracker.commentReplies[0])
+	}
+	if !strings.Contains(tracker.commentReplies[0], "What Colin is doing next: starting the next coding round with the synced GitHub review feedback.") {
+		t.Fatalf("comment reply = %q, want next-step guidance", tracker.commentReplies[0])
+	}
+	if !strings.Contains(tracker.commentReplies[0], "What you should do: nothing yet unless Colin later reports that more review follow-up is needed.") {
+		t.Fatalf("comment reply = %q, want human guidance", tracker.commentReplies[0])
+	}
+	if _, ok := orch.reviewSync[issue.ID]; ok {
+		t.Fatal("reviewSync state was not cleared after review threads synced")
 	}
 }
 

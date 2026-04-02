@@ -14,6 +14,7 @@ import (
 	"github.com/pmenglund/colin/internal/execplan"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/tracker"
+	"github.com/pmenglund/colin/internal/userworkflow"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/internal/workspace"
 )
@@ -1055,38 +1056,11 @@ func buildReviewThreadReplyBody(_ string) string {
 }
 
 func buildReviewReadySummary(summary string, pr *domain.PullRequestRef, handled int, remaining int) string {
-	lines := []string{"Ready for review."}
-	if pr != nil && pr.Number > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", pr.Number))
-	}
-	if pr != nil && strings.TrimSpace(pr.URL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", pr.URL))
-	}
-	lines = append(lines, fmt.Sprintf("- Review threads handled: `%d`", handled))
-	lines = append(lines, fmt.Sprintf("- Review threads remaining: `%d`", remaining))
-	if strings.TrimSpace(summary) != "" {
-		lines = append(lines, "", "Codex summary:", "", summary)
-	}
-	return strings.Join(lines, "\n")
+	return userworkflow.ReviewReady(pr, handled, remaining, summary)
 }
 
 func buildReviewBlockedSummary(summary string, pr *domain.PullRequestRef, handled int, remaining int, reason string) string {
-	lines := []string{"Staying in `Todo` until GitHub review feedback is fully addressed."}
-	if pr != nil && pr.Number > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", pr.Number))
-	}
-	if pr != nil && strings.TrimSpace(pr.URL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", pr.URL))
-	}
-	lines = append(lines, fmt.Sprintf("- Review threads handled: `%d`", handled))
-	lines = append(lines, fmt.Sprintf("- Review threads remaining: `%d`", remaining))
-	if strings.TrimSpace(reason) != "" {
-		lines = append(lines, fmt.Sprintf("- Blocker: %s", reason))
-	}
-	if strings.TrimSpace(summary) != "" {
-		lines = append(lines, "", "Codex summary:", "", summary)
-	}
-	return strings.Join(lines, "\n")
+	return userworkflow.ReviewBlocked(pr, handled, remaining, reason, summary)
 }
 
 func buildMergeBlockedSummary(cfg domain.ServiceConfig, reviewContext repoops.ReviewContext) (string, bool, bool) {
@@ -1095,29 +1069,10 @@ func buildMergeBlockedSummary(cfg domain.ServiceConfig, reviewContext repoops.Re
 		return "", false, false
 	}
 
-	lines := []string{"Keeping issue in `Merge` while waiting for Codex PR review feedback."}
 	if block.MoveToReview {
-		lines = []string{"Returning issue to `Review` because Codex PR feedback still needs to be resolved."}
-	} else if block.WaitingForPickup {
-		lines = []string{"Keeping issue in `Merge` while waiting for Codex PR review to start."}
+		return userworkflow.MergeReturnedToReview(reviewContext.PullRequest, block.ThreadCount), true, true
 	}
-	if reviewContext.PullRequest.Number > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
-	}
-	if strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", reviewContext.PullRequest.URL))
-	}
-	if block.PendingApproval {
-		lines = append(lines, "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
-	}
-	if block.WaitingForPickup {
-		lines = append(lines, "- Codex review status: waiting for Codex to acknowledge the PR with an `eyes` reaction before merge automation continues.")
-	}
-	if block.ThreadCount > 0 {
-		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", block.ThreadCount))
-	}
-	lines = append(lines, mergeReviewBlockedNextStep(block.MoveToReview))
-	return strings.Join(lines, "\n"), true, block.MoveToReview
+	return userworkflow.MergeWaitingForReview(reviewContext.PullRequest, block.WaitingForPickup, block.PendingApproval), true, false
 }
 
 func codexReviewApprovalPending(reviewContext repoops.ReviewContext) bool {
@@ -1173,13 +1128,6 @@ func mergeReviewBlockDisposition(cfg domain.ServiceConfig, reviewContext repoops
 		block.Blocked = true
 	}
 	return block
-}
-
-func mergeReviewBlockedNextStep(moveToReview bool) string {
-	if moveToReview {
-		return "- Resolve the remaining Codex PR feedback, then move the issue back to `Merge`."
-	}
-	return "- Keep the issue in `Merge`. Colin will decide whether to merge or return it to `Review` after Codex leaves feedback or a `thumbs up` reaction."
 }
 
 func pullRequestRef(pr domain.PullRequestRef) *domain.PullRequestRef {
@@ -1358,28 +1306,15 @@ func isHumanMergeFailure(err error) bool {
 }
 
 func buildMergeFailureSummary(result repoops.Result, reviewState string, err error) string {
-	lines := []string{
-		fmt.Sprintf("Colin could not merge this PR automatically, so it moved the issue back to `%s`.", reviewState),
-	}
-	if result.PRNumber > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", result.PRNumber))
-	}
-	if strings.TrimSpace(result.PRURL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", result.PRURL))
-	}
-	if strings.TrimSpace(result.Branch) != "" {
-		lines = append(lines, fmt.Sprintf("- Branch: `%s`", result.Branch))
-	}
+	reason := ""
 	if err != nil {
-		lines = append(lines, fmt.Sprintf("- Reason: %s", strings.TrimSpace(err.Error())))
+		reason = err.Error()
 	}
-	if result.PRNumber > 0 && strings.TrimSpace(result.BaseRef) != "" {
-		lines = append(lines, fmt.Sprintf("- What to do: check out the PR branch, merge `%s`, resolve any conflicts, push the updated branch, then move the issue back to `Merge`.", result.BaseRef))
-		lines = append(lines, fmt.Sprintf("- Suggested command: `gh pr checkout %d && git fetch origin %s && git merge origin/%s`", result.PRNumber, result.BaseRef, result.BaseRef))
-	} else {
-		lines = append(lines, "- What to do: resolve the merge issue on the PR branch, push the updated branch, then move the issue back to `Merge`.")
-	}
-	return strings.Join(lines, "\n")
+	return userworkflow.MergeFailure(domain.PullRequestRef{
+		Number: result.PRNumber,
+		URL:    result.PRURL,
+		State:  result.PRState,
+	}, result.Branch, result.BaseRef, reason, reviewState)
 }
 
 func buildMergeRecoveryPrompt(issue domain.Issue, result repoops.Result, mergeErr error) string {
@@ -1435,66 +1370,20 @@ func buildMergeRecoveryContinuationPrompt(issue domain.Issue, result repoops.Res
 }
 
 func buildMergeRecoveryFailureSummary(result repoops.Result, reviewState string, mergeErr error, reason string, recoveryOutput string) string {
-	lines := []string{
-		fmt.Sprintf("Colin hit a merge conflict, tried to repair it automatically, and then moved the issue back to `%s`.", reviewState),
-	}
-	if result.PRNumber > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", result.PRNumber))
-	}
-	if strings.TrimSpace(result.PRURL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", result.PRURL))
-	}
-	if strings.TrimSpace(result.Branch) != "" {
-		lines = append(lines, fmt.Sprintf("- Branch: `%s`", result.Branch))
-	}
-	if mergeErr != nil {
-		lines = append(lines, fmt.Sprintf("- Original merge error: %s", strings.TrimSpace(mergeErr.Error())))
-	}
-	if strings.TrimSpace(reason) != "" {
-		lines = append(lines, fmt.Sprintf("- Recovery blocker: %s", strings.TrimSpace(reason)))
-	}
-	if strings.TrimSpace(recoveryOutput) != "" {
-		lines = append(lines, "", "Codex recovery output:", "", strings.TrimSpace(recoveryOutput))
-	}
-	if result.PRNumber > 0 && strings.TrimSpace(result.BaseRef) != "" {
-		lines = append(lines, "", fmt.Sprintf("- What to do: check out the PR branch, merge `%s`, resolve any conflicts, push the updated branch, then move the issue back to `Merge`.", result.BaseRef))
-		lines = append(lines, fmt.Sprintf("- Suggested command: `gh pr checkout %d && git fetch origin %s && git merge origin/%s`", result.PRNumber, result.BaseRef, result.BaseRef))
-	}
-	return strings.Join(lines, "\n")
+	return userworkflow.MergeRecoveryFailure(domain.PullRequestRef{
+		Number: result.PRNumber,
+		URL:    result.PRURL,
+		State:  result.PRState,
+	}, result.Branch, result.BaseRef, mergeErr, reason, reviewState, recoveryOutput)
 }
 
 func buildMergeRecoveryReviewBlockedSummary(cfg domain.ServiceConfig, recoverySummary string, reviewContext repoops.ReviewContext) string {
 	block := mergeReviewBlockDisposition(cfg, reviewContext)
-	lines := []string{"Colin repaired the merge conflict, but the updated PR still needs Codex review before it can be merged."}
-	if reviewContext.PullRequest.Number > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", reviewContext.PullRequest.Number))
-	}
-	if strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", reviewContext.PullRequest.URL))
-	}
-	if strings.TrimSpace(recoverySummary) != "" {
-		lines = append(lines, "", "Codex repair summary:", "", strings.TrimSpace(recoverySummary))
-	}
-	if block.PendingApproval {
-		lines = append(lines, "", "- Codex review status: waiting for a `thumbs up` reaction after the latest `eyes` reaction.")
-	}
-	if block.WaitingForPickup {
-		lines = append(lines, "", "- Codex review status: waiting for Codex to acknowledge the PR with an `eyes` reaction before merge automation continues.")
-	}
-	if block.ThreadCount > 0 {
-		lines = append(lines, fmt.Sprintf("- Unresolved Codex review threads: `%d`", block.ThreadCount))
-	}
-	lines = append(lines, mergeReviewBlockedNextStep(block.MoveToReview))
-	return strings.Join(lines, "\n")
+	return userworkflow.MergeRecoveryReviewBlocked(reviewContext.PullRequest, recoverySummary, block.WaitingForPickup, block.PendingApproval, block.ThreadCount)
 }
 
 func buildNoReviewableChangesSummary(targetState string) string {
-	lines := []string{
-		fmt.Sprintf("Colin did not find reviewable repository changes, so it moved the issue back to `%s` instead of opening a PR.", targetState),
-		"- What happened: the workspace has no uncommitted changes and the branch is not ahead of the configured base branch.",
-		"- Next step: keep working until there is reviewable code or explicitly hand the issue to `Refine`.",
-	}
-	return strings.Join(lines, "\n")
+	return userworkflow.NoReviewableChanges(targetState)
 }
 
 func buildDuplicateExecPlanSummary(issue domain.Issue) string {
