@@ -36,6 +36,8 @@ Colin uses these handoff states:
 - `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`.
 - `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
 
+Colin's `[colin]` comments are meant to make the next step explicit. When an issue returns from `Review` to `Todo`, Colin says whether it is still waiting for GitHub review threads to sync or whether more PR feedback still needs to be addressed. When an issue is in `Merge`, Colin says whether it is retrying automatically while Codex review is pending, or whether a human needs to resolve review feedback or a merge problem before moving the issue forward again.
+
 Colin treats these as terminal states and stops work when an issue enters them:
 
 - `Done`
@@ -63,6 +65,8 @@ Colin runs as a long-lived orchestrator:
 4. It posts progress back to Linear and exposes a local dashboard for operators.
 
 When a coding run finishes and Colin hands work off, the Linear issue comment is meant to be reviewable on its own. Colin now asks Codex to describe the change in before/after terms, include verification details, and prefer Playwright screenshots for browser-visible work or terminal or TUI captures for terminal-visible work, with textual fallback because the issue comment itself is text-only.
+
+Those handoff comments also explain what Colin is doing next and what human action is required. That includes returned-review cases where GitHub review feedback has not synced yet, cases where review feedback still keeps the issue in `Todo`, and merge-conflict cases where Colin either repairs the branch automatically or sends the issue back to `Review` with concrete follow-up instructions.
 
 Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `update` webhooks that change scheduling-relevant fields such as `stateId`, can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react.
 

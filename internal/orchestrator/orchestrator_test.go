@@ -12,6 +12,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/userworkflow"
 )
 
 type trackerStub struct {
@@ -832,15 +833,18 @@ func TestHandleWorkerExitMergeBlockedBackToReviewPostsSummary(t *testing.T) {
 			Issue:   issue,
 			RunType: codex.RunTypeMerge,
 			Status:  "succeeded",
-			Summary: "Returning issue to `Review` because Codex PR feedback still needs to be resolved.",
+			Summary: userworkflow.MergeReturnedToReview(domain.PullRequestRef{}, 0),
 		},
 	})
 
 	if len(tracker.commentReplies) != 1 {
 		t.Fatalf("commentReplies length = %d, want 1", len(tracker.commentReplies))
 	}
-	if tracker.commentReplies[0] != "[colin] Returning issue to `Review` because Codex PR feedback still needs to be resolved." {
+	if !strings.Contains(tracker.commentReplies[0], "[colin] Returning issue to `Review` because Codex PR feedback still needs to be resolved.") {
 		t.Fatalf("first comment reply = %q", tracker.commentReplies[0])
+	}
+	if !strings.Contains(tracker.commentReplies[0], "What you should do: resolve the remaining Codex PR feedback, then move the issue back to `Merge`.") {
+		t.Fatalf("first comment reply = %q, want human guidance", tracker.commentReplies[0])
 	}
 	if got := orch.completed["1"]; got != "Review" {
 		t.Fatalf("completed state = %q, want %q", got, "Review")
@@ -880,15 +884,18 @@ func TestHandleWorkerExitMergeBlockedBackToReviewCreatesIssueCommentWhenRootIsMi
 			Issue:   issue,
 			RunType: codex.RunTypeMerge,
 			Status:  "succeeded",
-			Summary: "Returning issue to `Review` because Codex PR feedback still needs to be resolved.",
+			Summary: userworkflow.MergeReturnedToReview(domain.PullRequestRef{}, 0),
 		},
 	})
 
 	if got := len(tracker.issueComments); got != 1 {
 		t.Fatalf("issueComments length = %d, want 1", got)
 	}
-	if tracker.issueComments[0] != "[colin] Returning issue to `Review` because Codex PR feedback still needs to be resolved." {
+	if !strings.Contains(tracker.issueComments[0], "[colin] Returning issue to `Review` because Codex PR feedback still needs to be resolved.") {
 		t.Fatalf("issue comment = %q", tracker.issueComments[0])
+	}
+	if !strings.Contains(tracker.issueComments[0], "What you should do: resolve the remaining Codex PR feedback, then move the issue back to `Merge`.") {
+		t.Fatalf("issue comment = %q, want human guidance", tracker.issueComments[0])
 	}
 	if got := len(tracker.commentReplies); got != 0 {
 		t.Fatalf("commentReplies length = %d, want 0", got)
@@ -931,7 +938,7 @@ func TestHandleWorkerExitMergeBlockedInMergeSchedulesHiddenRetry(t *testing.T) {
 			Issue:   issue,
 			RunType: codex.RunTypeMerge,
 			Status:  "blocked",
-			Summary: "Keeping issue in `Merge` while waiting for Codex PR review feedback.",
+			Summary: userworkflow.MergeWaitingForReview(domain.PullRequestRef{}, false, false),
 		},
 	})
 
@@ -949,8 +956,11 @@ func TestHandleWorkerExitMergeBlockedInMergeSchedulesHiddenRetry(t *testing.T) {
 	if got := len(tracker.commentReplies); got != 1 {
 		t.Fatalf("commentReplies length = %d, want 1", got)
 	}
-	if tracker.commentReplies[0] != "[colin] Keeping issue in `Merge` while waiting for Codex PR review feedback." {
+	if !strings.Contains(tracker.commentReplies[0], "[colin] Keeping issue in `Merge` while waiting for Codex PR review feedback.") {
 		t.Fatalf("summary comment = %q", tracker.commentReplies[0])
+	}
+	if !strings.Contains(tracker.commentReplies[0], "What Colin is doing next: retrying merge automation automatically after the Codex review state changes.") {
+		t.Fatalf("summary comment = %q, want automatic-retry guidance", tracker.commentReplies[0])
 	}
 }
 

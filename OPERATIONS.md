@@ -239,6 +239,8 @@ Additional `Todo` rule:
 - If the issue returns to `Todo` without any associated PR, Colin skips GitHub review sync and starts work immediately using the Linear review feedback already on the issue.
 - Once unresolved GitHub review threads are visible, Colin injects them into the next coding prompt alongside the human Linear review feedback from that same review cycle.
 
+Those `[colin]` status updates now spell out both sides of the workflow: what Colin is doing next, and what the human should do next. In practice that means the waiting comment says Colin is still polling GitHub before the next coding round, and the blocked-review comment says Colin is keeping the issue in `Todo` until the remaining review feedback is resolved.
+
 ### Refine handoff state
 
 `Refine` is a human-only clarification state. Colin does not dispatch coding, publish, or merge automation from it.
@@ -288,6 +290,8 @@ When Colin sends an issue back to `Review` after a returned review cycle, it fir
 
 If GitHub review-thread actions fail or unresolved review threads remain, Colin keeps the issue in `Todo` and posts that status in Linear instead of moving it to `Review`.
 
+The review-ready and review-blocked summaries are explicit about ownership. A ready summary says the PR is ready for review and tells the human to review the updated PR or move it to `Merge`. A blocked summary says Colin is staying in `Todo`, reports how many review threads were handled and how many remain, and tells the human to keep the issue in active work until the remaining feedback is resolved.
+
 ### Merge handoff state
 
 This is configured in `WORKFLOW.md` under `repo.merge_states` and currently is:
@@ -304,6 +308,8 @@ When an issue is moved to `Merge`, Colin:
 - moves the issue back to `Review` with a Linear comment when that automatic conflict-repair attempt fails, or when the repaired branch receives unresolved Codex review feedback; otherwise it keeps waiting in `Merge` while fresh Codex review is still pending
 - merges the PR using the configured merge method
 - checks the team's configured Linear git `merge` automation target and, when one is configured, updates the issue to that state as part of merge completion
+
+The `[colin]` summary in `Merge` also distinguishes automatic waits from human handoffs. When Colin is still waiting for Codex review pickup or approval, the summary says Colin is retrying merge automation automatically and the issue should stay in `Merge`. When unresolved Codex PR feedback exists, or when automatic merge-conflict repair fails, the summary says Colin has returned the issue to `Review` and tells the human what to fix before moving it back to `Merge`.
 
 Human action is still required after merge only if no post-merge Linear automation state is configured:
 

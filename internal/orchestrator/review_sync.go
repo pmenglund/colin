@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/userworkflow"
 )
 
 const (
@@ -30,7 +31,8 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	if err != nil {
 		state = o.ensureReviewSyncState(issue, state, now)
 		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
-			"Waiting for GitHub review feedback to sync before starting work.\n\n- Blocker: failed to prepare workspace for GitHub review sync: %v",
+			"%s\n- Blocker: failed to prepare workspace for GitHub review sync: %v",
+			userworkflow.ReviewSyncWaiting(domain.PullRequestRef{}, reviewReturnedToTodoAt(issue), now.Sub(state.firstObserved), state.timedOut),
 			err,
 		))
 		state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
@@ -42,7 +44,8 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	if err != nil {
 		state = o.ensureReviewSyncState(issue, state, now)
 		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
-			"Waiting for GitHub review feedback to sync before starting work.\n\n- Blocker: failed to read GitHub review threads: %v",
+			"%s\n- Blocker: failed to read GitHub review threads: %v",
+			userworkflow.ReviewSyncWaiting(domain.PullRequestRef{}, reviewReturnedToTodoAt(issue), now.Sub(state.firstObserved), state.timedOut),
 			err,
 		))
 		state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
@@ -71,11 +74,11 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	}
 
 	state = o.ensureReviewSyncState(issue, state, now)
-	body := buildReviewSyncWaitingBody(issue, reviewContext.PullRequest, now.Sub(state.firstObserved), state.timedOut)
+	body := userworkflow.ReviewSyncWaiting(reviewContext.PullRequest, reviewReturnedToTodoAt(issue), now.Sub(state.firstObserved), state.timedOut)
 	state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, body)
 	if !state.timedOut && now.Sub(state.firstObserved) >= reviewSyncTimeout {
 		state.timedOut = true
-		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, buildReviewSyncTimedOutBody(issue, reviewContext.PullRequest))
+		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, userworkflow.ReviewSyncTimedOut(reviewContext.PullRequest, reviewSyncTimeout, reviewSyncSlowPollInterval))
 	}
 	state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
 	o.reviewSync[issue.ID] = state
@@ -138,33 +141,9 @@ func nextReviewSyncPoll(now, firstObserved time.Time, timedOut bool) time.Time {
 	return now.Add(reviewSyncFastPollInterval)
 }
 
-func buildReviewSyncWaitingBody(issue domain.Issue, pr domain.PullRequestRef, elapsed time.Duration, timedOut bool) string {
-	lines := []string{"Waiting for GitHub review feedback to sync before starting work."}
-	if pr.Number > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", pr.Number))
+func reviewReturnedToTodoAt(issue domain.Issue) *time.Time {
+	if issue.ReviewCycle == nil {
+		return nil
 	}
-	if strings.TrimSpace(pr.URL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", pr.URL))
-	}
-	if issue.ReviewCycle != nil {
-		lines = append(lines, fmt.Sprintf("- Returned to `Todo`: `%s`", issue.ReviewCycle.ReturnedToTodoAt.Format(time.RFC3339)))
-	}
-	lines = append(lines, fmt.Sprintf("- Waited: `%s`", elapsed.Round(time.Second)))
-	if timedOut {
-		lines = append(lines, "- Polling in the background until unresolved GitHub review threads appear.")
-	}
-	return strings.Join(lines, "\n")
-}
-
-func buildReviewSyncTimedOutBody(issue domain.Issue, pr domain.PullRequestRef) string {
-	lines := []string{"GitHub review feedback has not appeared yet, so Colin is keeping the issue in `Todo`."}
-	if pr.Number > 0 {
-		lines = append(lines, fmt.Sprintf("- PR: `#%d`", pr.Number))
-	}
-	if strings.TrimSpace(pr.URL) != "" {
-		lines = append(lines, fmt.Sprintf("- PR URL: %s", pr.URL))
-	}
-	lines = append(lines, fmt.Sprintf("- Wait timeout reached: `%s`", reviewSyncTimeout))
-	lines = append(lines, fmt.Sprintf("- Background poll interval: `%s`", reviewSyncSlowPollInterval))
-	return strings.Join(lines, "\n")
+	return &issue.ReviewCycle.ReturnedToTodoAt
 }

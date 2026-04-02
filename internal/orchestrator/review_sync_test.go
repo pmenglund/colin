@@ -220,6 +220,12 @@ func TestPrepareReviewIssueWaitsWhenTrackedPullRequestExistsButThreadsHaveNotSyn
 	if !strings.Contains(tracker.issueComments[0], "PR: `#11`") {
 		t.Fatalf("issue comment = %q, want PR reference", tracker.issueComments[0])
 	}
+	if !strings.Contains(tracker.issueComments[0], "What Colin is doing next: polling GitHub for unresolved review threads before starting the next coding round.") {
+		t.Fatalf("issue comment = %q, want next-step guidance", tracker.issueComments[0])
+	}
+	if !strings.Contains(tracker.issueComments[0], "What you should do: nothing yet unless Colin later reports that the sync timed out.") {
+		t.Fatalf("issue comment = %q, want human guidance", tracker.issueComments[0])
+	}
 	state, ok := orch.reviewSync[issue.ID]
 	if !ok {
 		t.Fatal("reviewSync state missing")
