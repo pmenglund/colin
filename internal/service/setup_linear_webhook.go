@@ -53,6 +53,6 @@ func SetupLinearWebhook(ctx context.Context, workflowPath string, webhookName st
 		TeamID:                  result.TeamID,
 		TeamName:                result.TeamName,
 		SigningSecretConfigured: strings.TrimSpace(cfg.Tracker.WebhookSigningSecret) != "",
-		SigningSecretEnvVar:     "LINEAR_WEBHOOK_SECRET",
+		SigningSecretEnvVar:     LinearWebhookSigningSecretEnvVar,
 	}, nil
 }
