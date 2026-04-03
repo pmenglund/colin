@@ -234,6 +234,59 @@ func TestMergePullRequestMergesPublishedPR(t *testing.T) {
 	}
 }
 
+func TestMergePullRequestRetriesAfterRefreshWhenPullRequestIsAlreadyMergeable(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.MergePullRequestReturnsOnCall(0, errors.New("PUT https://api.github.com/repos/acme/widgets/pulls/11/merge: 405 Pull Request is not mergeable []"))
+	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", true), nil)
+	fakeGitHub.MergePullRequestReturnsOnCall(1, nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	merged, err := manager.MergePullRequest(context.Background(), workspacePath, repoops.Result{
+		PRNumber: 11,
+		PRURL:    "https://github.com/pmenglund/colin/pull/11",
+		PRState:  "OPEN",
+	})
+	if err != nil {
+		t.Fatalf("MergePullRequest() error = %v", err)
+	}
+	if merged.Action != "merged" {
+		t.Fatalf("merged.Action = %q, want %q", merged.Action, "merged")
+	}
+	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
+		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
+	}
+	if fakeGitHub.MergePullRequestCallCount() != 2 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 2", fakeGitHub.MergePullRequestCallCount())
+	}
+}
+
+func TestMergePullRequestDoesNotRetryWhenRefreshStillReportsNotMergeable(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	mergeErr := errors.New("PUT https://api.github.com/repos/acme/widgets/pulls/11/merge: 405 Pull Request is not mergeable []")
+	fakeGitHub.MergePullRequestReturns(mergeErr)
+	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", false), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.MergePullRequest(context.Background(), workspacePath, repoops.Result{
+		PRNumber: 11,
+		PRURL:    "https://github.com/pmenglund/colin/pull/11",
+		PRState:  "OPEN",
+	})
+	if !errors.Is(err, mergeErr) && (err == nil || err.Error() != mergeErr.Error()) {
+		t.Fatalf("MergePullRequest() error = %v, want %v", err, mergeErr)
+	}
+	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
+		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
+	}
+	if fakeGitHub.MergePullRequestCallCount() != 1 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 1", fakeGitHub.MergePullRequestCallCount())
+	}
+}
+
 func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
@@ -844,6 +897,12 @@ func testPullRequest(number int, state, head string) *repoops.GitHubPullRequest 
 		HeadRefName: head,
 		BaseRefName: "symphony",
 	}
+}
+
+func testPullRequestWithMergeable(number int, state, head string, mergeable bool) *repoops.GitHubPullRequest {
+	pr := testPullRequest(number, state, head)
+	pr.Mergeable = &mergeable
+	return pr
 }
 
 func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPage bool) repoops.GitHubReviewThread {

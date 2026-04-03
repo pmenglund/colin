@@ -213,11 +213,39 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 		return result, err
 	}
 	if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, m.cfg.Repo.MergeMethod); err != nil {
-		return result, err
+		if !isRetryableNotMergeableError(err) {
+			return result, err
+		}
+
+		refreshed, refreshErr := client.PullRequestByNumber(ctx, owner, name, result.PRNumber)
+		if refreshErr != nil {
+			return result, err
+		}
+		if refreshed == nil || refreshed.Mergeable == nil || !*refreshed.Mergeable {
+			return result, err
+		}
+
+		m.logger.Info(
+			"retrying merge after refresh because pull request is already mergeable",
+			"workspace_path", workspacePath,
+			"pr_number", result.PRNumber,
+			"pr_url", result.PRURL,
+		)
+		if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, m.cfg.Repo.MergeMethod); err != nil {
+			return result, err
+		}
 	}
 	result.Action = "merged"
 	result.PRState = "MERGED"
 	return result, nil
+}
+
+func isRetryableNotMergeableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "pull request is not mergeable") || strings.Contains(message, "not mergeable")
 }
 
 // ReviewContext returns the current PR and unresolved review threads for the issue branch.
