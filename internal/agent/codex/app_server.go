@@ -64,11 +64,7 @@ func (c *appServerClient) start(ctx context.Context, cwd string) error {
 		return c.startupError(err, pid)
 	}
 
-	thread, err := client.StartThread(ctx, sdk.ThreadStartOptions{
-		Cwd:            cwd,
-		ApprovalPolicy: c.cfg.Codex.ApprovalPolicy,
-		SandboxPolicy:  c.cfg.Codex.ThreadSandbox,
-	})
+	thread, err := c.startThread(ctx, client, cwd)
 	if err != nil {
 		_ = client.Close()
 		return c.startupError(err, pid)
@@ -79,6 +75,28 @@ func (c *appServerClient) start(ctx context.Context, cwd string) error {
 	c.threadID = thread.ID()
 	c.pid = pid
 	return nil
+}
+
+func (c *appServerClient) startThread(ctx context.Context, client *sdk.Codex, cwd string) (*sdk.Thread, error) {
+	if threadID := existingThreadID(c.issue); threadID != "" {
+		thread, err := client.ResumeThread(ctx, sdk.ThreadResumeOptions{
+			ThreadID:       threadID,
+			Cwd:            cwd,
+			ApprovalPolicy: c.cfg.Codex.ApprovalPolicy,
+			Sandbox:        c.cfg.Codex.ThreadSandbox,
+		})
+		if err == nil {
+			c.logger.Info("resumed stored codex thread", "issue_id", c.issue.ID, "issue_identifier", c.issue.Identifier, "thread_id", threadID)
+			return thread, nil
+		}
+		c.logger.Warn("failed to resume stored codex thread; starting fresh thread", "issue_id", c.issue.ID, "issue_identifier", c.issue.Identifier, "thread_id", threadID, "error", err)
+	}
+
+	return client.StartThread(ctx, sdk.ThreadStartOptions{
+		Cwd:            cwd,
+		ApprovalPolicy: c.cfg.Codex.ApprovalPolicy,
+		SandboxPolicy:  c.cfg.Codex.ThreadSandbox,
+	})
 }
 
 func (c *appServerClient) runTurn(parent context.Context, cwd string, issue domain.Issue, prompt string) error {
@@ -316,6 +334,13 @@ func sandboxPolicyValue(policy domain.SandboxPolicy) map[string]any {
 		return nil
 	}
 	return map[string]any{"type": strings.TrimSpace(policy.Type)}
+}
+
+func existingThreadID(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(issue.ColinMetadata.CodexThreadID)
 }
 
 type approvalHandler struct {

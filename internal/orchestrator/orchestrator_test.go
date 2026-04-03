@@ -27,6 +27,7 @@ type trackerStub struct {
 	issuesByStateCalls  int
 	issuesByStateHook   func(*trackerStub)
 	issuesByID          []domain.Issue
+	issuesByIDCalls     int
 	rateLimits          domain.RateLimitSnapshot
 	issueComments       []string
 	commentReplies      []string
@@ -69,6 +70,7 @@ func (s *trackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.I
 }
 
 func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
+	s.issuesByIDCalls++
 	return s.issuesByID, nil
 }
 
@@ -1558,6 +1560,49 @@ func TestHandleWorkerExitCodingRunToRefineMarksCompletedWithoutRetry(t *testing.
 	}
 }
 
+func TestHandleWorkerExitTerminalStopClearsPersistentThreadMetadata(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		State:      "Merged",
+		ColinMetadata: &domain.ColinMetadata{
+			CodexThreadID:         "thread-1",
+			ProgressRootCommentID: "root-1",
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Config:  domain.ServiceConfig{Tracker: domain.TrackerConfig{TerminalStates: []string{"Merged"}}},
+			Tracker: tracker,
+		},
+		running:   map[string]*runningEntry{"1": {issue: issue, identifier: issue.Identifier, startedAt: time.Now().Add(-2 * time.Second), stopReason: "terminal"}},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   domain.Issue{ID: "1", Identifier: "ABC-1", State: "Merged"},
+			RunType: codex.RunTypeMerge,
+			Status:  "failed",
+		},
+	})
+
+	if tracker.metadata.CodexThreadID != "" {
+		t.Fatalf("metadata.CodexThreadID = %q, want cleared", tracker.metadata.CodexThreadID)
+	}
+	if tracker.metadata.ProgressRootCommentID != "" {
+		t.Fatalf("metadata.ProgressRootCommentID = %q, want cleared", tracker.metadata.ProgressRootCommentID)
+	}
+}
+
 func TestVisibleRetryPostsScheduledAndFiredComments(t *testing.T) {
 	t.Parallel()
 
@@ -1719,13 +1764,15 @@ func TestHandleRetryDispatchesClaimedRetryIssue(t *testing.T) {
 	}
 }
 
-func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T) {
+func TestHandleTickDefersTrackerPollingWhenLinearBudgetHitsHardReserve(t *testing.T) {
 	t.Parallel()
 
 	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
 	tracker := &trackerStub{
 		rateLimits: domain.RateLimitSnapshot{
 			"linear_requests": {
+				Remaining:     int64Ptr(100),
+				Limit:         int64Ptr(5000),
 				NextAllowedAt: unixTimePtr(nextAllowedAt),
 			},
 		},
@@ -1754,20 +1801,19 @@ func TestHandleTickDefersTrackerPollingWhenLinearBudgetIsExhausted(t *testing.T)
 	}
 }
 
-func TestHandleTickPrioritizesCandidateFetchBeforeStateCountRefresh(t *testing.T) {
+func TestHandleTickAllowsCandidateFetchAboveSoftReserveDespiteNextAllowedAt(t *testing.T) {
 	t.Parallel()
 
 	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
 	issue := domain.Issue{ID: "1", Identifier: "COLIN-143", Title: "github interface", State: "Todo"}
 	tracker := &trackerStub{
 		candidateIssues: []domain.Issue{issue},
-		issuesByState:   []domain.Issue{issue},
-		issuesByStateHook: func(s *trackerStub) {
-			s.rateLimits = domain.RateLimitSnapshot{
-				"linear_requests": {
-					NextAllowedAt: unixTimePtr(nextAllowedAt),
-				},
-			}
+		rateLimits: domain.RateLimitSnapshot{
+			"linear_requests": {
+				Remaining:     int64Ptr(4999),
+				Limit:         int64Ptr(5000),
+				NextAllowedAt: unixTimePtr(nextAllowedAt),
+			},
 		},
 	}
 	runner := &runnerStub{invoked: make(chan struct{})}
@@ -1799,9 +1845,6 @@ func TestHandleTickPrioritizesCandidateFetchBeforeStateCountRefresh(t *testing.T
 	if tracker.candidateCalls != 1 {
 		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
 	}
-	if tracker.issuesByStateCalls != 1 {
-		t.Fatalf("FetchIssuesByStates() calls = %d, want 1", tracker.issuesByStateCalls)
-	}
 	select {
 	case <-runner.invoked:
 	case <-time.After(2 * time.Second):
@@ -1823,6 +1866,8 @@ func TestHandleTickRefreshesStateCountsAfterCandidateFetchUsesBudget(t *testing.
 		candidateHook: func(s *trackerStub) {
 			s.rateLimits = domain.RateLimitSnapshot{
 				"linear_requests": {
+					Remaining:     int64Ptr(4999),
+					Limit:         int64Ptr(5000),
 					NextAllowedAt: unixTimePtr(nextAllowedAt),
 				},
 			}
@@ -1862,6 +1907,154 @@ func TestHandleTickRefreshesStateCountsAfterCandidateFetchUsesBudget(t *testing.
 	if got := orch.issueStates["Todo"]; got != 1 {
 		t.Fatalf("issueStates[Todo] = %d, want 1", got)
 	}
+}
+
+func TestHandleTickSkipsStateCountRefreshWithinSoftReserve(t *testing.T) {
+	t.Parallel()
+
+	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
+	issue := domain.Issue{ID: "1", Identifier: "COLIN-143", Title: "github interface", State: "Todo"}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{},
+		issuesByState:   []domain.Issue{issue},
+		candidateHook: func(s *trackerStub) {
+			s.rateLimits = domain.RateLimitSnapshot{
+				"linear_requests": {
+					Remaining:     int64Ptr(200),
+					Limit:         int64Ptr(5000),
+					NextAllowedAt: unixTimePtr(nextAllowedAt),
+				},
+			}
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Polling: domain.PollingConfig{Interval: 30 * time.Second},
+			Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+			Tracker: domain.TrackerConfig{
+				Kind:         "linear",
+				APIKey:       "test-key",
+				ProjectSlug:  "test-project",
+				ActiveStates: []string{"Todo"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}, Tracker: tracker},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{"Todo": 7},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+		eventCh:           make(chan any, 4),
+	}
+
+	orch.handleTick(context.Background())
+
+	if tracker.candidateCalls != 1 {
+		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+	}
+	if tracker.issuesByStateCalls != 0 {
+		t.Fatalf("FetchIssuesByStates() calls = %d, want 0", tracker.issuesByStateCalls)
+	}
+	if got := orch.issueStates["Todo"]; got != 7 {
+		t.Fatalf("issueStates[Todo] = %d, want preserved value 7", got)
+	}
+}
+
+func TestReconcileRunningAllowsStateRefreshAboveSoftReserveDespiteNextAllowedAt(t *testing.T) {
+	t.Parallel()
+
+	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
+	tracker := &trackerStub{
+		issuesByID: []domain.Issue{{ID: "1", Identifier: "COLIN-143", Title: "github interface", State: "In Progress"}},
+		rateLimits: domain.RateLimitSnapshot{
+			"linear_requests": {
+				Remaining:     int64Ptr(4999),
+				Limit:         int64Ptr(5000),
+				NextAllowedAt: unixTimePtr(nextAllowedAt),
+			},
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"In Progress"}},
+		}, Tracker: tracker},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      domain.Issue{ID: "1", Identifier: "COLIN-143", Title: "github interface", State: "In Progress"},
+				identifier: "COLIN-143",
+				startedAt:  time.Now().Add(-time.Minute),
+			},
+		},
+		claimed: map[string]struct{}{"1": {}},
+	}
+
+	orch.reconcileRunning(context.Background())
+
+	if tracker.issuesByIDCalls != 1 {
+		t.Fatalf("FetchIssueStatesByIDs() calls = %d, want 1", tracker.issuesByIDCalls)
+	}
+}
+
+func TestHandleRetryAllowsDispatchAboveSoftReserveDespiteNextAllowedAt(t *testing.T) {
+	t.Parallel()
+
+	nextAllowedAt := time.Now().UTC().Add(2 * time.Minute).Unix()
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Retry me", State: "Review"}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+		rateLimits: domain.RateLimitSnapshot{
+			"linear_requests": {
+				Remaining:     int64Ptr(4999),
+				Limit:         int64Ptr(5000),
+				NextAllowedAt: unixTimePtr(nextAllowedAt),
+			},
+		},
+	}
+	runner := &runnerStub{
+		invoked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+			},
+			Tracker: tracker,
+			Runner:  runner,
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		eventCh:   make(chan any, 1),
+	}
+
+	orch.retrying["1"] = &retryState{
+		entry: domain.RetryEntry{
+			IssueID:    "1",
+			Identifier: issue.Identifier,
+			Attempt:    1,
+			DueAt:      time.Now().UTC(),
+		},
+		timer:   time.NewTimer(time.Hour),
+		comment: &commentThreadState{RunType: codex.RunTypeReviewPublish},
+	}
+	defer orch.retrying["1"].timer.Stop()
+
+	orch.handleRetry(context.Background(), "1")
+
+	select {
+	case <-runner.invoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not invoked")
+	}
+	close(runner.release)
 }
 
 func TestRequestRefreshCoalescesPendingRequests(t *testing.T) {
@@ -2157,6 +2350,7 @@ func TestRefreshDoesNotDispatchDuplicateWorkerForClaimedIssue(t *testing.T) {
 					ProjectSlug:  "test-project",
 					ActiveStates: []string{"Todo"},
 				},
+				Repo:  domain.RepoConfig{Backend: "github"},
 				Codex: domain.CodexConfig{Command: "codex"},
 			},
 			Tracker: tracker,
@@ -2579,4 +2773,8 @@ func stringPtr(value string) *string {
 func unixTimePtr(value int64) *time.Time {
 	parsed := time.Unix(value, 0).UTC()
 	return &parsed
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }

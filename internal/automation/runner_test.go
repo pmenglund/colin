@@ -99,6 +99,87 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	if tracker.updatedState != "Review" {
 		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
 	}
+	if result.Issue.ColinMetadata == nil || result.Issue.ColinMetadata.CodexThreadID != "thread-1" {
+		t.Fatalf("result.Issue.ColinMetadata = %#v, want thread-1", result.Issue.ColinMetadata)
+	}
+}
+
+func TestRunnerResumesPersistedCodexThreadID(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
+	methodsLogPath := filepath.Join(tempDir, "methods.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_METHODS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		methodsLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			RemoteName:    "origin",
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns: 1,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-94",
+			Title:      "Resume issue thread",
+			State:      "Todo",
+			ColinMetadata: &domain.ColinMetadata{
+				CodexThreadID: "thread-1",
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-94",
+		Title:      "Resume issue thread",
+		State:      "Todo",
+		ColinMetadata: &domain.ColinMetadata{
+			CodexThreadID: "thread-1",
+		},
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	methodsLog := readRunnerFile(t, methodsLogPath)
+	if !strings.Contains(methodsLog, "thread/resume") {
+		t.Fatalf("methods log = %q, want thread/resume", methodsLog)
+	}
+	if strings.Contains(methodsLog, "thread/start") {
+		t.Fatalf("methods log = %q, want no thread/start", methodsLog)
+	}
 }
 
 func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
@@ -926,6 +1007,10 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		Title:      "internal log buffer",
 		State:      "Merge",
 		BranchName: testStringPtr(branch),
+		ColinMetadata: &domain.ColinMetadata{
+			CodexThreadID:         "thread-1",
+			ProgressRootCommentID: "root",
+		},
 	}, nil, nil)
 
 	if result.Status != "succeeded" {
@@ -936,6 +1021,9 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	}
 	if tracker.updatedStates[len(tracker.updatedStates)-1] != "Merged" {
 		t.Fatalf("last updated state = %q, want %q", tracker.updatedStates[len(tracker.updatedStates)-1], "Merged")
+	}
+	if tracker.metadata.CodexThreadID != "" || tracker.metadata.ProgressRootCommentID != "" {
+		t.Fatalf("metadata thread fields = %#v, want cleared after terminal merge", tracker.metadata)
 	}
 
 	if got := fakeGitHub.MergePullRequestCallCount(); got != 2 {
@@ -2066,6 +2154,10 @@ func TestRunnerMovesIssueToRefineWhenExecPlanAttachmentsAreDuplicated(t *testing
 		Title:         "Repair exec plan metadata",
 		State:         "In Progress",
 		ExecPlanCount: 2,
+		ColinMetadata: &domain.ColinMetadata{
+			CodexThreadID:         "thread-1",
+			ProgressRootCommentID: "root",
+		},
 	}, nil, nil)
 
 	if result.Status != "succeeded" {
@@ -2079,6 +2171,9 @@ func TestRunnerMovesIssueToRefineWhenExecPlanAttachmentsAreDuplicated(t *testing
 	}
 	if tracker.metadata.LastOutcome != metadataOutcomePlan {
 		t.Fatalf("metadata.LastOutcome = %q, want %q", tracker.metadata.LastOutcome, metadataOutcomePlan)
+	}
+	if tracker.metadata.CodexThreadID != "" || tracker.metadata.ProgressRootCommentID != "" {
+		t.Fatalf("metadata thread fields = %#v, want cleared after refine handoff", tracker.metadata)
 	}
 	if !strings.Contains(result.Summary, "multiple `Colin ExecPlan` attachments") {
 		t.Fatalf("Summary = %q, want duplicate exec plan guidance", result.Summary)
@@ -2195,6 +2290,11 @@ func runFakeCodex() error {
 		}
 
 		method, _ := msg["method"].(string)
+		if methodsLog := os.Getenv("COLIN_FAKE_CODEX_METHODS_LOG"); methodsLog != "" {
+			if err := appendPromptLog(methodsLog, method); err != nil {
+				return err
+			}
+		}
 		switch method {
 		case "initialize":
 			if err := writeJSONMessage(writer, map[string]any{
@@ -2212,6 +2312,20 @@ func runFakeCodex() error {
 			continue
 		case "thread/start":
 			threadID = "thread-1"
+			if err := writeJSONMessage(writer, map[string]any{
+				"id": msg["id"],
+				"result": map[string]any{
+					"thread": map[string]any{"id": threadID},
+				},
+			}); err != nil {
+				return err
+			}
+		case "thread/resume":
+			params, _ := msg["params"].(map[string]any)
+			threadID, _ = params["threadId"].(string)
+			if strings.TrimSpace(threadID) == "" {
+				threadID = "thread-1"
+			}
 			if err := writeJSONMessage(writer, map[string]any{
 				"id": msg["id"],
 				"result": map[string]any{

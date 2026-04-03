@@ -78,12 +78,7 @@ func (o *Orchestrator) dispatch(parent context.Context, issue domain.Issue, atte
 	}
 	ctx, cancel := context.WithCancel(parent)
 	runType := runTypeForState(o, issue.State)
-	if comment != nil && comment.RunType != runTypeForState(o, issue.State) {
-		comment = nil
-	}
-	if comment == nil {
-		comment = &commentThreadState{RunType: runType}
-	}
+	comment = commentState(issue, comment, runType)
 	entry := &runningEntry{
 		issue:        issue,
 		identifier:   issue.Identifier,

@@ -258,6 +258,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	if err := client.Start(ctx, ws.Path); err != nil {
 		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 	}
+	current = r.persistCodexThreadIDBestEffort(ctx, current, client.ThreadID())
 	r.logger.Info(
 		"codex session ready",
 		"issue_id", issue.ID,
@@ -532,6 +533,9 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	if err != nil {
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
+	if r.shouldResetPersistentThreads(current.State) {
+		current = r.clearPersistentThreadMetadataBestEffort(ctx, current)
+	}
 
 	emit(Event{
 		Event:     EventRunSucceeded,
@@ -634,6 +638,7 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 	if err := client.Start(ctx, workspacePath); err != nil {
 		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
 	}
+	issue = r.persistCodexThreadIDBestEffort(ctx, issue, client.ThreadID())
 	r.logger.Info(
 		"codex session ready for merge recovery",
 		"issue_id", issue.ID,
@@ -839,6 +844,9 @@ func (r *Runner) buildMergedResult(ctx context.Context, issue domain.Issue, work
 		Action:    result.Action,
 	})
 	issue = r.applyPostMergeState(ctx, issue, result.BaseRef)
+	if r.shouldResetPersistentThreads(issue.State) {
+		issue = r.clearPersistentThreadMetadataBestEffort(ctx, issue)
+	}
 	issue = r.clearManagedCodexReviewLabelsBestEffort(ctx, issue)
 	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
 	issue.PullRequest = &domain.PullRequestRef{
@@ -910,6 +918,7 @@ func (r *Runner) handleDuplicateExecPlans(ctx context.Context, issue domain.Issu
 	if updateErr != nil {
 		return Result{Issue: issue, RunType: RunTypeCoding, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
 	}
+	updated = r.clearPersistentThreadMetadataBestEffort(ctx, updated)
 	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeCoding, metadataOutcomePlan, ""))
 	return Result{
 		Issue:         updated,
@@ -1529,6 +1538,42 @@ func actualBranchMetadata(issue domain.Issue, branch string) (domain.ColinMetada
 	return metadata, true
 }
 
+func codexThreadMetadata(issue domain.Issue, threadID string) (domain.ColinMetadata, bool) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return domain.ColinMetadata{}, false
+	}
+
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+	}
+	if strings.TrimSpace(metadata.CodexThreadID) == threadID {
+		return metadata, false
+	}
+
+	metadata.CodexThreadID = threadID
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	return metadata, true
+}
+
+func clearedPersistentThreadMetadata(issue domain.Issue) (domain.ColinMetadata, bool) {
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+	}
+	if strings.TrimSpace(metadata.CodexThreadID) == "" && strings.TrimSpace(metadata.ProgressRootCommentID) == "" {
+		return metadata, false
+	}
+
+	metadata.CodexThreadID = ""
+	metadata.ProgressRootCommentID = ""
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	return metadata, true
+}
+
 func reviewPublishDirective(issue domain.Issue) string {
 	if issue.ColinMetadata == nil {
 		return ""
@@ -1966,6 +2011,7 @@ func (r *Runner) handleInvalidExecPlan(ctx context.Context, issue domain.Issue, 
 	if updateErr != nil {
 		return Result{Issue: issue, RunType: RunTypeCoding, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
 	}
+	updated = r.clearPersistentThreadMetadataBestEffort(ctx, updated)
 	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeCoding, metadataOutcomePlanInvalid, ""))
 	return Result{
 		Issue:         updated,
@@ -2006,6 +2052,34 @@ func (r *Runner) persistActualBranchNameBestEffort(ctx context.Context, issue do
 
 func (r *Runner) persistActualBranchNameValueBestEffort(ctx context.Context, issue domain.Issue, branch string) domain.Issue {
 	metadata, changed := actualBranchMetadata(issue, branch)
+	if !changed {
+		return issue
+	}
+	return r.persistIssueMetadataBestEffort(ctx, issue, metadata)
+}
+
+func (r *Runner) shouldResetPersistentThreads(state string) bool {
+	if strings.EqualFold(strings.TrimSpace(state), refineStateName) || config.ContainsState(r.cfg.Tracker.TerminalStates, state) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "done", "merged", "closed", "cancelled", "canceled", "duplicate":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Runner) persistCodexThreadIDBestEffort(ctx context.Context, issue domain.Issue, threadID string) domain.Issue {
+	metadata, changed := codexThreadMetadata(issue, threadID)
+	if !changed {
+		return issue
+	}
+	return r.persistIssueMetadataBestEffort(ctx, issue, metadata)
+}
+
+func (r *Runner) clearPersistentThreadMetadataBestEffort(ctx context.Context, issue domain.Issue) domain.Issue {
+	metadata, changed := clearedPersistentThreadMetadata(issue)
 	if !changed {
 		return issue
 	}
