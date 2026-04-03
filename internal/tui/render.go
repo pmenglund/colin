@@ -153,7 +153,7 @@ func renderWorkerLine(worker domain.SnapshotRunning, width int) string {
 		titleStyle.Render(padRight(worker.Identifier, 12)),
 		state,
 		subtleStyle.Render(fmt.Sprintf("turn %d", worker.TurnCount)),
-		subtleStyle.Render(truncateRunes(worker.SessionID, 18)),
+		subtleStyle.Render(worker.SessionID),
 		subtleStyle.Render(truncateRunes(status, maxInt(width-56, 16))),
 	)
 }
