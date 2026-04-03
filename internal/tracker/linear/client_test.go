@@ -1282,7 +1282,6 @@ func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
 		updateCount     int
 		gotAttachmentID string
 		gotTitle        string
-		gotURL          string
 		gotMetadata     map[string]any
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1320,7 +1319,9 @@ func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
 			gotAttachmentID, _ = request.Variables["id"].(string)
 			input, _ := request.Variables["input"].(map[string]any)
 			gotTitle, _ = input["title"].(string)
-			gotURL, _ = input["url"].(string)
+			if _, ok := input["url"]; ok {
+				t.Fatal("attachment update input unexpectedly included url")
+			}
 			gotMetadata, _ = input["metadata"].(map[string]any)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
@@ -1329,7 +1330,7 @@ func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
 						"attachment": map[string]any{
 							"id":       gotAttachmentID,
 							"title":    gotTitle,
-							"url":      gotURL,
+							"url":      "http://127.0.0.1/linear/issues/issue-1/exec-plan",
 							"metadata": gotMetadata,
 						},
 					},
@@ -1366,9 +1367,6 @@ func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
 	}
 	if gotTitle != "Colin ExecPlan" {
 		t.Fatalf("title = %q, want %q", gotTitle, "Colin ExecPlan")
-	}
-	if gotURL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
-		t.Fatalf("url = %q, want %q", gotURL, "http://127.0.0.1/linear/issues/issue-1/exec-plan")
 	}
 	if gotMetadata["body"] != "# Updated plan\n\n## Progress\n\n- [x] Done" {
 		t.Fatalf("body = %v, want updated plan body", gotMetadata["body"])

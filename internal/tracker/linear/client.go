@@ -584,7 +584,7 @@ func (c *Client) UpsertIssueExecPlan(ctx context.Context, issueID string, plan d
 	switch len(existingPlans) {
 	case 0:
 	case 1:
-		return c.updateIssueExecPlan(ctx, existingPlans[0].AttachmentID, issueID, plan)
+		return c.updateIssueExecPlan(ctx, existingPlans[0].AttachmentID, plan)
 	default:
 		return domain.ExecPlan{}, fmt.Errorf("%w: issue %s has %d Colin ExecPlan attachments", tracker.ErrDuplicateExecPlans, strings.TrimSpace(issueID), len(existingPlans))
 	}
@@ -624,7 +624,7 @@ mutation UpsertIssueExecPlan($input: AttachmentCreateInput!) {
 	return parseColinExecPlanAttachment(attachment)
 }
 
-func (c *Client) updateIssueExecPlan(ctx context.Context, attachmentID string, issueID string, plan domain.ExecPlan) (domain.ExecPlan, error) {
+func (c *Client) updateIssueExecPlan(ctx context.Context, attachmentID string, plan domain.ExecPlan) (domain.ExecPlan, error) {
 	const query = `
 mutation UpdateIssueExecPlan($id: String!, $input: AttachmentUpdateInput!) {
   attachmentUpdate(id: $id, input: $input) {
@@ -642,7 +642,6 @@ mutation UpdateIssueExecPlan($id: String!, $input: AttachmentUpdateInput!) {
 		"id": attachmentID,
 		"input": map[string]any{
 			"title":    colinExecPlanAttachmentTitle,
-			"url":      c.execPlanAttachmentURL(ctx, issueID),
 			"metadata": colinExecPlanValue(plan),
 		},
 	})
