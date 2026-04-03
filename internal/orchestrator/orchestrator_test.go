@@ -511,6 +511,7 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 			},
 		}},
 		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
 		pausedIssueStates: map[string]domain.PausedStateSummary{},
 	}
 
@@ -521,6 +522,15 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	}
 	if got := orch.issueStates["Todo"]; got != 1 {
 		t.Fatalf("Todo count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Review"]); got != 2 {
+		t.Fatalf("Review issue list length = %d, want 2", got)
+	}
+	if got := orch.stateIssues["Review"][0].Identifier; got != "COLIN-2" {
+		t.Fatalf("first review issue = %q, want COLIN-2", got)
+	}
+	if got := orch.stateIssues["Review"][1].Identifier; got != "COLIN-3" {
+		t.Fatalf("second review issue = %q, want COLIN-3", got)
 	}
 	summary, ok := orch.pausedIssueStates["Review"]
 	if !ok {
@@ -564,6 +574,11 @@ func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing
 			"In Progress": 0,
 			"Done":        0,
 		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Todo": {
+				{ID: "issue-1", Identifier: "COLIN-1", Title: "Wake fast"},
+			},
+		},
 	}
 
 	orch.handleCodexEvent(context.Background(), codex.Event{
@@ -580,6 +595,15 @@ func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing
 	}
 	if got := orch.issueStates["In Progress"]; got != 1 {
 		t.Fatalf("In Progress count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Todo"]); got != 0 {
+		t.Fatalf("Todo issue list length = %d, want 0", got)
+	}
+	if got := len(orch.stateIssues["In Progress"]); got != 1 {
+		t.Fatalf("In Progress issue list length = %d, want 1", got)
+	}
+	if got := orch.stateIssues["In Progress"][0].Identifier; got != "COLIN-1" {
+		t.Fatalf("In Progress issue identifier = %q, want COLIN-1", got)
 	}
 	if got := orch.running["issue-1"].issue.State; got != "In Progress" {
 		t.Fatalf("running issue state = %q, want %q", got, "In Progress")
@@ -671,6 +695,11 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 			},
 		},
 		issueStates: map[string]int{"Review": 1},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Review": {
+				{ID: "issue-1", Identifier: "COLIN-2", Title: "Review issue", URL: url},
+			},
+		},
 	}
 	orch.running["issue-1"].session.LastCodexTimestamp = &lastEventAt
 	orch.publishSnapshot(time.Date(2026, 3, 30, 12, 2, 0, 0, time.UTC))
@@ -685,6 +714,7 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	*first.Running[0].LastEventAt = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	first.Running[0].OutputLog[0].Message = "changed"
 	first.IssueStates["Review"] = 99
+	first.StateIssues["Review"][0].Identifier = "MUTATED"
 
 	second, err := orch.Snapshot(context.Background())
 	if err != nil {
@@ -704,6 +734,9 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	}
 	if got := second.IssueStates["Review"]; got != 1 {
 		t.Fatalf("cached IssueStates[Review] = %d, want 1", got)
+	}
+	if got := second.StateIssues["Review"][0].Identifier; got != "COLIN-2" {
+		t.Fatalf("cached StateIssues[Review][0].Identifier = %q, want COLIN-2", got)
 	}
 }
 

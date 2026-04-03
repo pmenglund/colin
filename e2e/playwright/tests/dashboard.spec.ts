@@ -8,11 +8,21 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("dashboard-root")).toBeVisible();
   const stateCounts = page.getByTestId("linear-state-counts");
   await expect(stateCounts).toBeVisible();
-  await expect(stateCounts.getByText("In Progress")).toBeVisible();
+  await expect(stateCounts.locator(".stat-title").filter({ hasText: /^In Progress$/ })).toBeVisible();
   await expect(page.getByTestId("paused-issues-review")).toBeVisible();
   await expect(page.getByTestId("paused-issues-review")).toHaveAttribute(
     "href",
     "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
+  );
+  await page.getByTestId("state-issues-trigger-in-progress").click();
+  await expect(page.getByTestId("state-issues-in-progress")).toContainText("COLIN-7");
+  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Linear" })).toHaveAttribute(
+    "href",
+    "https://linear.app/example/issue/COLIN-7",
+  );
+  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Web UI details" })).toHaveAttribute(
+    "href",
+    "/linear/issues/issue-demo-1/metadata",
   );
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
 });
@@ -23,11 +33,14 @@ test("worker card expands and refresh updates the fragment without reloading the
   const shellInstance = await page.getByTestId("shell-instance").textContent();
   const before = await page.getByTestId("turn-count-COLIN-7").textContent();
   const details = page.locator("#worker-output-details-COLIN-7");
+  const stateIssuesDetails = page.locator("#state-issues-details-in-progress");
   const outputPre = page.getByTestId("worker-output-COLIN-7").locator("pre").first();
   const outputTime = page.getByTestId("worker-output-COLIN-7").locator("[data-local-time]").first();
 
   await page.getByText("Codex output").click();
   await expect(details).toHaveJSProperty("open", true);
+  await page.getByTestId("state-issues-trigger-in-progress").click();
+  await expect(stateIssuesDetails).toHaveJSProperty("open", true);
   await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Refreshed the task view fragment.");
   await expect(outputPre).toHaveCSS("white-space", "pre-wrap");
   const timestamp = await outputTime.getAttribute("data-timestamp");
@@ -49,6 +62,7 @@ test("worker card expands and refresh updates the fragment without reloading the
   await page.getByTestId("refresh-button").click();
   await expect(page.getByTestId("turn-count-COLIN-7")).not.toHaveText(before ?? "");
   await expect(details).toHaveJSProperty("open", true);
+  await expect(stateIssuesDetails).toHaveJSProperty("open", true);
   const refreshedTimestamp = await outputTime.getAttribute("data-timestamp");
   if (!refreshedTimestamp) {
     throw new Error("missing refreshed output timestamp");

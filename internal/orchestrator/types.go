@@ -46,6 +46,7 @@ type Orchestrator struct {
 	totalTokens       domain.Totals
 	rateLimits        domain.RateLimitSnapshot
 	issueStates       map[string]int
+	stateIssues       map[string][]domain.StateIssueSummary
 	pausedIssueStates map[string]domain.PausedStateSummary
 }
 
