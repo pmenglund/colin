@@ -1317,6 +1317,7 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadataMap, _ := node["metadata"].(map[string]any)
 	metadata := domain.ColinMetadata{}
 	metadata.AttachmentID, _ = stringValue(node["id"])
+	metadata.URL = strings.TrimSpace(url)
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
 	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
 		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
@@ -1345,6 +1346,10 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadata.PausedRunType, _ = stringValue(metadataMap["paused_run_type"])
 	metadata.PausedState, _ = stringValue(metadataMap["paused_state"])
 	metadata.PausedReason, _ = stringValue(metadataMap["paused_reason"])
+	metadata.SlackChannelID, _ = stringValue(metadataMap["slack_channel_id"])
+	metadata.SlackMessageTS, _ = stringValue(metadataMap["slack_message_ts"])
+	metadata.SlackPermalink, _ = stringValue(metadataMap["slack_permalink"])
+	metadata.SlackSummaryFingerprint, _ = stringValue(metadataMap["slack_summary_fingerprint"])
 	if value, _ := stringValue(metadataMap["paused_at"]); strings.TrimSpace(value) != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 			metadata.PausedAt = &parsed
@@ -1393,6 +1398,7 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 	metadataMap, _ := node["metadata"].(map[string]any)
 	plan := domain.ExecPlan{}
 	plan.AttachmentID, _ = stringValue(node["id"])
+	plan.URL = strings.TrimSpace(url)
 	plan.Body, _ = stringValue(metadataMap["body"])
 	if value, _ := stringValue(metadataMap["updated_at"]); strings.TrimSpace(value) != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
@@ -1404,22 +1410,26 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
-		"actual_branch_name":       strings.TrimSpace(metadata.ActualBranchName),
-		"exec_plan_decision":       strings.TrimSpace(string(metadata.ExecPlanDecision)),
-		"review_publish_directive": strings.TrimSpace(string(metadata.ReviewPublishDirective)),
-		"last_run_type":            strings.TrimSpace(string(metadata.LastRunType)),
-		"last_outcome":             strings.TrimSpace(string(metadata.LastOutcome)),
-		"last_summary_comment_id":  strings.TrimSpace(metadata.LastSummaryCommentID),
-		"pull_request_number":      metadata.PullRequestNumber,
-		"pull_request_url":         strings.TrimSpace(metadata.PullRequestURL),
-		"pull_request_state":       strings.TrimSpace(metadata.PullRequestState),
-		"pull_request_head_ref":    strings.TrimSpace(metadata.PullRequestHeadRef),
-		"pull_request_base_ref":    strings.TrimSpace(metadata.PullRequestBaseRef),
-		"loop_failure_fingerprint": strings.TrimSpace(metadata.LoopFailureFingerprint),
-		"loop_failure_count":       metadata.LoopFailureCount,
-		"paused_run_type":          strings.TrimSpace(metadata.PausedRunType),
-		"paused_state":             strings.TrimSpace(metadata.PausedState),
-		"paused_reason":            strings.TrimSpace(metadata.PausedReason),
+		"actual_branch_name":        strings.TrimSpace(metadata.ActualBranchName),
+		"exec_plan_decision":        strings.TrimSpace(string(metadata.ExecPlanDecision)),
+		"review_publish_directive":  strings.TrimSpace(string(metadata.ReviewPublishDirective)),
+		"last_run_type":             strings.TrimSpace(string(metadata.LastRunType)),
+		"last_outcome":              strings.TrimSpace(string(metadata.LastOutcome)),
+		"last_summary_comment_id":   strings.TrimSpace(metadata.LastSummaryCommentID),
+		"pull_request_number":       metadata.PullRequestNumber,
+		"pull_request_url":          strings.TrimSpace(metadata.PullRequestURL),
+		"pull_request_state":        strings.TrimSpace(metadata.PullRequestState),
+		"pull_request_head_ref":     strings.TrimSpace(metadata.PullRequestHeadRef),
+		"pull_request_base_ref":     strings.TrimSpace(metadata.PullRequestBaseRef),
+		"loop_failure_fingerprint":  strings.TrimSpace(metadata.LoopFailureFingerprint),
+		"loop_failure_count":        metadata.LoopFailureCount,
+		"paused_run_type":           strings.TrimSpace(metadata.PausedRunType),
+		"paused_state":              strings.TrimSpace(metadata.PausedState),
+		"paused_reason":             strings.TrimSpace(metadata.PausedReason),
+		"slack_channel_id":          strings.TrimSpace(metadata.SlackChannelID),
+		"slack_message_ts":          strings.TrimSpace(metadata.SlackMessageTS),
+		"slack_permalink":           strings.TrimSpace(metadata.SlackPermalink),
+		"slack_summary_fingerprint": strings.TrimSpace(metadata.SlackSummaryFingerprint),
 	}
 	if metadata.PausedAt != nil {
 		value["paused_at"] = metadata.PausedAt.UTC().Format(time.RFC3339)
