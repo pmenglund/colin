@@ -427,8 +427,8 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 			"retrying": 1,
 		},
 		IssueStates: map[string]int{
-			"Todo":        8,
-			"In Progress": 3,
+			"Todo":        1,
+			"In Progress": 2,
 			"Refine":      1,
 			"Review":      2,
 			"Merge":       1,

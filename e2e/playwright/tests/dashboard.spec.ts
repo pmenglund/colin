@@ -16,11 +16,13 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   );
   await page.getByTestId("state-issues-trigger-in-progress").click();
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("COLIN-7");
-  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Linear" })).toHaveAttribute(
+  await expect(page.getByTestId("state-issues-in-progress")).toContainText("Issue ID");
+  await expect(page.getByTestId("state-issues-in-progress")).toContainText("Title");
+  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "COLIN-7" })).toHaveAttribute(
     "href",
     "https://linear.app/example/issue/COLIN-7",
   );
-  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Web UI details" })).toHaveAttribute(
+  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Render live dashboard cards" })).toHaveAttribute(
     "href",
     "/linear/issues/issue-demo-1/metadata",
   );

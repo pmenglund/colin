@@ -457,21 +457,26 @@ func stateCountCard(state string, total int, issues []domain.StateIssueSummary, 
 		h.Class("stat"),
 		h.Class("state-card"),
 		h.Div(h.Class("stat-title"), g.Text(state)),
-		h.Div(h.Class("stat-value"), g.Text(strconv.Itoa(total))),
+		stateCountValue(state, total, issues),
 		h.Div(h.Class("stat-desc"), g.Text(stateDescription(state))),
 		pausedIndicator(state, paused),
-		stateIssuesPopover(state, issues),
 	)
 }
 
-func stateIssuesPopover(state string, issues []domain.StateIssueSummary) g.Node {
-	slug := stateSlug(state)
-	label := "View issues"
-	if len(issues) == 1 {
-		label = "View 1 issue"
-	} else if len(issues) > 1 {
-		label = fmt.Sprintf("View %d issues", len(issues))
+func stateCountValue(state string, total int, issues []domain.StateIssueSummary) g.Node {
+	if len(issues) == 0 {
+		return h.Div(h.Class("stat-value"), g.Text(strconv.Itoa(total)))
 	}
+
+	return h.Div(
+		h.Class("stat-value"),
+		stateIssuesPopover(state, total, issues),
+	)
+}
+
+func stateIssuesPopover(state string, total int, issues []domain.StateIssueSummary) g.Node {
+	slug := stateSlug(state)
+	label := issueCountLabel(len(issues))
 
 	return h.Details(
 		h.ID("state-issues-details-"+slug),
@@ -480,7 +485,7 @@ func stateIssuesPopover(state string, issues []domain.StateIssueSummary) g.Node 
 		h.Summary(
 			h.Class("state-issues-trigger"),
 			h.Data("testid", "state-issues-trigger-"+slug),
-			g.Text(label),
+			g.Text(strconv.Itoa(total)),
 		),
 		h.Div(
 			h.Class("state-issues-panel"),
@@ -495,6 +500,13 @@ func stateIssuesPopover(state string, issues []domain.StateIssueSummary) g.Node 
 	)
 }
 
+func issueCountLabel(total int) string {
+	if total == 1 {
+		return "1 issue"
+	}
+	return fmt.Sprintf("%d issues", total)
+}
+
 func renderStateIssueList(state string, issues []domain.StateIssueSummary) g.Node {
 	if len(issues) == 0 {
 		return h.P(
@@ -505,34 +517,40 @@ func renderStateIssueList(state string, issues []domain.StateIssueSummary) g.Nod
 
 	slug := stateSlug(state)
 	return h.Div(
-		h.Class("state-issues-list"),
-		g.Map(issues, func(issue domain.StateIssueSummary) g.Node {
-			title := fallback(issue.Title, issue.Identifier)
-			row := g.Group{
-				h.Div(
-					h.Class("state-issue-copy"),
-					h.Span(h.Class("badge badge-accent"), g.Text(issue.Identifier)),
-					h.Div(h.Class("state-issue-title"), g.Text(title)),
+		h.Class("table-wrap"),
+		h.Class("state-issues-table-wrap"),
+		h.Table(
+			h.Class("table"),
+			h.Class("state-issues-table"),
+			h.THead(
+				h.Tr(
+					h.Th(g.Text("Issue ID")),
+					h.Th(g.Text("Title")),
 				),
-			}
+			),
+			h.TBody(
+				g.Map(issues, func(issue domain.StateIssueSummary) g.Node {
+					title := fallback(issue.Title, issue.Identifier)
 
-			links := g.Group{}
-			if strings.TrimSpace(issue.URL) != "" {
-				links = append(links, h.A(h.Href(issue.URL), g.Text("Linear")))
-			}
-			if strings.TrimSpace(issue.ID) != "" {
-				links = append(links, h.A(h.Href(domain.ColinMetadataPath(issue.ID)), g.Text("Web UI details")))
-			}
-			if len(links) > 0 {
-				row = append(row, h.Div(h.Class("state-issue-links"), links))
-			}
+					issueID := g.Node(g.Text(issue.Identifier))
+					if strings.TrimSpace(issue.URL) != "" {
+						issueID = h.A(h.Class("state-issue-id-link"), h.Href(issue.URL), g.Text(issue.Identifier))
+					}
 
-			return h.Article(
-				h.Class("state-issue-row"),
-				h.Data("testid", "state-issue-"+slug+"-"+issue.Identifier),
-				row,
-			)
-		}),
+					issueTitle := g.Node(g.Text(title))
+					if strings.TrimSpace(issue.ID) != "" {
+						issueTitle = h.A(h.Class("state-issue-title-link"), h.Href(domain.ColinMetadataPath(issue.ID)), g.Text(title))
+					}
+
+					return h.Tr(
+						h.Class("state-issue-row"),
+						h.Data("testid", "state-issue-"+slug+"-"+issue.Identifier),
+						h.Td(issueID),
+						h.Td(issueTitle),
+					)
+				}),
+			),
+		),
 	)
 }
 

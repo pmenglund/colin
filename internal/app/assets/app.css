@@ -321,26 +321,25 @@ a {
 
 .state-issues-popup {
   position: relative;
-  width: 100%;
-  margin-top: 0.75rem;
+  display: inline-block;
+  margin-top: 0.1rem;
 }
 
 .state-issues-trigger {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
+  align-items: baseline;
   cursor: pointer;
   list-style: none;
-  border: 1px solid rgba(103, 214, 255, 0.24);
-  border-radius: 999px;
-  padding: 0.45rem 0.8rem;
-  background: rgba(103, 214, 255, 0.08);
+  padding: 0;
+  border: none;
+  background: none;
   color: var(--accent-2);
-  font-size: 0.82rem;
+  font: inherit;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-align: center;
+  line-height: 1;
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.12em;
 }
 
 .state-issues-trigger::-webkit-details-marker {
@@ -350,13 +349,12 @@ a {
 .state-issues-popup[open] .state-issues-trigger,
 .state-issues-trigger:hover,
 .state-issues-trigger:focus-visible {
-  border-color: rgba(103, 214, 255, 0.38);
-  background: rgba(103, 214, 255, 0.14);
+  color: #c4efff;
 }
 
 .state-issues-panel {
   position: absolute;
-  left: 50%;
+  left: 0;
   z-index: 10;
   width: min(28rem, calc(100vw - 2rem));
   max-height: 20rem;
@@ -367,7 +365,6 @@ a {
   border-radius: 1rem;
   background: rgba(6, 16, 25, 0.98);
   box-shadow: var(--shadow);
-  transform: translateX(-50%);
 }
 
 .state-issues-header {
@@ -387,42 +384,41 @@ a {
   margin: 0.85rem 0 0;
 }
 
-.state-issues-list {
-  display: grid;
-  gap: 0.75rem;
+.state-issues-table-wrap {
   margin-top: 0.85rem;
 }
 
-.state-issue-row {
-  display: grid;
-  gap: 0.55rem;
-  padding: 0.8rem;
-  border-radius: 0.9rem;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+.state-issues-table th,
+.state-issues-table td {
+  padding-inline: 0.2rem;
 }
 
-.state-issue-copy {
-  display: grid;
-  gap: 0.45rem;
+.state-issues-table th:first-child,
+.state-issues-table td:first-child {
+  width: 7.5rem;
+  padding-right: 1rem;
+  white-space: nowrap;
 }
 
-.state-issue-title {
-  font-size: 0.96rem;
-  font-weight: 700;
-  line-height: 1.35;
-}
-
-.state-issue-links {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.state-issue-links a {
+.state-issue-id-link,
+.state-issue-title-link {
   color: var(--accent-2);
-  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.state-issue-id-link:hover,
+.state-issue-id-link:focus-visible,
+.state-issue-title-link:hover,
+.state-issue-title-link:focus-visible {
+  text-decoration: underline;
+}
+
+.state-issue-id-link {
   font-weight: 700;
+}
+
+.state-issue-title-link {
+  line-height: 1.35;
 }
 
 .content-grid {
@@ -711,6 +707,5 @@ a {
   .state-issues-panel {
     left: 0;
     width: calc(100vw - 2rem);
-    transform: none;
   }
 }
