@@ -105,6 +105,9 @@ func renderHeaderStatus(m model) string {
 		subtleStyle.Render("l logs"),
 		subtleStyle.Render("q/esc quit"),
 	}
+	if m.hasUnseenLogAlerts() {
+		parts = append(parts, warnStyle.Render("warn/err in logs"))
+	}
 	if !m.lastRefresh.IsZero() {
 		parts = append(parts, subtleStyle.Render("refreshed "+humanizeAge(m.lastRefresh)))
 	}
