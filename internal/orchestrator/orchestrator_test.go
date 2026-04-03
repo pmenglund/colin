@@ -395,7 +395,11 @@ func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ 
 		s.attempt = &value
 	}
 	if s.invoked != nil {
-		close(s.invoked)
+		select {
+		case <-s.invoked:
+		default:
+			close(s.invoked)
+		}
 	}
 	if s.release != nil {
 		<-s.release
@@ -2002,6 +2006,14 @@ func TestRunProcessesRefreshRequestsImmediately(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("startup candidate fetch did not happen")
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for !orch.RefreshReady() {
+		if time.Now().After(deadline) {
+			t.Fatal("RefreshReady() did not become true after startup tick")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	queued, coalesced := orch.RequestRefresh("test refresh")
