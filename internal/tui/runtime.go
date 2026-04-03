@@ -158,7 +158,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot = msg.snapshot
 		m.logs = msg.logs
 		m.setup = msg.setup
-		if m.mode == modeLogs {
+		if m.mode == modeLogs && msg.err == nil {
 			m.markLogAlertsViewed()
 		}
 		m.refreshErr = msg.err

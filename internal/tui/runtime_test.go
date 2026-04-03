@@ -449,6 +449,42 @@ func TestViewingLogsClearsIndicatorUntilNewWarnOrErrorArrives(t *testing.T) {
 	}
 }
 
+func TestFailedRefreshDoesNotReopenViewedWarnOrErrorIndicator(t *testing.T) {
+	t.Parallel()
+
+	alertLogs := domain.BufferedLogSnapshot{
+		Entries: []domain.BufferedLogEntry{
+			{Timestamp: time.Unix(0, 0).UTC(), Level: "WARN", Message: "first warning"},
+		},
+		Count:    1,
+		Capacity: 2,
+	}
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
+	m.logs = alertLogs
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	m = next.(model)
+	if strings.Contains(stripANSI(m.View().Content), "warn/err in logs") {
+		t.Fatal("indicator should clear after opening logs")
+	}
+
+	next, _ = m.Update(refreshMsg{err: fmt.Errorf("boom")})
+	m = next.(model)
+
+	next, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	m = next.(model)
+	if m.mode != modeOverview {
+		t.Fatalf("mode = %v, want modeOverview", m.mode)
+	}
+
+	next, _ = m.Update(refreshMsg{logs: alertLogs})
+	m = next.(model)
+	if strings.Contains(stripANSI(m.View().Content), "warn/err in logs") {
+		t.Fatal("indicator should remain cleared after a failed refresh followed by the same alert logs")
+	}
+}
+
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(value string) string {
