@@ -182,20 +182,23 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
 	}
-	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
-		o.logger.Debug("candidate fetch deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
-		return
-	}
-	issues, err := o.runtime.Tracker.FetchCandidateIssues(ctx)
-	if err != nil {
-		o.logger.Error("candidate fetch failed", "error", err)
-		return
+	now := time.Now().UTC()
+	var issues []domain.Issue
+	dispatchDecision := o.linearBudgetDecision(now, linearRequestDispatch)
+	if dispatchDecision.Allowed {
+		var err error
+		issues, err = o.runtime.Tracker.FetchCandidateIssues(ctx)
+		if err != nil {
+			o.logger.Error("candidate fetch failed", "error", err)
+			return
+		}
+	} else {
+		o.logger.Debug("dispatch candidate fetch deferred by Linear request budget", o.linearBudgetLogArgs(dispatchDecision)...)
 	}
 	o.cleanupReviewSync(issues)
 	sortIssues(issues)
 	dispatched := 0
 	eligible := 0
-	now := time.Now().UTC()
 	for _, issue := range issues {
 		issue, ready := o.prepareReviewIssue(ctx, issue, now)
 		if !ready {
@@ -212,7 +215,13 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.dispatch(ctx, issue, nil, nil)
 		dispatched++
 	}
-	trackedIssues := o.refreshIssueStateCounts(ctx)
+	var trackedIssues []domain.Issue
+	backgroundDecision := o.linearBudgetDecision(now, linearRequestBackground)
+	if backgroundDecision.Allowed {
+		trackedIssues = o.refreshIssueStateCounts(ctx)
+	} else {
+		o.logger.Debug("background state-count refresh skipped to preserve Linear reserve", o.linearBudgetLogArgs(backgroundDecision)...)
+	}
 	o.syncCodexReviewLabels(ctx, trackedIssues)
 	o.syncSlackIssues(ctx, trackedIssues)
 	args = []any{
