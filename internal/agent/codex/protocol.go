@@ -170,8 +170,54 @@ func extractUsage(msg map[string]any) map[string]int64 {
 	}
 
 	for _, candidate := range candidates {
+		if usage, ok := extractThreadTokenUsage(candidate); ok {
+			return usage
+		}
+	}
+
+	for _, candidate := range candidates {
 		if usage, ok := extractDirectUsage(candidate); ok {
 			return usage
+		}
+	}
+
+	return nil
+}
+
+func extractContextWindowUsage(msg map[string]any) *domain.ContextWindowUsage {
+	candidates := []any{}
+	if params, ok := msg["params"]; ok {
+		candidates = append(candidates, params)
+	}
+	if result, ok := msg["result"]; ok {
+		candidates = append(candidates, result)
+	}
+	candidates = append(candidates, msg)
+
+	for _, candidate := range candidates {
+		usage, ok := extractThreadTokenUsage(candidate)
+		if !ok {
+			continue
+		}
+		asMap, ok := candidate.(map[string]any)
+		if !ok {
+			continue
+		}
+		tokenUsage, ok := nestedMap(asMap, "tokenUsage")
+		if !ok {
+			continue
+		}
+		limit, ok := int64Value(tokenUsage["modelContextWindow"])
+		if !ok || limit <= 0 {
+			continue
+		}
+		total, ok := usage["total_tokens"]
+		if !ok {
+			continue
+		}
+		return &domain.ContextWindowUsage{
+			UsedTokens:  total,
+			LimitTokens: limit,
 		}
 	}
 
@@ -215,6 +261,22 @@ func extractDirectUsage(value any) (map[string]int64, bool) {
 	return out, true
 }
 
+func extractThreadTokenUsage(value any) (map[string]int64, bool) {
+	asMap, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	tokenUsage, ok := nestedMap(asMap, "tokenUsage")
+	if !ok {
+		return nil, false
+	}
+	total, ok := nestedMap(tokenUsage, "total")
+	if !ok {
+		return nil, false
+	}
+	return extractDirectUsage(total)
+}
+
 func collectDirectUsage(value any, out map[string]int64) {
 	asMap, ok := value.(map[string]any)
 	if !ok {
@@ -223,15 +285,15 @@ func collectDirectUsage(value any, out map[string]int64) {
 
 	for key, item := range asMap {
 		switch strings.ToLower(key) {
-		case "input_tokens":
+		case "input_tokens", "inputtokens":
 			if n, ok := int64Value(item); ok {
 				out["input_tokens"] = n
 			}
-		case "output_tokens":
+		case "output_tokens", "outputtokens":
 			if n, ok := int64Value(item); ok {
 				out["output_tokens"] = n
 			}
-		case "total_tokens":
+		case "total_tokens", "totaltokens":
 			if n, ok := int64Value(item); ok {
 				out["total_tokens"] = n
 			}
@@ -360,6 +422,22 @@ func nestedString(root map[string]any, keys ...string) (string, bool) {
 		}
 	}
 	return stringValue(current)
+}
+
+func nestedMap(root map[string]any, keys ...string) (map[string]any, bool) {
+	current := any(root)
+	for _, key := range keys {
+		asMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = asMap[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	asMap, ok := current.(map[string]any)
+	return asMap, ok
 }
 
 func stringValue(value any) (string, bool) {

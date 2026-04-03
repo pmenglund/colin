@@ -54,30 +54,31 @@ var (
 
 // Event is a normalized runtime event emitted from the Codex app-server session.
 type Event struct {
-	Event      string
-	RunType    string
-	Timestamp  time.Time
-	SessionID  string
-	ThreadID   string
-	TurnID     string
-	PID        *int
-	Message    string
-	Attempt    int
-	State      string
-	PrevState  string
-	Duration   time.Duration
-	Usage      map[string]int64
-	RateLimits domain.RateLimitSnapshot
-	Raw        map[string]any
-	IssueID    string
-	Identifier string
-	Workspace  string
-	Branch     string
-	BaseRef    string
-	PRNumber   int
-	PRURL      string
-	PRState    string
-	Action     string
+	Event         string
+	RunType       string
+	Timestamp     time.Time
+	SessionID     string
+	ThreadID      string
+	TurnID        string
+	PID           *int
+	Message       string
+	Attempt       int
+	State         string
+	PrevState     string
+	Duration      time.Duration
+	Usage         map[string]int64
+	ContextWindow *domain.ContextWindowUsage
+	RateLimits    domain.RateLimitSnapshot
+	Raw           map[string]any
+	IssueID       string
+	Identifier    string
+	Workspace     string
+	Branch        string
+	BaseRef       string
+	PRNumber      int
+	PRURL         string
+	PRState       string
+	Action        string
 }
 
 // Result is the terminal outcome of one runner invocation for a single issue.

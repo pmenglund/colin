@@ -537,6 +537,7 @@ type LiveSession struct {
 	LastReportedInputTokens  int64
 	LastReportedOutputTokens int64
 	LastReportedTotalTokens  int64
+	ContextWindow            *ContextWindowUsage
 	TurnCount                int
 }
 
@@ -555,6 +556,12 @@ type Totals struct {
 	OutputTokens   int64   `json:"output_tokens"`
 	TotalTokens    int64   `json:"total_tokens"`
 	SecondsRunning float64 `json:"seconds_running"`
+}
+
+// ContextWindowUsage tracks how much of a session's model context window is in use.
+type ContextWindowUsage struct {
+	UsedTokens  int64 `json:"used_tokens"`
+	LimitTokens int64 `json:"limit_tokens"`
 }
 
 // PausedStateSummary captures paused issue count and investigation URL for one Linear state.
@@ -588,21 +595,22 @@ type Snapshot struct {
 
 // SnapshotRunning is the per-running-issue row included in a Snapshot.
 type SnapshotRunning struct {
-	IssueID      string      `json:"issue_id"`
-	Identifier   string      `json:"issue_identifier"`
-	Title        string      `json:"title"`
-	URL          *string     `json:"url,omitempty"`
-	State        string      `json:"state"`
-	SessionID    string      `json:"session_id"`
-	TurnCount    int         `json:"turn_count"`
-	LastEvent    string      `json:"last_event"`
-	LastMessage  string      `json:"last_message"`
-	StartedAt    time.Time   `json:"started_at"`
-	LastEventAt  *time.Time  `json:"last_event_at"`
-	InputTokens  int64       `json:"input_tokens"`
-	OutputTokens int64       `json:"output_tokens"`
-	TotalTokens  int64       `json:"total_tokens"`
-	OutputLog    []OutputLog `json:"output_log"`
+	IssueID       string              `json:"issue_id"`
+	Identifier    string              `json:"issue_identifier"`
+	Title         string              `json:"title"`
+	URL           *string             `json:"url,omitempty"`
+	State         string              `json:"state"`
+	SessionID     string              `json:"session_id"`
+	TurnCount     int                 `json:"turn_count"`
+	LastEvent     string              `json:"last_event"`
+	LastMessage   string              `json:"last_message"`
+	StartedAt     time.Time           `json:"started_at"`
+	LastEventAt   *time.Time          `json:"last_event_at"`
+	InputTokens   int64               `json:"input_tokens"`
+	OutputTokens  int64               `json:"output_tokens"`
+	TotalTokens   int64               `json:"total_tokens"`
+	ContextWindow *ContextWindowUsage `json:"context_window,omitempty"`
+	OutputLog     []OutputLog         `json:"output_log"`
 }
 
 // OutputLog is one human-readable Codex event line captured for dashboard inspection.

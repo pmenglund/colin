@@ -492,6 +492,9 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 		entry.session.TurnCount++
 	}
 	o.applyUsage(entry, event.Usage)
+	if event.ContextWindow != nil {
+		entry.session.ContextWindow = cloneContextWindowUsage(event.ContextWindow)
+	}
 	o.appendOutput(entry, event)
 	if event.RateLimits != nil {
 		o.rateLimits = event.RateLimits

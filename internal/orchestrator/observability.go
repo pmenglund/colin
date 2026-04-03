@@ -28,21 +28,22 @@ func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 	running := make([]domain.SnapshotRunning, 0, len(o.running))
 	for _, entry := range o.running {
 		running = append(running, domain.SnapshotRunning{
-			IssueID:      entry.issue.ID,
-			Identifier:   entry.issue.Identifier,
-			Title:        entry.issue.Title,
-			URL:          entry.issue.URL,
-			State:        entry.issue.State,
-			SessionID:    entry.session.SessionID,
-			TurnCount:    entry.session.TurnCount,
-			LastEvent:    entry.session.LastCodexEvent,
-			LastMessage:  entry.session.LastCodexMessage,
-			StartedAt:    entry.startedAt,
-			LastEventAt:  entry.session.LastCodexTimestamp,
-			InputTokens:  entry.session.CodexInputTokens,
-			OutputTokens: entry.session.CodexOutputTokens,
-			TotalTokens:  entry.session.CodexTotalTokens,
-			OutputLog:    append([]domain.OutputLog(nil), entry.outputLog...),
+			IssueID:       entry.issue.ID,
+			Identifier:    entry.issue.Identifier,
+			Title:         entry.issue.Title,
+			URL:           entry.issue.URL,
+			State:         entry.issue.State,
+			SessionID:     entry.session.SessionID,
+			TurnCount:     entry.session.TurnCount,
+			LastEvent:     entry.session.LastCodexEvent,
+			LastMessage:   entry.session.LastCodexMessage,
+			StartedAt:     entry.startedAt,
+			LastEventAt:   entry.session.LastCodexTimestamp,
+			InputTokens:   entry.session.CodexInputTokens,
+			OutputTokens:  entry.session.CodexOutputTokens,
+			TotalTokens:   entry.session.CodexTotalTokens,
+			ContextWindow: cloneContextWindowUsage(entry.session.ContextWindow),
+			OutputLog:     append([]domain.OutputLog(nil), entry.outputLog...),
 		})
 	}
 	sort.Slice(running, func(i, j int) bool { return running[i].Identifier < running[j].Identifier })
@@ -116,10 +117,19 @@ func cloneSnapshotRunning(input []domain.SnapshotRunning) []domain.SnapshotRunni
 			value := *entry.LastEventAt
 			cloned.LastEventAt = &value
 		}
+		cloned.ContextWindow = cloneContextWindowUsage(entry.ContextWindow)
 		cloned.OutputLog = append([]domain.OutputLog(nil), entry.OutputLog...)
 		out = append(out, cloned)
 	}
 	return out
+}
+
+func cloneContextWindowUsage(input *domain.ContextWindowUsage) *domain.ContextWindowUsage {
+	if input == nil {
+		return nil
+	}
+	out := *input
+	return &out
 }
 
 func cloneCounts(input map[string]int) map[string]int {
