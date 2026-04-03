@@ -1,0 +1,38 @@
+direction: right
+
+humans: {
+  label: "Human-owned next action"
+  style: {
+    fill: "#F3E7D3"
+    stroke: "#8A5A24"
+  }
+
+  Backlog
+  "Needs Clarification"
+  Review
+}
+
+colin: {
+  label: "Colin-owned next action"
+  style: {
+    fill: "#D9E9E2"
+    stroke: "#2F6B57"
+  }
+
+  Todo
+  "In Progress"
+  "Ready to Merge"
+  Merging
+  Merged
+}
+
+Backlog -> Todo: prioritize
+Todo -> "In Progress": dispatch
+"In Progress" -> Review: reviewable change
+"In Progress" -> "Needs Clarification": unclear or unsafe
+"Needs Clarification" -> Todo: clarified
+Review -> Todo: review feedback
+Review -> "Ready to Merge": approved
+"Ready to Merge" -> Merging: start merge automation
+Merging -> Merged: merged
+Merging -> Review: human action needed

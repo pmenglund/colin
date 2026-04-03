@@ -47,6 +47,8 @@ Colin treats these as terminal states and stops work when an issue enters them:
 - `Canceled`
 - `Duplicate`
 
+For an audit of the current model and a proposed stricter replacement state machine, see [docs/linear-state-machine.md](docs/linear-state-machine.md). That document is descriptive and forward-looking; it does not mean the proposed states are already implemented.
+
 ## Operate Many Tasks At Once
 
 Colin is built to supervise a queue, not a single foreground session. It keeps one workspace per issue, tracks retries and rate limits, and gives operators a live dashboard so they can monitor fleet-level progress instead of watching individual coding runs. Colin itself is also developed using Colin, so the workflow is exercised continuously in the project that builds it.

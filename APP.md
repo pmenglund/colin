@@ -30,7 +30,9 @@ Today, the checked-in workflow uses:
 - Active: `Todo`, `In Progress`
 - Publish: `Review`
 - Merge: `Merge`
-- Terminal: `Done`, `Closed`, `Cancelled`, `Canceled`, `Duplicate`
+- Terminal: `Done`, `Merged`, `Closed`, `Cancelled`, `Canceled`, `Duplicate`
+
+See `docs/linear-state-machine.md` for an audit of the current state semantics and a proposed stricter replacement model. That proposal is not yet the live runtime behavior.
 
 ## Core Runtime Flow
 
