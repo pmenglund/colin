@@ -165,6 +165,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	if o.draining {
 		trackedIssues := o.refreshIssueStateCounts(ctx)
 		o.syncCodexReviewLabels(ctx, trackedIssues)
+		o.syncSlackIssues(ctx, trackedIssues)
 		args = []any{
 			"draining", true,
 			"running", len(o.running),
@@ -212,6 +213,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	}
 	trackedIssues := o.refreshIssueStateCounts(ctx)
 	o.syncCodexReviewLabels(ctx, trackedIssues)
+	o.syncSlackIssues(ctx, trackedIssues)
 	args = []any{
 		"candidate_count", len(issues),
 		"eligible_count", eligible,

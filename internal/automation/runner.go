@@ -67,6 +67,7 @@ const (
 	metadataOutcomeSpec          = "needs_spec"
 	metadataOutcomeMax           = "max_turns"
 	metadataOutcomePlan          = "exec_plan_conflict"
+	metadataOutcomePlanInvalid   = "exec_plan_invalid"
 	metadataOutcomeMerged        = "merged"
 )
 
@@ -279,6 +280,22 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 	}
 
+	var (
+		execPlanCopy     *execplan.WorkingCopy
+		execPlanProgress execplan.Progress
+	)
+	if runType == RunTypeCoding && r.execPlanTrackingEnabled(current) {
+		execPlanCopy, execPlanProgress, err = r.prepareExecPlanWorkingCopy(current)
+		if err != nil {
+			return r.handleInvalidExecPlan(ctx, current, ws.Path, fmt.Sprintf("the stored ExecPlan is not usable: %v", err), nil)
+		}
+		defer func() {
+			if err := execPlanCopy.Close(); err != nil {
+				r.logger.Warn("failed to remove exec plan working copy", "path", execPlanCopy.Path(), "error", err)
+			}
+		}()
+	}
+
 	maxTurnsReached := false
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
@@ -286,13 +303,10 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 		}
 		if turn == 1 && r.cfg.Agent.CreateExecPlan {
-			prompt = injectExecPlanPrompt(prompt, current.ExecPlan)
+			prompt = injectExecPlanPrompt(prompt, current.ExecPlan, execPlanCopy, execPlanProgress)
 		}
 		if turn > 1 {
-			prompt = fmt.Sprintf(
-				"Continue working on %s without restating the original plan. Pick up from the current thread history and leave the issue in a handoff-ready state if appropriate.",
-				current.Identifier,
-			)
+			prompt = buildCodingContinuationPrompt(current.Identifier, execPlanCopy, execPlanProgress)
 		}
 		r.logger.Info(
 			"runner turn starting",
@@ -335,6 +349,15 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 				status = "failed"
 			}
 			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: status, Err: err}
+		}
+		if execPlanCopy != nil {
+			current, execPlanProgress, err = r.syncIssueExecPlanFromWorkingCopy(ctx, current, execPlanCopy)
+			if err != nil {
+				if errors.Is(err, tracker.ErrDuplicateExecPlans) {
+					return r.handleDuplicateExecPlans(ctx, current, ws.Path)
+				}
+				return r.handleInvalidExecPlan(ctx, current, ws.Path, err.Error(), execPlanProgress.Remaining())
+			}
 		}
 
 		duration := time.Since(startedAt).Round(time.Millisecond)
@@ -404,6 +427,29 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 			}
 			if reviewable {
+				if execPlanCopy != nil && !execPlanProgress.AllCompleted() {
+					client.ClearFinalSummary()
+					r.logger.Info(
+						"runner turn produced ready-for-review before exec plan progress was complete; continuing",
+						"issue_id", current.ID,
+						"issue_identifier", current.Identifier,
+						"current_state", current.State,
+						"turn", turn,
+						"remaining_progress_items", len(execPlanProgress.Remaining()),
+					)
+					if turn == r.cfg.Agent.MaxTurns {
+						maxTurnsReached = true
+						break
+					}
+					emit(Event{
+						Event:     EventContinuationNeeded,
+						Timestamp: time.Now().UTC(),
+						Workspace: ws.Path,
+						State:     current.State,
+						Message:   fmt.Sprintf("ExecPlan progress still has %d remaining tasks; continuing in the same run", len(execPlanProgress.Remaining())),
+					})
+					continue
+				}
 				r.logger.Info(
 					"runner turn produced an explicit ready-for-review outcome with reviewable repository changes; finishing coding run",
 					"issue_id", current.ID,
@@ -474,6 +520,9 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	handoffOutcome, summary := parseCodingSummaryOutcome(summary)
 	if maxTurnsReached {
 		summary = appendMaxTurnsSummary(summary, current.State, r.cfg.Agent.MaxTurns)
+		if execPlanCopy != nil {
+			summary = appendRemainingExecPlanTasks(summary, execPlanProgress.Remaining())
+		}
 	}
 	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, codingOutcome(handoffOutcome, maxTurnsReached), "", ""))
 	if err != nil {
@@ -1398,6 +1447,40 @@ func buildDuplicateExecPlanSummary(issue domain.Issue) string {
 	return strings.Join(lines, "\n")
 }
 
+func buildInvalidExecPlanSummary(reason string, remaining []string) string {
+	lines := []string{
+		fmt.Sprintf("Colin moved this issue to `%s` because the ExecPlan-backed coding run cannot continue safely.", refineStateName),
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		lines = append(lines, "- Blocker: "+reason)
+	}
+	if len(remaining) > 0 {
+		lines = append(lines, "- Remaining ExecPlan tasks:")
+		for _, item := range remaining {
+			lines = append(lines, "  - "+strings.TrimSpace(item))
+		}
+	}
+	lines = append(lines, "- What Colin is doing next: stopping implementation until the ExecPlan or issue state is fixed.")
+	lines = append(lines, "- What you should do: update the ExecPlan or issue details, then move the issue back to active work.")
+	return strings.Join(lines, "\n")
+}
+
+func appendRemainingExecPlanTasks(summary string, remaining []string) string {
+	if len(remaining) == 0 {
+		return strings.TrimSpace(summary)
+	}
+	lines := []string{"Remaining ExecPlan tasks:"}
+	for _, item := range remaining {
+		lines = append(lines, "- "+strings.TrimSpace(item))
+	}
+	note := strings.Join(lines, "\n")
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return note
+	}
+	return summary + "\n\n" + note
+}
+
 func codexMetadata(issue domain.Issue, runType string, outcome string, summaryCommentID string) domain.ColinMetadata {
 	return codexMetadataWithDirective(issue, runType, outcome, summaryCommentID, reviewPublishDirective(issue))
 }
@@ -1458,6 +1541,53 @@ func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath str
 		return true, nil
 	}
 	return r.repo.ReviewableArtifact(ctx, workspacePath)
+}
+
+func (r *Runner) execPlanTrackingEnabled(issue domain.Issue) bool {
+	return r.cfg.Agent.CreateExecPlan &&
+		execPlanDecision(issue) == domain.ExecPlanDecisionExecPlan &&
+		hasCanonicalExecPlan(issue)
+}
+
+func (r *Runner) prepareExecPlanWorkingCopy(issue domain.Issue) (*execplan.WorkingCopy, execplan.Progress, error) {
+	body := execPlanBody(issue.ExecPlan)
+	progress, err := execplan.ParseProgress(body)
+	if err != nil {
+		return nil, execplan.Progress{}, err
+	}
+	copy, err := execplan.NewWorkingCopy(body)
+	if err != nil {
+		return nil, execplan.Progress{}, err
+	}
+	return copy, progress, nil
+}
+
+func (r *Runner) syncIssueExecPlanFromWorkingCopy(ctx context.Context, issue domain.Issue, workingCopy *execplan.WorkingCopy) (domain.Issue, execplan.Progress, error) {
+	body, err := workingCopy.ReadBody()
+	if err != nil {
+		return issue, execplan.Progress{}, fmt.Errorf("failed to read the ExecPlan working copy at %s: %w", workingCopy.Path(), err)
+	}
+	progress, err := execplan.ParseProgress(body)
+	if err != nil {
+		return issue, execplan.Progress{}, fmt.Errorf("failed to parse the ExecPlan working copy at %s: %w", workingCopy.Path(), err)
+	}
+	body = strings.TrimSpace(body)
+	if strings.TrimSpace(execPlanBody(issue.ExecPlan)) == body {
+		return issue, progress, nil
+	}
+	plan := domain.ExecPlan{
+		Body: body,
+	}
+	if issue.ExecPlan != nil {
+		plan.AttachmentID = issue.ExecPlan.AttachmentID
+	}
+	now := time.Now().UTC()
+	plan.UpdatedAt = &now
+	issue, err = r.persistIssueExecPlan(ctx, issue, plan)
+	if err != nil {
+		return issue, progress, err
+	}
+	return issue, progress, nil
 }
 
 func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *codex.Client, workspacePath string, issue domain.Issue) (domain.Issue, error) {
@@ -1735,15 +1865,46 @@ func hasDuplicateExecPlans(issue domain.Issue) bool {
 	return issue.ExecPlanCount > 1
 }
 
-func injectExecPlanPrompt(prompt string, plan *domain.ExecPlan) string {
+func injectExecPlanPrompt(prompt string, plan *domain.ExecPlan, workingCopy *execplan.WorkingCopy, progress execplan.Progress) string {
 	body := execPlanBody(plan)
-	if body == "" {
+	parts := make([]string, 0, 3)
+	if trimmed := strings.TrimSpace(prompt); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	if body != "" {
+		parts = append(parts, "ExecPlan:\n\n"+body)
+	}
+	if workingCopy != nil {
+		parts = append(parts, buildExecPlanTrackingInstructions(workingCopy.Path(), progress.Remaining()))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func buildCodingContinuationPrompt(identifier string, workingCopy *execplan.WorkingCopy, progress execplan.Progress) string {
+	prompt := fmt.Sprintf(
+		"Continue working on %s without restating the original plan. Pick up from the current thread history and leave the issue in a handoff-ready state if appropriate.",
+		identifier,
+	)
+	if workingCopy == nil {
 		return prompt
 	}
-	if strings.TrimSpace(prompt) == "" {
-		return "ExecPlan:\n\n" + body
+	return prompt + "\n\n" + buildExecPlanTrackingInstructions(workingCopy.Path(), progress.Remaining())
+}
+
+func buildExecPlanTrackingInstructions(path string, remaining []string) string {
+	lines := []string{
+		fmt.Sprintf("ExecPlan working copy: %s", path),
+		"Keep that file updated as you work. It is the live copy Colin will sync back to the Linear issue after each turn.",
+		"For ExecPlan-backed issues, do not return `COLIN_OUTCOME: READY_FOR_REVIEW` until every checkbox under `## Progress` is complete.",
+		"If you cannot safely complete the remaining `## Progress` tasks, return `COLIN_OUTCOME: NEEDS_SPEC` and explain the blocker.",
 	}
-	return strings.TrimSpace(prompt) + "\n\nExecPlan:\n\n" + body
+	if len(remaining) > 0 {
+		lines = append(lines, "Remaining `## Progress` tasks:")
+		for _, item := range remaining {
+			lines = append(lines, "- "+strings.TrimSpace(item))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, metadata domain.ColinMetadata) (domain.Issue, error) {
@@ -1791,6 +1952,21 @@ func (r *Runner) persistIssueExecPlan(ctx context.Context, issue domain.Issue, p
 	issue.ExecPlan = &persisted
 	issue.ExecPlanCount = 1
 	return issue, nil
+}
+
+func (r *Runner) handleInvalidExecPlan(ctx context.Context, issue domain.Issue, workspacePath string, reason string, remaining []string) Result {
+	updated, updateErr := r.moveIssueToState(ctx, issue, refineStateName)
+	if updateErr != nil {
+		return Result{Issue: issue, RunType: RunTypeCoding, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
+	}
+	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeCoding, metadataOutcomePlanInvalid, ""))
+	return Result{
+		Issue:         updated,
+		RunType:       RunTypeCoding,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		Summary:       buildInvalidExecPlanSummary(reason, remaining),
+	}
 }
 
 func (r *Runner) persistIssueMetadataBestEffort(ctx context.Context, issue domain.Issue, metadata domain.ColinMetadata) domain.Issue {

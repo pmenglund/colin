@@ -8,6 +8,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/notify"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/tracker"
 	"github.com/pmenglund/colin/internal/workspace"
@@ -21,6 +22,7 @@ type Runtime struct {
 	Repo      *repoops.Manager
 	Workspace *workspace.Manager
 	Runner    Runner
+	Notifier  notify.IssueNotifier
 }
 
 // Runner describes the automation runner used by the orchestrator.

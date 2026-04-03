@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/notify"
 	"github.com/pmenglund/colin/internal/userworkflow"
 )
 
@@ -405,6 +407,23 @@ func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ 
 	return result
 }
 
+type notifierStub struct {
+	err   error
+	state notify.IssueNotificationState
+	calls []notify.IssueSummary
+}
+
+func (s *notifierStub) SyncIssue(_ context.Context, summary notify.IssueSummary, existing notify.IssueNotificationState) (notify.IssueNotificationState, error) {
+	s.calls = append(s.calls, summary)
+	if s.err != nil {
+		return notify.IssueNotificationState{}, s.err
+	}
+	if strings.TrimSpace(s.state.ChannelID) == "" && strings.TrimSpace(s.state.MessageTS) == "" && strings.TrimSpace(s.state.Permalink) == "" && strings.TrimSpace(s.state.Fingerprint) == "" {
+		return existing, nil
+	}
+	return s.state, nil
+}
+
 func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -425,6 +444,185 @@ func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
 		BlockedBy:  []domain.BlockerRef{{State: &state}},
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
+	}
+}
+
+func TestHandleTickSyncsSlackSummaryForTrackedIssues(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.example.test/COLIN-153"
+	tracker := &trackerStub{
+		candidateIssues: nil,
+		issuesByState: []domain.Issue{{
+			ID:         "issue-1",
+			Identifier: "COLIN-153",
+			Title:      "Slack support",
+			State:      "Review",
+			URL:        &issueURL,
+			ColinMetadata: &domain.ColinMetadata{
+				URL: "https://colin.example.test/linear/issues/issue-1/metadata",
+			},
+		}},
+	}
+	notifier := &notifierStub{
+		state: notify.IssueNotificationState{
+			ChannelID:   "C12345678",
+			MessageTS:   "1743630000.123456",
+			Permalink:   "https://example.slack.com/archives/C12345678/p1743630000123456",
+			Fingerprint: "fp-1",
+		},
+	}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo", "In Progress"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if got := tracker.metadata.SlackPermalink; got != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("metadata.SlackPermalink = %q, want persisted permalink", got)
+	}
+}
+
+func TestSyncSlackIssueSkipsMetadataPersistWhenStateUnchanged(t *testing.T) {
+	t.Parallel()
+
+	notifier := &notifierStub{}
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-153",
+		Title:      "Slack support",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			SlackChannelID:          "C12345678",
+			SlackMessageTS:          "1743630000.123456",
+			SlackPermalink:          "https://example.slack.com/archives/C12345678/p1743630000123456",
+			SlackSummaryFingerprint: "fp-1",
+		},
+	}
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}, MergeStates: []string{"Merge"}},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{BotToken: "xoxb-test", ChannelID: "C12345678"},
+			},
+		},
+	}
+
+	issue = orch.syncSlackIssue(context.Background(), issue)
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if tracker.metadata.SlackPermalink != "" {
+		t.Fatalf("tracker metadata = %#v, want no metadata upsert", tracker.metadata)
+	}
+	if issue.ColinMetadata == nil || issue.ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("issue.ColinMetadata = %#v, want existing Slack ref preserved", issue.ColinMetadata)
+	}
+}
+
+func TestHandleTickDispatchesWhenSlackSyncFails(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-153",
+		Title:      "Slack support",
+		State:      "Todo",
+	}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+		issuesByState:   []domain.Issue{issue},
+	}
+	runner := &runnerStub{
+		invoked: make(chan struct{}),
+		result:  codex.Result{Status: "succeeded", Issue: issue},
+	}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 4),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Runner:   runner,
+			Notifier: &notifierStub{err: errors.New("slack unavailable")},
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	select {
+	case <-runner.invoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not invoked after Slack sync failure")
 	}
 }
 
