@@ -695,7 +695,7 @@ func retryingPanel(snapshot domain.Snapshot) g.Node {
 }
 
 func rateLimitsPanel(snapshot domain.Snapshot) g.Node {
-	codexLines, linearLines := rateLimitRows(snapshot.GeneratedAt, snapshot.RateLimits)
+	codexLimits, linearLines := rateLimitRows(snapshot.GeneratedAt, snapshot.RateLimits)
 
 	return h.Section(
 		h.Class("table-card"),
@@ -703,8 +703,8 @@ func rateLimitsPanel(snapshot domain.Snapshot) g.Node {
 		h.P(g.Text("Latest limits reported by Codex and Linear.")),
 		h.Div(
 			h.Class("rate-limit-grid"),
-			rateLimitBox("Codex", "rate-limits-codex", codexLines),
-			rateLimitBox("Linear", "rate-limits-linear", linearLines),
+			rateLimitBox("Codex", renderCodexRateLimitRows(codexLimits)),
+			rateLimitBox("Linear", renderRateLimitLines("rate-limits-linear", linearLines)),
 		),
 	)
 }
@@ -718,35 +718,88 @@ func apiPanel(snapshot domain.Snapshot) g.Node {
 	)
 }
 
-func rateLimitBox(title, testID string, lines []string) g.Node {
+func rateLimitBox(title string, content g.Node) g.Node {
 	return h.Div(
 		h.Class("rate-limit-box"),
 		h.H4(g.Text(title)),
-		h.Pre(
-			h.Class("mockup-code"),
-			h.Data("testid", testID),
-			g.Text(strings.Join(fallbackLines(lines), "\n")),
-		),
+		content,
 	)
 }
 
-func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]string, []string) {
+type codexRateLimitRow struct {
+	Bucket      string
+	Window      string
+	UsedPercent int
+	ResetIn     string
+}
+
+func renderCodexRateLimitRows(rows []codexRateLimitRow) g.Node {
+	if len(rows) == 0 {
+		return renderRateLimitLines("rate-limits-codex", nil)
+	}
+
+	items := make(g.Group, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, h.Div(
+			h.Class("rate-limit-progress-row"),
+			h.Data("testid", "rate-limit-codex-"+row.Bucket),
+			h.Div(
+				h.Class("rate-limit-progress-meta"),
+				h.Span(h.Class("rate-limit-progress-window"), g.Text(row.Window)),
+				h.Span(h.Class("rate-limit-progress-used"), g.Text(fmt.Sprintf("%d%% used", row.UsedPercent))),
+				h.Span(h.Class("rate-limit-progress-reset"), g.Text("resets in "+row.ResetIn)),
+			),
+			h.Div(
+				h.Class("rate-limit-progress-bar"),
+				g.Attr("role", "progressbar"),
+				g.Attr("aria-label", "Codex "+row.Window+" window used"),
+				g.Attr("aria-valuemin", "0"),
+				g.Attr("aria-valuemax", "100"),
+				g.Attr("aria-valuenow", strconv.Itoa(row.UsedPercent)),
+				h.Div(
+					h.Class("rate-limit-progress-fill"),
+					g.Attr("style", fmt.Sprintf("width: %d%%;", row.UsedPercent)),
+				),
+			),
+		))
+	}
+
+	return h.Div(
+		h.Class("rate-limit-progress-list"),
+		h.Data("testid", "rate-limits-codex"),
+		items,
+	)
+}
+
+func renderRateLimitLines(testID string, lines []string) g.Node {
+	return h.Pre(
+		h.Class("mockup-code"),
+		h.Data("testid", testID),
+		g.Text(strings.Join(fallbackLines(lines), "\n")),
+	)
+}
+
+func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]codexRateLimitRow, []string) {
 	if len(rateLimits) == 0 {
 		return nil, nil
 	}
 
-	codexRows := make([]string, 0, 2)
+	codexRows := make([]codexRateLimitRow, 0, 2)
 	for _, name := range []string{"primary", "secondary"} {
 		limit, ok := rateLimits[name]
 		if !ok {
 			continue
 		}
-		codexRows = append(codexRows, fmt.Sprintf(
-			"%s of %s window which resets in %s",
-			rateLimitUsed(limit.UsedPercent),
-			rateLimitWindow(limit.WindowDurationMinutes),
-			rateLimitResetDuration(now, limit.ResetsAt),
-		))
+		usedPercent, ok := rateLimitUsedPercent(limit.UsedPercent)
+		if !ok {
+			continue
+		}
+		codexRows = append(codexRows, codexRateLimitRow{
+			Bucket:      name,
+			Window:      rateLimitWindow(limit.WindowDurationMinutes),
+			UsedPercent: usedPercent,
+			ResetIn:     rateLimitResetDuration(now, limit.ResetsAt),
+		})
 	}
 	var linearRows []string
 	for name, limit := range rateLimits {
@@ -1051,11 +1104,19 @@ func rateLimitResetDuration(now time.Time, value *time.Time) string {
 	return formatCompactDuration(value.Sub(now))
 }
 
-func rateLimitUsed(value *int64) string {
+func rateLimitUsedPercent(value *int64) (int, bool) {
 	if value == nil {
-		return "unknown used"
+		return 0, false
 	}
-	return fmt.Sprintf("%d%% used", *value)
+	percent := int(*value)
+	switch {
+	case percent < 0:
+		return 0, true
+	case percent > 100:
+		return 100, true
+	default:
+		return percent, true
+	}
 }
 
 func rateLimitWindow(value *int64) string {

@@ -266,6 +266,55 @@ a {
   letter-spacing: 0.08em;
 }
 
+.rate-limit-progress-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.rate-limit-progress-row {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.rate-limit-progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.rate-limit-progress-window {
+  min-width: 2rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.rate-limit-progress-used {
+  color: var(--text);
+}
+
+.rate-limit-progress-reset {
+  margin-left: auto;
+}
+
+.rate-limit-progress-bar {
+  position: relative;
+  overflow: hidden;
+  height: 0.8rem;
+  border: 1px solid rgba(103, 214, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.rate-limit-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0.92), rgba(103, 214, 255, 0.88));
+  box-shadow: 0 0 18px rgba(103, 214, 255, 0.2);
+}
+
 .stat {
   padding: 0.9rem;
   border-radius: 1rem;

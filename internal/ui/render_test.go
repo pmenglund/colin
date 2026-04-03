@@ -141,11 +141,19 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Merge`,
 		`Issue is approved and waiting to be merged.`,
 		`data-testid="rate-limits-codex"`,
+		`data-testid="rate-limit-codex-primary"`,
+		`data-testid="rate-limit-codex-secondary"`,
 		`data-testid="rate-limits-linear"`,
 		`Codex`,
 		`Linear`,
-		`5% used of 5h window which resets in 5h32m`,
-		`9% used of 1w window which resets in 1w`,
+		`aria-label="Codex 5h window used"`,
+		`aria-valuenow="5"`,
+		`aria-label="Codex 1w window used"`,
+		`aria-valuenow="9"`,
+		`5h`,
+		`1w`,
+		`resets in 5h32m`,
+		`resets in 1w`,
 		`resets in 5m, 25 of 100 remaining next request in 3s`,
 		`data-local-time="true"`,
 		`data-timestamp="2026-03-28T11:58:01Z"`,
@@ -170,6 +178,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 
 	if strings.Index(html, "Running tasks") > strings.Index(html, "API snapshot") {
 		t.Fatalf("API snapshot should render after running tasks:\n%s", html)
+	}
+	if strings.Contains(html, `5% used of 5h window which resets in 5h32m`) {
+		t.Fatalf("codex rate limits should render progress bars instead of old text rows\n%s", html)
 	}
 }
 
