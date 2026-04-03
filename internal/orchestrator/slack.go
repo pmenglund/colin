@@ -1,0 +1,98 @@
+package orchestrator
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/notify"
+	"github.com/pmenglund/colin/internal/userworkflow"
+)
+
+func (o *Orchestrator) syncSlackIssues(ctx context.Context, issues []domain.Issue) {
+	for _, issue := range issues {
+		if ctx.Err() != nil {
+			return
+		}
+		o.syncSlackIssue(ctx, issue)
+	}
+}
+
+func (o *Orchestrator) syncSlackIssue(ctx context.Context, issue domain.Issue) domain.Issue {
+	if o == nil || o.runtime.Notifier == nil {
+		return issue
+	}
+	if strings.TrimSpace(o.runtime.Config.Slack.BotToken) == "" || strings.TrimSpace(o.runtime.Config.Slack.ChannelID) == "" {
+		return issue
+	}
+
+	summary := userworkflow.SlackIssueSummary(o.runtime.Config, issue)
+	state, err := o.runtime.Notifier.SyncIssue(ctx, summary, currentIssueNotificationState(issue))
+	if err != nil {
+		o.logger.Warn("failed to sync Slack issue summary", slackLogArgs(issue, err)...)
+		return issue
+	}
+	if sameIssueNotificationState(state, currentIssueNotificationState(issue)) {
+		return issue
+	}
+
+	return o.persistSlackNotificationState(ctx, issue, state)
+}
+
+func (o *Orchestrator) persistSlackNotificationState(ctx context.Context, issue domain.Issue, state notify.IssueNotificationState) domain.Issue {
+	if o.runtime.Tracker == nil {
+		return issue
+	}
+
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+	}
+	metadata.SlackChannelID = strings.TrimSpace(state.ChannelID)
+	metadata.SlackMessageTS = strings.TrimSpace(state.MessageTS)
+	metadata.SlackPermalink = strings.TrimSpace(state.Permalink)
+	metadata.SlackSummaryFingerprint = strings.TrimSpace(state.Fingerprint)
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+
+	persisted, err := o.runtime.Tracker.UpsertIssueMetadata(ctx, issue.ID, metadata)
+	if err != nil {
+		o.logger.Warn("failed to persist Slack issue summary metadata", slackLogArgs(issue, err)...)
+		issue.ColinMetadata = &metadata
+		return issue
+	}
+	issue.ColinMetadata = &persisted
+	return issue
+}
+
+func currentIssueNotificationState(issue domain.Issue) notify.IssueNotificationState {
+	if issue.ColinMetadata == nil {
+		return notify.IssueNotificationState{}
+	}
+	return notify.IssueNotificationState{
+		ChannelID:   strings.TrimSpace(issue.ColinMetadata.SlackChannelID),
+		MessageTS:   strings.TrimSpace(issue.ColinMetadata.SlackMessageTS),
+		Permalink:   strings.TrimSpace(issue.ColinMetadata.SlackPermalink),
+		Fingerprint: strings.TrimSpace(issue.ColinMetadata.SlackSummaryFingerprint),
+	}
+}
+
+func sameIssueNotificationState(left notify.IssueNotificationState, right notify.IssueNotificationState) bool {
+	return strings.TrimSpace(left.ChannelID) == strings.TrimSpace(right.ChannelID) &&
+		strings.TrimSpace(left.MessageTS) == strings.TrimSpace(right.MessageTS) &&
+		strings.TrimSpace(left.Permalink) == strings.TrimSpace(right.Permalink) &&
+		strings.TrimSpace(left.Fingerprint) == strings.TrimSpace(right.Fingerprint)
+}
+
+func slackLogArgs(issue domain.Issue, err error) []any {
+	args := []any{
+		slog.String("issue_id", issue.ID),
+		slog.String("issue_identifier", issue.Identifier),
+	}
+	if err != nil {
+		args = append(args, slog.Any("error", err))
+	}
+	return args
+}

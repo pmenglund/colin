@@ -65,6 +65,11 @@ server:
   # Optional when Colin webhook endpoints are reachable through a reverse proxy or another public host.
   # When unset, Colin will use an active Tailscale Funnel for `webhook_port` if one exists.
   # public_url: https://colin.example.com
+
+# Optional: enable Slack issue summaries for tracked issues.
+# slack:
+#   bot_token: $SLACK_BOT_TOKEN
+#   channel_id: C0123456789
 ---
 
 You are working on Linear issue {{.issue.identifier}}: {{.issue.title}}.

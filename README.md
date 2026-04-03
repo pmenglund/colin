@@ -2,7 +2,7 @@
 
 Colin turns a Linear board into a managed delivery pipeline for coding work. Instead of manually driving one task at a time, you can keep many issues moving in parallel while Colin picks up ready work, hands implementation off to [Codex](https://platform.openai.com/docs/codex/overview), maintains a dedicated workspace for each issue, and pushes each task toward the next useful outcome.
 
-The value is operational leverage: more tasks advancing at once, less branch and PR babysitting, and clearer handoffs for the moments where human judgment actually matters. Because Colin is driven through Linear state changes, you can manage the flow from the Linear app on your phone instead of being tied to a laptop session. Colin currently ships with a GitHub repository backend, and now routes repository-host setup and API access through a backend abstraction so GitLab or Gitea can be added later without rewriting all of setup and repo automation. Colin also works best with [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled on your GitHub repos so reviewable PRs get an additional automated pass before merge; OpenAI's setup instructions are [here](https://help.openai.com/en/articles/11369540/).
+The value is operational leverage: more tasks advancing at once, less branch and PR babysitting, and clearer handoffs for the moments where human judgment actually matters. Because Colin is driven through Linear state changes, you can manage the flow from the Linear app on your phone instead of being tied to a laptop session. Colin currently ships with a GitHub repository backend, and now routes repository-host setup and API access through a backend abstraction so GitLab or Gitea can be added later without rewriting all of setup and repo automation. Colin also works best with [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled on your GitHub repos so reviewable PRs get an additional automated pass before merge; OpenAI's setup instructions are [here](https://help.openai.com/en/articles/11369540/). When the optional `slack` workflow section is configured, Colin also mirrors each tracked issue into one Slack message that shows the current state and next action while linking out to the full details.
 
 ## Prerequisites
 
@@ -16,6 +16,7 @@ Optional but encouraged:
 
 - [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests, with `repo.codex_pr_reviews_enabled: true` set in `WORKFLOW.md` when you want Colin to wait for that review before merging
 - public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md), plus `LINEAR_WEBHOOK_SECRET` and `GITHUB_WEBHOOK_SECRET` exported when you enable signed provider webhooks
+- a Slack bot token exported as `SLACK_BOT_TOKEN` plus a channel ID in `WORKFLOW.md` when you want Colin to keep one issue-summary message per tracked issue in Slack
 
 ## What Using Colin Looks Like
 
@@ -37,6 +38,8 @@ Colin uses these handoff states:
 - `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
 
 Colin's `[colin]` comments are meant to make the next step explicit. When an issue returns from `Review` to `Todo`, Colin says whether it is still waiting for GitHub review threads to sync or whether more PR feedback still needs to be addressed. When an issue is in `Merge`, Colin says whether it is retrying automatically while Codex review is pending, or whether a human needs to resolve review feedback or a merge problem before moving the issue forward again.
+
+When Slack support is enabled, Colin mirrors that same high-level workflow view into Slack. Each tracked issue gets one Slack message that updates in place as the issue moves through the workflow. The message shows the issue state and next action directly, and links to Linear, the PR, Colin metadata, and the stored ExecPlan instead of inlining those details.
 
 Colin treats these as terminal states and stops work when an issue enters them:
 
@@ -110,9 +113,12 @@ export LINEAR_API_KEY=lin_api_...
 export GITHUB_TOKEN=github_pat_...
 export LINEAR_WEBHOOK_SECRET=...
 export GITHUB_WEBHOOK_SECRET=...
+export SLACK_BOT_TOKEN=xoxb-...
 ```
 
 `GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`. Fine-grained `github_pat_...` tokens are preferred, but classic `ghp_...` PATs also work.
+
+If you enable the optional `slack` section in `WORKFLOW.md`, export `SLACK_BOT_TOKEN` before starting Colin. The workflow file should also name the destination `channel_id`.
 
 ### 2. Generate or refresh `WORKFLOW.md`
 

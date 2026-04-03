@@ -8,6 +8,8 @@ Colin is a long-running Go service that watches a Linear project, prepares a per
 
 An embedded loopback HTTP server exposes the orchestrator snapshot for live operator inspection, a Tailscale Funnel setup/readiness flow, and live Linear and GitHub webhook paths. It still does not participate in orchestration correctness.
 
+When configured, Colin also keeps one Slack message per tracked issue updated with the current workflow state and the next action, while linking out to Linear, PR, Colin metadata, and ExecPlan details instead of copying those details into Slack.
+
 The repository also includes a `colin setup linear app` sketch command for a future self-hosted Linear app mode. That sketch keeps `/webhooks/linear` as the shared callback for both today's watched-project issue wake-ups and a future app-triggered agent-session path. It does not imply disabling the current webhook or polling flow.
 
 The runtime contract lives in `WORKFLOW.md`:
@@ -59,6 +61,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
 - `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and live Linear and GitHub webhook routes
 - `internal/ui/` - gomponents-based HTML for the dashboard
+- `internal/notify/` - external issue-summary delivery interfaces and implementations such as Slack
 - `internal/repoops/` - publish and merge automation via git plus the configured repository backend client
 - `internal/repohost/` - repository backend abstraction and the current GitHub adapter
 
@@ -68,6 +71,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - Keep tracker transport logic in `internal/tracker/linear` and scheduling logic in `internal/orchestrator`.
 - Keep filesystem safety and workspace lifecycle concerns in `internal/workspace`.
 - Keep Codex protocol handling in `internal/agent/codex` and workflow execution policy in `internal/automation`.
+- Keep external status delivery adapters in `internal/notify`, and keep workflow-state wording in `internal/userworkflow`.
 - Keep repo publish and merge behavior in `internal/repoops`.
 
 ## Contributor Notes
