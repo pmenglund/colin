@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pmenglund/colin/internal/domain"
@@ -81,6 +82,59 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Server.LogBufferLines != domain.DefaultLogBufferLines {
 		t.Fatalf("cfg.Server.LogBufferLines = %d, want %d", cfg.Server.LogBufferLines, domain.DefaultLogBufferLines)
+	}
+	if cfg.Slack.BotToken != "" || cfg.Slack.ChannelID != "" {
+		t.Fatalf("cfg.Slack = %#v, want disabled by default", cfg.Slack)
+	}
+}
+
+func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"slack": map[string]any{
+			"bot_token":  "$SLACK_BOT_TOKEN",
+			"channel_id": "C12345678",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Slack.BotToken; got != "xoxb-test-token" {
+		t.Fatalf("cfg.Slack.BotToken = %q, want %q", got, "xoxb-test-token")
+	}
+	if got := cfg.Slack.ChannelID; got != "C12345678" {
+		t.Fatalf("cfg.Slack.ChannelID = %q, want %q", got, "C12345678")
+	}
+}
+
+func TestBuildRejectsPartialSlackConfig(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"slack": map[string]any{
+			"channel_id": "C12345678",
+		},
+	})
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err == nil {
+		t.Fatal("Build() error = nil, want invalid slack config")
+	}
+	if !strings.Contains(err.Error(), "slack.bot_token and slack.channel_id must both be set") {
+		t.Fatalf("Build() error = %v, want slack config guidance", err)
 	}
 }
 

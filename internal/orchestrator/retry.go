@@ -138,6 +138,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		if strings.TrimSpace(event.result.Summary) != "" {
 			event.result.Issue = o.postRunSummary(ctx, entry, event.result.Issue, event.result.Summary)
 		}
+		event.result.Issue = o.syncSlackIssue(ctx, event.result.Issue)
 		if o.shouldRetrySameStateHandoff(entry, event.result) {
 			o.logger.Info(
 				"handoff automation is waiting in the same state; scheduling silent retry",
@@ -166,6 +167,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		if shouldPostSummaryForSucceededRun(o, event.result) {
 			event.result.Issue = o.postRunSummary(ctx, entry, event.result.Issue, event.result.Summary)
 		}
+		event.result.Issue = o.syncSlackIssue(ctx, event.result.Issue)
 		if event.result.RunType == codex.RunTypeCoding && !o.isActive(event.result.Issue.State) && !o.isPublishState(event.result.Issue.State) && !o.isMergeState(event.result.Issue.State) {
 			o.completed[event.issueID] = event.result.Issue.State
 			delete(o.claimed, event.issueID)
@@ -347,7 +349,7 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		return
 	}
 	delete(o.retrying, issueID)
-	if o.draining {
+	if !o.acceptingNewWork() {
 		delete(o.claimed, issueID)
 		o.logger.Info("retry dropped during shutdown drain", "issue_id", issueID, "issue_identifier", state.entry.Identifier)
 		return

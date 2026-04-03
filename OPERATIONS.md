@@ -20,6 +20,7 @@ Colin runs as a long-lived process:
 6. It moves a successful coding run into `Review`, or into `Refine` when human clarification is still needed.
 7. It performs git and repository-backend automation for issues in publish or merge states.
 8. It logs progress locally and posts high-level progress updates back to Linear as a comment thread on the issue.
+9. When Slack support is configured, it also keeps one Slack summary message per tracked issue updated with the current state and next action.
 
 ## Startup and Setup Details
 
@@ -207,8 +208,9 @@ Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen c
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
+- When the optional `slack` workflow section is configured, Colin also stores the Slack channel, message timestamp, permalink, and summary fingerprint in that same metadata attachment so Slack updates survive retries and restarts.
 - When `agent.create_exec_plan` is enabled, Colin first records whether the issue should be handled as `one_shot` or `exec_plan` in the `Colin metadata` attachment.
-- When that stored decision is `exec_plan`, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue and injects that plan into the first implementation turn.
+- When that stored decision is `exec_plan`, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue, injects that plan into the first implementation turn, and keeps the attachment updated as a living document while implementation progresses.
 - If an issue ever has multiple `Colin ExecPlan` attachments, Colin fails closed, moves the issue to `Refine`, and requires human cleanup instead of guessing which plan to use.
 - Colin also records the canonical GitHub PR number, URL, state, head ref, and base ref in that metadata so one Linear issue stays bound to one PR.
 - Colin also mirrors unresolved GitHub PR review threads back into the next coding prompt, waits for delayed review feedback to appear before starting that round only when the issue already has an associated PR, and reports review-sync status back to Linear while it waits.
@@ -216,6 +218,20 @@ Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen c
 - If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/`, JSON state at `/api/v1/state`, and buffered internal logs at `/api/v1/logs`.
+
+## Optional Slack Summaries
+
+When `WORKFLOW.md` contains:
+
+```yaml
+slack:
+  bot_token: $SLACK_BOT_TOKEN
+  channel_id: C0123456789
+```
+
+Colin keeps one Slack message per tracked issue in the configured channel. That message updates in place as the issue moves through active, handoff, and terminal states. The Slack view is intentionally high-level: it shows the current state and next action directly, and links out to the Linear issue, PR, Colin metadata page, and stored ExecPlan when those links are available.
+
+Slack is an operator-facing status surface, not a control plane. Colin does not add Slack commands, Slack-originated workflow transitions, or interactive approvals in this change. Slack delivery failures are logged, but they do not stop Colin's core Linear, Codex, publish, or merge workflow.
 
 ## Detailed Linear State Handling
 
@@ -239,6 +255,7 @@ When an issue is in one of these states, Colin:
 When an issue moves from `Review` back to `Todo`, Colin reads the latest `Review -> Todo` cycle from the Linear timeline and injects human comments from that review window into the next prompt as review feedback. Comments starting with `[colin]` are treated as Colin-authored status updates and are excluded.
 
 Colin does not recompute the planning strategy when an issue returns from `Review` to `Todo`. It reuses the stored `exec_plan_decision`, so one-shot issues continue directly into coding and plan-backed issues continue from the existing canonical `Colin ExecPlan` attachment.
+For plan-backed issues, the canonical ExecPlan's `## Progress` section is also the completion gate. Colin keeps working while unchecked Progress items remain, even if Codex emits `COLIN_OUTCOME: READY_FOR_REVIEW`.
 
 Additional `Todo` rule:
 
@@ -259,6 +276,7 @@ Colin moves an issue to `Refine` when:
 
 - the coding run concludes the request is still too underspecified to implement safely
 - the coding run reaches its maximum turn count without producing reviewable code
+- an ExecPlan-backed run cannot safely complete the remaining `## Progress` tasks or the stored ExecPlan is missing a parseable `## Progress` section
 - the issue metadata is invalid, such as multiple `Colin ExecPlan` attachments on the same issue
 
 When Colin hands an issue to `Refine`, it posts a `[colin]` comment that explains what information is missing or why the run was capped.
@@ -284,7 +302,7 @@ When an issue is moved to `Review`, Colin does not run another coding turn. Inst
 - renders the PR body from `repo.pr_template` when one is configured, otherwise uses the built-in default template
 
 `Review` is PR-only. Colin should only leave an issue in `Review` when the branch and PR are the intended next artifact for human review.
-Colin only moves a coding run into `Review` after Codex explicitly emits `COLIN_OUTCOME: READY_FOR_REVIEW` and the issue workspace contains reviewable repository changes. A clean workspace on a branch that is not ahead of base is not reviewable and will not be handed off to `Review`.
+Colin only moves a coding run into `Review` after Codex explicitly emits `COLIN_OUTCOME: READY_FOR_REVIEW` and the issue workspace contains reviewable repository changes. A clean workspace on a branch that is not ahead of base is not reviewable and will not be handed off to `Review`. For ExecPlan-backed issues, that handoff is allowed only when every checkbox in the plan's `## Progress` section is complete.
 
 Human action is expected in `Review`:
 

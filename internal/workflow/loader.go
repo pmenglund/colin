@@ -224,19 +224,24 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		return nil
 	}
 	return map[string]any{
-		"attachment_id":            value.AttachmentID,
-		"actual_branch_name":       value.ActualBranchName,
-		"exec_plan_decision":       value.ExecPlanDecision,
-		"review_publish_directive": value.ReviewPublishDirective,
-		"last_run_type":            value.LastRunType,
-		"last_outcome":             value.LastOutcome,
-		"last_summary_comment_id":  value.LastSummaryCommentID,
-		"pull_request_number":      value.PullRequestNumber,
-		"pull_request_url":         value.PullRequestURL,
-		"pull_request_state":       value.PullRequestState,
-		"pull_request_head_ref":    value.PullRequestHeadRef,
-		"pull_request_base_ref":    value.PullRequestBaseRef,
-		"updated_at":               derefTime(value.UpdatedAt),
+		"attachment_id":             value.AttachmentID,
+		"url":                       value.URL,
+		"actual_branch_name":        value.ActualBranchName,
+		"exec_plan_decision":        value.ExecPlanDecision,
+		"review_publish_directive":  value.ReviewPublishDirective,
+		"last_run_type":             value.LastRunType,
+		"last_outcome":              value.LastOutcome,
+		"last_summary_comment_id":   value.LastSummaryCommentID,
+		"pull_request_number":       value.PullRequestNumber,
+		"pull_request_url":          value.PullRequestURL,
+		"pull_request_state":        value.PullRequestState,
+		"pull_request_head_ref":     value.PullRequestHeadRef,
+		"pull_request_base_ref":     value.PullRequestBaseRef,
+		"slack_channel_id":          value.SlackChannelID,
+		"slack_message_ts":          value.SlackMessageTS,
+		"slack_permalink":           value.SlackPermalink,
+		"slack_summary_fingerprint": value.SlackSummaryFingerprint,
+		"updated_at":                derefTime(value.UpdatedAt),
 	}
 }
 
@@ -246,6 +251,7 @@ func execPlanToMap(value *domain.ExecPlan) any {
 	}
 	return map[string]any{
 		"attachment_id": value.AttachmentID,
+		"url":           value.URL,
 		"body":          value.Body,
 		"updated_at":    derefTime(value.UpdatedAt),
 	}

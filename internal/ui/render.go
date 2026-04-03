@@ -125,6 +125,9 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 							metadataStatCard("Last run type", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return string(value.LastRunType) }), "unknown")),
 							metadataStatCard("Last outcome", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return string(value.LastOutcome) }), "unknown")),
 							metadataStatCard("Summary comment", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastSummaryCommentID }), "not recorded")),
+							metadataStatCard("Slack channel", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackChannelID }), "not recorded")),
+							metadataStatCard("Slack message", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackMessageTS }), "not recorded")),
+							metadataStatCard("Slack permalink", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackPermalink }), "not recorded")),
 							metadataStatCard("Updated", fallback(metadataTimestamp(metadata), "not recorded")),
 						),
 						issueLinks(issue),
@@ -337,6 +340,7 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 		g.Attr("hx-target", "#dashboard-root"),
 		g.Attr("hx-swap", "outerHTML"),
 		toolbar(snapshot),
+		shutdownAlert(snapshot),
 		statsGrid(snapshot),
 		h.Div(
 			h.Class("stack"),
@@ -346,6 +350,25 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 			rateLimitsPanel(snapshot),
 			apiPanel(snapshot),
 		),
+	)
+}
+
+func shutdownAlert(snapshot domain.Snapshot) g.Node {
+	if !snapshot.ShutdownRequested {
+		return nil
+	}
+
+	return h.Section(
+		h.Class("alert"),
+		h.Class("alert-warning"),
+		h.Data("testid", "shutdown-alert"),
+		g.Attr("aria-live", "polite"),
+		h.Div(
+			h.Class("alert-header"),
+			h.Span(h.Class("badge"), h.Class("badge-warning"), h.Data("testid", "shutdown-alert-badge"), g.Text("Warning")),
+			h.Div(h.Class("alert-title"), g.Text("Shutdown in progress")),
+		),
+		h.P(g.Text("Shutdown has begun. Colin will not start new work, and active workers are draining before exit.")),
 	)
 }
 
@@ -387,8 +410,6 @@ func statsGrid(snapshot domain.Snapshot) g.Node {
 }
 
 func stateCountsPanel(snapshot domain.Snapshot) g.Node {
-	states := []string{"Backlog", "Todo", "In Progress", "Refine", "Review", "Merge"}
-
 	return h.Section(
 		h.Class("table-card"),
 		h.Data("testid", "linear-state-counts"),
@@ -396,8 +417,8 @@ func stateCountsPanel(snapshot domain.Snapshot) g.Node {
 		h.P(g.Text("Tracked Linear issues in the active handoff pipeline.")),
 		h.Div(
 			h.Class("state-count-grid"),
-			g.Map(states, func(state string) g.Node {
-				return stateCountCard(state, snapshot.IssueStates[state], snapshot.PausedIssueStates[state])
+			g.Map(domain.DashboardStateNames(), func(state string) g.Node {
+				return stateCountCard(state, snapshot.IssueStates[state], snapshot.StateIssues[state], snapshot.PausedIssueStates[state])
 			}),
 		),
 	)
@@ -431,7 +452,7 @@ func statCard(title, value, desc string) g.Node {
 	)
 }
 
-func stateCountCard(state string, total int, paused domain.PausedStateSummary) g.Node {
+func stateCountCard(state string, total int, issues []domain.StateIssueSummary, paused domain.PausedStateSummary) g.Node {
 	return h.Div(
 		h.Class("stat"),
 		h.Class("state-card"),
@@ -439,6 +460,79 @@ func stateCountCard(state string, total int, paused domain.PausedStateSummary) g
 		h.Div(h.Class("stat-value"), g.Text(strconv.Itoa(total))),
 		h.Div(h.Class("stat-desc"), g.Text(stateDescription(state))),
 		pausedIndicator(state, paused),
+		stateIssuesPopover(state, issues),
+	)
+}
+
+func stateIssuesPopover(state string, issues []domain.StateIssueSummary) g.Node {
+	slug := stateSlug(state)
+	label := "View issues"
+	if len(issues) == 1 {
+		label = "View 1 issue"
+	} else if len(issues) > 1 {
+		label = fmt.Sprintf("View %d issues", len(issues))
+	}
+
+	return h.Details(
+		h.ID("state-issues-details-"+slug),
+		h.Class("state-issues-popup"),
+		g.Attr("data-preserve-open", "true"),
+		h.Summary(
+			h.Class("state-issues-trigger"),
+			h.Data("testid", "state-issues-trigger-"+slug),
+			g.Text(label),
+		),
+		h.Div(
+			h.Class("state-issues-panel"),
+			h.Data("testid", "state-issues-"+slug),
+			h.Div(
+				h.Class("state-issues-header"),
+				h.Span(h.Class("badge badge-info"), g.Text(state)),
+				h.Span(h.Class("state-issues-count"), g.Text(label)),
+			),
+			renderStateIssueList(state, issues),
+		),
+	)
+}
+
+func renderStateIssueList(state string, issues []domain.StateIssueSummary) g.Node {
+	if len(issues) == 0 {
+		return h.P(
+			h.Class("state-issues-empty"),
+			g.Text("No issues are currently in this state."),
+		)
+	}
+
+	slug := stateSlug(state)
+	return h.Div(
+		h.Class("state-issues-list"),
+		g.Map(issues, func(issue domain.StateIssueSummary) g.Node {
+			title := fallback(issue.Title, issue.Identifier)
+			row := g.Group{
+				h.Div(
+					h.Class("state-issue-copy"),
+					h.Span(h.Class("badge badge-accent"), g.Text(issue.Identifier)),
+					h.Div(h.Class("state-issue-title"), g.Text(title)),
+				),
+			}
+
+			links := g.Group{}
+			if strings.TrimSpace(issue.URL) != "" {
+				links = append(links, h.A(h.Href(issue.URL), g.Text("Linear")))
+			}
+			if strings.TrimSpace(issue.ID) != "" {
+				links = append(links, h.A(h.Href(domain.ColinMetadataPath(issue.ID)), g.Text("Web UI details")))
+			}
+			if len(links) > 0 {
+				row = append(row, h.Div(h.Class("state-issue-links"), links))
+			}
+
+			return h.Article(
+				h.Class("state-issue-row"),
+				h.Data("testid", "state-issue-"+slug+"-"+issue.Identifier),
+				row,
+			)
+		}),
 	)
 }
 

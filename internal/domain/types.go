@@ -32,6 +32,7 @@ const (
 	RunOutcomeNeedsSpec        RunOutcome = "needs_spec"
 	RunOutcomeMaxTurns         RunOutcome = "max_turns"
 	RunOutcomeExecPlanConflict RunOutcome = "exec_plan_conflict"
+	RunOutcomeExecPlanInvalid  RunOutcome = "exec_plan_invalid"
 	RunOutcomeMerged           RunOutcome = "merged"
 	RunOutcomeReadyForMergeFix RunOutcome = "ready_for_merge_retry"
 
@@ -93,31 +94,37 @@ func ManagedCodexReviewLabels() []string {
 
 // ColinMetadata is persisted on the Linear issue to track Colin-specific workflow state.
 type ColinMetadata struct {
-	AttachmentID           string
-	ActualBranchName       string
-	ExecPlanDecision       ExecPlanDecision
-	ReviewPublishDirective ReviewPublishDirective
-	LastRunType            RunType
-	LastOutcome            RunOutcome
-	LastSummaryCommentID   string
-	PullRequestNumber      int
-	PullRequestURL         string
-	PullRequestState       string
-	PullRequestHeadRef     string
-	PullRequestBaseRef     string
-	LoopFailureFingerprint string
-	LoopFailureCount       int
-	PausedAt               *time.Time
-	PausedRunType          string
-	PausedState            string
-	PausedReason           string
-	UpdatedAt              *time.Time
-	CodexOutput            []OutputLog
+	AttachmentID            string
+	URL                     string
+	ActualBranchName        string
+	ExecPlanDecision        ExecPlanDecision
+	ReviewPublishDirective  ReviewPublishDirective
+	LastRunType             RunType
+	LastOutcome             RunOutcome
+	LastSummaryCommentID    string
+	PullRequestNumber       int
+	PullRequestURL          string
+	PullRequestState        string
+	PullRequestHeadRef      string
+	PullRequestBaseRef      string
+	LoopFailureFingerprint  string
+	LoopFailureCount        int
+	PausedAt                *time.Time
+	PausedRunType           string
+	PausedState             string
+	PausedReason            string
+	SlackChannelID          string
+	SlackMessageTS          string
+	SlackPermalink          string
+	SlackSummaryFingerprint string
+	UpdatedAt               *time.Time
+	CodexOutput             []OutputLog
 }
 
 // ExecPlan is persisted on the Linear issue to track the current issue execution plan.
 type ExecPlan struct {
 	AttachmentID string
+	URL          string
 	Body         string
 	UpdatedAt    *time.Time
 }
@@ -189,6 +196,7 @@ type WorkflowConfig struct {
 	Agent     WorkflowAgentConfig     `yaml:"agent"`
 	Codex     WorkflowCodexConfig     `yaml:"codex"`
 	Server    WorkflowServerConfig    `yaml:"server"`
+	Slack     WorkflowSlackConfig     `yaml:"slack"`
 }
 
 type WorkflowTrackerConfig struct {
@@ -272,6 +280,11 @@ type WorkflowServerConfig struct {
 	LogBufferLines   *int    `yaml:"log_buffer_lines"`
 }
 
+type WorkflowSlackConfig struct {
+	BotToken  *string `yaml:"bot_token"`
+	ChannelID *string `yaml:"channel_id"`
+}
+
 // ServiceConfig is the typed runtime view built from workflow front matter and defaults.
 type ServiceConfig struct {
 	WorkflowPath string
@@ -284,6 +297,7 @@ type ServiceConfig struct {
 	Agent        AgentConfig
 	Codex        CodexConfig
 	Server       ServerConfig
+	Slack        SlackConfig
 }
 
 // TrackerConfig configures the issue tracker adapter.
@@ -462,6 +476,12 @@ func (cfg ServiceConfig) WatchedRepoURLs() []string {
 	return out
 }
 
+// SlackConfig configures optional Slack issue-summary delivery.
+type SlackConfig struct {
+	BotToken  string
+	ChannelID string
+}
+
 // SetupCheck is one operator-facing readiness check.
 type SetupCheck struct {
 	ID          string    `json:"id"`
@@ -541,17 +561,27 @@ type PausedStateSummary struct {
 	URL   string `json:"url,omitempty"`
 }
 
+// StateIssueSummary is the minimal issue metadata needed to render per-state issue lists in the UI.
+type StateIssueSummary struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	URL        string `json:"url,omitempty"`
+}
+
 // Snapshot is a read-only summary of orchestrator state for observability.
 type Snapshot struct {
-	GeneratedAt       time.Time                     `json:"generated_at"`
-	Running           []SnapshotRunning             `json:"running"`
-	Retrying          []RetryEntry                  `json:"retrying"`
-	CodexTotals       Totals                        `json:"codex_totals"`
-	RateLimits        RateLimitSnapshot             `json:"rate_limits"`
-	Counts            map[string]int                `json:"counts"`
-	IssueStates       map[string]int                `json:"issue_states"`
-	PausedIssueStates map[string]PausedStateSummary `json:"paused_issue_states,omitempty"`
-	Tracked           map[string]struct{}           `json:"-"`
+	GeneratedAt       time.Time                      `json:"generated_at"`
+	ShutdownRequested bool                           `json:"shutdown_requested"`
+	Running           []SnapshotRunning              `json:"running"`
+	Retrying          []RetryEntry                   `json:"retrying"`
+	CodexTotals       Totals                         `json:"codex_totals"`
+	RateLimits        RateLimitSnapshot              `json:"rate_limits"`
+	Counts            map[string]int                 `json:"counts"`
+	IssueStates       map[string]int                 `json:"issue_states"`
+	StateIssues       map[string][]StateIssueSummary `json:"state_issues,omitempty"`
+	PausedIssueStates map[string]PausedStateSummary  `json:"paused_issue_states,omitempty"`
+	Tracked           map[string]struct{}            `json:"-"`
 }
 
 // SnapshotRunning is the per-running-issue row included in a Snapshot.

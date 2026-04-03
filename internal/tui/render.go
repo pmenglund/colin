@@ -17,6 +17,7 @@ var (
 	labelStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	healthyURLStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	warnStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	shutdownStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
 	errorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	infoStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	debugStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -50,6 +51,9 @@ func renderOverviewView(m model) string {
 		for _, worker := range m.snapshot.Running {
 			lines = append(lines, renderWorkerLine(worker, m.width))
 		}
+	}
+	if notice := renderShutdownNotice(m); notice != "" {
+		lines = append(lines, "", notice)
 	}
 
 	if len(m.snapshot.Retrying) > 0 {
@@ -90,6 +94,9 @@ func renderLogsView(m model) string {
 
 	lines = append(lines, "", renderSelectedLogDetails(m))
 	lines = append(lines, "", subtleStyle.Render(fmt.Sprintf("Showing %d-%d of %d  |  selected %s  |  ↑/↓ select  PgUp/PgDn page  Home/End jump", minInt(start+1, len(m.logs.Entries)), end, len(m.logs.Entries), renderSelectedLogPosition(m))))
+	if notice := renderShutdownNotice(m); notice != "" {
+		lines = append(lines, "", notice)
+	}
 	return pageStyle.Width(maxInt(m.width, defaultWidth)).Render(strings.Join(lines, "\n"))
 }
 
@@ -98,21 +105,26 @@ func renderHeaderStatus(m model) string {
 		subtleStyle.Render("l logs"),
 		subtleStyle.Render("q/esc quit"),
 	}
-	if m.shutdownRequested {
-		running := len(m.snapshot.Running)
-		switch {
-		case m.forceStopIssued:
-			parts = append(parts, warnStyle.Render("shutting down"))
-		case running > 0:
-			parts = append(parts, warnStyle.Render(fmt.Sprintf("shutdown requested; waiting for %d %s to go idle", running, pluralizeWorker(running))))
-			parts = append(parts, subtleStyle.Render("press q again to exit immediately"))
-		default:
-			parts = append(parts, warnStyle.Render("shutdown requested; workers are idle, exiting"))
-		}
-	} else if !m.lastRefresh.IsZero() {
+	if !m.lastRefresh.IsZero() {
 		parts = append(parts, subtleStyle.Render("refreshed "+humanizeAge(m.lastRefresh)))
 	}
 	return strings.Join(parts, "  ")
+}
+
+func renderShutdownNotice(m model) string {
+	if !m.shutdownRequested {
+		return ""
+	}
+
+	running := len(m.snapshot.Running)
+	switch {
+	case m.forceStopIssued:
+		return shutdownStyle.Render("shutting down")
+	case running > 0:
+		return shutdownStyle.Render(fmt.Sprintf("shutdown requested; waiting for %d %s to go idle  press q again to exit immediately", running, pluralizeWorker(running)))
+	default:
+		return shutdownStyle.Render("shutdown requested; workers are idle, exiting")
+	}
 }
 
 func dashboardDisplayURL(m model) string {

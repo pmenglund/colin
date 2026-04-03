@@ -17,7 +17,9 @@ func (o *Orchestrator) Snapshot(ctx context.Context) (domain.Snapshot, error) {
 		return o.snapshotAt(time.Now().UTC()), nil
 	}
 	if cached, ok := o.snapshot.Load().(domain.Snapshot); ok {
-		return cloneSnapshot(cached), nil
+		out := cloneSnapshot(cached)
+		out.ShutdownRequested = o.shutdownRequested.Load()
+		return out, nil
 	}
 	return domain.Snapshot{}, nil
 }
@@ -56,16 +58,18 @@ func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 		totals.SecondsRunning += now.Sub(entry.startedAt).Seconds()
 	}
 	return domain.Snapshot{
-		GeneratedAt: now,
-		Running:     running,
-		Retrying:    retrying,
-		CodexTotals: totals,
-		RateLimits:  mergeRateLimits(o.rateLimits, o.runtime.Tracker.CurrentRateLimits()),
+		GeneratedAt:       now,
+		ShutdownRequested: o.shutdownRequested.Load(),
+		Running:           running,
+		Retrying:          retrying,
+		CodexTotals:       totals,
+		RateLimits:        mergeRateLimits(o.rateLimits, o.runtime.Tracker.CurrentRateLimits()),
 		Counts: map[string]int{
 			"running":  len(running),
 			"retrying": len(retrying),
 		},
 		IssueStates:       cloneCounts(o.issueStates),
+		StateIssues:       cloneStateIssues(o.stateIssues),
 		PausedIssueStates: clonePausedStateSummaries(o.pausedIssueStates),
 	}
 }
@@ -84,6 +88,7 @@ func cloneSnapshot(input domain.Snapshot) domain.Snapshot {
 	out.RateLimits = cloneRateLimitSnapshot(input.RateLimits)
 	out.Counts = cloneCounts(input.Counts)
 	out.IssueStates = cloneCounts(input.IssueStates)
+	out.StateIssues = cloneStateIssues(input.StateIssues)
 	out.PausedIssueStates = clonePausedStateSummaries(input.PausedIssueStates)
 	if len(input.Tracked) > 0 {
 		out.Tracked = make(map[string]struct{}, len(input.Tracked))
@@ -124,6 +129,17 @@ func cloneCounts(input map[string]int) map[string]int {
 	out := make(map[string]int, len(input))
 	for key, value := range input {
 		out[key] = value
+	}
+	return out
+}
+
+func cloneStateIssues(input map[string][]domain.StateIssueSummary) map[string][]domain.StateIssueSummary {
+	if len(input) == 0 {
+		return map[string][]domain.StateIssueSummary{}
+	}
+	out := make(map[string][]domain.StateIssueSummary, len(input))
+	for state, items := range input {
+		out[state] = append([]domain.StateIssueSummary(nil), items...)
 	}
 	return out
 }

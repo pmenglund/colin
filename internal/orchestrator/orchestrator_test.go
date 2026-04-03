@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/notify"
 	"github.com/pmenglund/colin/internal/userworkflow"
 )
 
@@ -150,6 +152,9 @@ func TestEnterShutdownDrainClearsRetriesAndBlocksDispatch(t *testing.T) {
 	if !orch.draining {
 		t.Fatal("draining = false, want true")
 	}
+	if !orch.shutdownRequested.Load() {
+		t.Fatal("shutdownRequested = false, want true")
+	}
 	if got := len(orch.retrying); got != 0 {
 		t.Fatalf("retrying count = %d, want 0", got)
 	}
@@ -163,6 +168,40 @@ func TestEnterShutdownDrainClearsRetriesAndBlocksDispatch(t *testing.T) {
 		State:      "Todo",
 	}) {
 		t.Fatal("shouldDispatch() = true, want false while draining")
+	}
+}
+
+func TestRequestShutdownDrainLatchesImmediately(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		eventCh: make(chan any, 1),
+		running: map[string]*runningEntry{},
+		claimed: map[string]struct{}{},
+	}
+	orch.loopStarted.Store(true)
+
+	if ok := orch.RequestShutdownDrain(); !ok {
+		t.Fatal("RequestShutdownDrain() = false, want true")
+	}
+	if !orch.shutdownRequested.Load() {
+		t.Fatal("shutdownRequested = false, want true")
+	}
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-151",
+		Title:      "blocked by shutdown request",
+		State:      "Todo",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false after shutdown request")
+	}
+	select {
+	case raw := <-orch.eventCh:
+		if _, ok := raw.(shutdownDrainRequestedEvent); !ok {
+			t.Fatalf("queued event = %T, want shutdownDrainRequestedEvent", raw)
+		}
+	default:
+		t.Fatal("shutdown drain event was not queued")
 	}
 }
 
@@ -393,7 +432,11 @@ func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ 
 		s.attempt = &value
 	}
 	if s.invoked != nil {
-		close(s.invoked)
+		select {
+		case <-s.invoked:
+		default:
+			close(s.invoked)
+		}
 	}
 	if s.release != nil {
 		<-s.release
@@ -403,6 +446,23 @@ func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ 
 		result.Issue = issue
 	}
 	return result
+}
+
+type notifierStub struct {
+	err   error
+	state notify.IssueNotificationState
+	calls []notify.IssueSummary
+}
+
+func (s *notifierStub) SyncIssue(_ context.Context, summary notify.IssueSummary, existing notify.IssueNotificationState) (notify.IssueNotificationState, error) {
+	s.calls = append(s.calls, summary)
+	if s.err != nil {
+		return notify.IssueNotificationState{}, s.err
+	}
+	if strings.TrimSpace(s.state.ChannelID) == "" && strings.TrimSpace(s.state.MessageTS) == "" && strings.TrimSpace(s.state.Permalink) == "" && strings.TrimSpace(s.state.Fingerprint) == "" {
+		return existing, nil
+	}
+	return s.state, nil
 }
 
 func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
@@ -425,6 +485,185 @@ func TestShouldDispatchRejectsTodoBlockedByNonTerminal(t *testing.T) {
 		BlockedBy:  []domain.BlockerRef{{State: &state}},
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
+	}
+}
+
+func TestHandleTickSyncsSlackSummaryForTrackedIssues(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.example.test/COLIN-153"
+	tracker := &trackerStub{
+		candidateIssues: nil,
+		issuesByState: []domain.Issue{{
+			ID:         "issue-1",
+			Identifier: "COLIN-153",
+			Title:      "Slack support",
+			State:      "Review",
+			URL:        &issueURL,
+			ColinMetadata: &domain.ColinMetadata{
+				URL: "https://colin.example.test/linear/issues/issue-1/metadata",
+			},
+		}},
+	}
+	notifier := &notifierStub{
+		state: notify.IssueNotificationState{
+			ChannelID:   "C12345678",
+			MessageTS:   "1743630000.123456",
+			Permalink:   "https://example.slack.com/archives/C12345678/p1743630000123456",
+			Fingerprint: "fp-1",
+		},
+	}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo", "In Progress"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if got := tracker.metadata.SlackPermalink; got != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("metadata.SlackPermalink = %q, want persisted permalink", got)
+	}
+}
+
+func TestSyncSlackIssueSkipsMetadataPersistWhenStateUnchanged(t *testing.T) {
+	t.Parallel()
+
+	notifier := &notifierStub{}
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-153",
+		Title:      "Slack support",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			SlackChannelID:          "C12345678",
+			SlackMessageTS:          "1743630000.123456",
+			SlackPermalink:          "https://example.slack.com/archives/C12345678/p1743630000123456",
+			SlackSummaryFingerprint: "fp-1",
+		},
+	}
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}, MergeStates: []string{"Merge"}},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{BotToken: "xoxb-test", ChannelID: "C12345678"},
+			},
+		},
+	}
+
+	issue = orch.syncSlackIssue(context.Background(), issue)
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if tracker.metadata.SlackPermalink != "" {
+		t.Fatalf("tracker metadata = %#v, want no metadata upsert", tracker.metadata)
+	}
+	if issue.ColinMetadata == nil || issue.ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("issue.ColinMetadata = %#v, want existing Slack ref preserved", issue.ColinMetadata)
+	}
+}
+
+func TestHandleTickDispatchesWhenSlackSyncFails(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-153",
+		Title:      "Slack support",
+		State:      "Todo",
+	}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{issue},
+		issuesByState:   []domain.Issue{issue},
+	}
+	runner := &runnerStub{
+		invoked: make(chan struct{}),
+		result:  codex.Result{Status: "succeeded", Issue: issue},
+	}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 4),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Runner:   runner,
+			Notifier: &notifierStub{err: errors.New("slack unavailable")},
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	select {
+	case <-runner.invoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not invoked after Slack sync failure")
 	}
 }
 
@@ -511,6 +750,7 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 			},
 		}},
 		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
 		pausedIssueStates: map[string]domain.PausedStateSummary{},
 	}
 
@@ -521,6 +761,15 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	}
 	if got := orch.issueStates["Todo"]; got != 1 {
 		t.Fatalf("Todo count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Review"]); got != 2 {
+		t.Fatalf("Review issue list length = %d, want 2", got)
+	}
+	if got := orch.stateIssues["Review"][0].Identifier; got != "COLIN-2" {
+		t.Fatalf("first review issue = %q, want COLIN-2", got)
+	}
+	if got := orch.stateIssues["Review"][1].Identifier; got != "COLIN-3" {
+		t.Fatalf("second review issue = %q, want COLIN-3", got)
 	}
 	summary, ok := orch.pausedIssueStates["Review"]
 	if !ok {
@@ -534,6 +783,41 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	}
 	if _, ok := orch.pausedIssueStates["Todo"]; ok {
 		t.Fatalf("unexpected paused summary for Todo: %+v", orch.pausedIssueStates["Todo"])
+	}
+}
+
+func TestRefreshIssueStateCountsOmitsHiddenStateIssueLists(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{
+			{ID: "1", Identifier: "COLIN-1", Title: "Ready", State: "Todo"},
+			{ID: "2", Identifier: "COLIN-2", Title: "Shipped", State: "Done"},
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker, Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo"},
+				TerminalStates: []string{"Done"},
+			},
+		}},
+		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.refreshIssueStateCounts(context.Background())
+
+	if got := orch.issueStates["Done"]; got != 1 {
+		t.Fatalf("Done count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Todo"]); got != 1 {
+		t.Fatalf("Todo issue list length = %d, want 1", got)
+	}
+	if _, ok := orch.stateIssues["Done"]; ok {
+		t.Fatalf("unexpected Done issue list: %+v", orch.stateIssues["Done"])
 	}
 }
 
@@ -564,6 +848,11 @@ func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing
 			"In Progress": 0,
 			"Done":        0,
 		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Todo": {
+				{ID: "issue-1", Identifier: "COLIN-1", Title: "Wake fast"},
+			},
+		},
 	}
 
 	orch.handleCodexEvent(context.Background(), codex.Event{
@@ -581,8 +870,76 @@ func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing
 	if got := orch.issueStates["In Progress"]; got != 1 {
 		t.Fatalf("In Progress count = %d, want 1", got)
 	}
+	if got := len(orch.stateIssues["Todo"]); got != 0 {
+		t.Fatalf("Todo issue list length = %d, want 0", got)
+	}
+	if got := len(orch.stateIssues["In Progress"]); got != 1 {
+		t.Fatalf("In Progress issue list length = %d, want 1", got)
+	}
+	if got := orch.stateIssues["In Progress"][0].Identifier; got != "COLIN-1" {
+		t.Fatalf("In Progress issue identifier = %q, want COLIN-1", got)
+	}
 	if got := orch.running["issue-1"].issue.State; got != "In Progress" {
 		t.Fatalf("running issue state = %q, want %q", got, "In Progress")
+	}
+}
+
+func TestHandleCodexEventRemovesStateIssueWhenTransitionLeavesDashboardStates(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo"},
+				TerminalStates: []string{"Done"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}},
+		running: map[string]*runningEntry{
+			"issue-1": {
+				issue: domain.Issue{
+					ID:         "issue-1",
+					Identifier: "COLIN-1",
+					Title:      "Ship it",
+					State:      "Todo",
+				},
+			},
+		},
+		issueStates: map[string]int{
+			"Todo": 1,
+			"Done": 0,
+		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Todo": {
+				{ID: "issue-1", Identifier: "COLIN-1", Title: "Ship it"},
+			},
+		},
+	}
+
+	orch.handleCodexEvent(context.Background(), codex.Event{
+		Event:      codex.EventIssueStateRefreshed,
+		IssueID:    "issue-1",
+		Identifier: "COLIN-1",
+		Timestamp:  time.Now().UTC(),
+		PrevState:  "Todo",
+		State:      "Done",
+	})
+
+	if got := orch.issueStates["Todo"]; got != 0 {
+		t.Fatalf("Todo count = %d, want 0", got)
+	}
+	if got := orch.issueStates["Done"]; got != 1 {
+		t.Fatalf("Done count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Todo"]); got != 0 {
+		t.Fatalf("Todo issue list length = %d, want 0", got)
+	}
+	if _, ok := orch.stateIssues["Done"]; ok {
+		t.Fatalf("unexpected Done issue list: %+v", orch.stateIssues["Done"])
+	}
+	if got := orch.running["issue-1"].issue.State; got != "Done" {
+		t.Fatalf("running issue state = %q, want %q", got, "Done")
 	}
 }
 
@@ -644,6 +1001,25 @@ func TestSnapshotReturnsCachedSnapshotWithoutEventLoopRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSnapshotReflectsShutdownRequest(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{Tracker: &trackerStub{}},
+	}
+	orch.publishSnapshot(time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC))
+	orch.loopStarted.Store(true)
+	orch.shutdownRequested.Store(true)
+
+	snapshot, err := orch.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v, want nil", err)
+	}
+	if !snapshot.ShutdownRequested {
+		t.Fatal("Snapshot().ShutdownRequested = false, want true")
+	}
+}
+
 func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -671,6 +1047,11 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 			},
 		},
 		issueStates: map[string]int{"Review": 1},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Review": {
+				{ID: "issue-1", Identifier: "COLIN-2", Title: "Review issue", URL: url},
+			},
+		},
 	}
 	orch.running["issue-1"].session.LastCodexTimestamp = &lastEventAt
 	orch.publishSnapshot(time.Date(2026, 3, 30, 12, 2, 0, 0, time.UTC))
@@ -685,6 +1066,7 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	*first.Running[0].LastEventAt = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	first.Running[0].OutputLog[0].Message = "changed"
 	first.IssueStates["Review"] = 99
+	first.StateIssues["Review"][0].Identifier = "MUTATED"
 
 	second, err := orch.Snapshot(context.Background())
 	if err != nil {
@@ -704,6 +1086,9 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	}
 	if got := second.IssueStates["Review"]; got != 1 {
 		t.Fatalf("cached IssueStates[Review] = %d, want 1", got)
+	}
+	if got := second.StateIssues["Review"][0].Identifier; got != "COLIN-2" {
+		t.Fatalf("cached StateIssues[Review][0].Identifier = %q, want COLIN-2", got)
 	}
 }
 
@@ -750,6 +1135,36 @@ func TestHandleWorkerExitSchedulesContinuationRetry(t *testing.T) {
 	}
 	if retry.entry.Error != "" {
 		t.Fatalf("retry error = %q", retry.entry.Error)
+	}
+}
+
+func TestHandleRetryDropsClaimedIssueAfterShutdownRequest(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		running:  map[string]*runningEntry{},
+		retrying: map[string]*retryState{},
+		claimed: map[string]struct{}{
+			"issue-1": {},
+		},
+	}
+	orch.shutdownRequested.Store(true)
+	orch.retrying["issue-1"] = &retryState{
+		entry: domain.RetryEntry{
+			IssueID:    "issue-1",
+			Identifier: "COLIN-151",
+			Attempt:    2,
+		},
+	}
+
+	orch.handleRetry(context.Background(), "issue-1")
+
+	if _, ok := orch.retrying["issue-1"]; ok {
+		t.Fatal("retrying entry still present after shutdown request")
+	}
+	if _, ok := orch.claimed["issue-1"]; ok {
+		t.Fatal("claimed issue should be released after shutdown request")
 	}
 }
 
@@ -1677,6 +2092,14 @@ func TestRunProcessesRefreshRequestsImmediately(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("startup candidate fetch did not happen")
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for !orch.RefreshReady() {
+		if time.Now().After(deadline) {
+			t.Fatal("RefreshReady() did not become true after startup tick")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	queued, coalesced := orch.RequestRefresh("test refresh")

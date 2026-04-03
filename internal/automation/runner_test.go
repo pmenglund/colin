@@ -21,6 +21,11 @@ import (
 	"github.com/pmenglund/colin/internal/workspace"
 )
 
+const (
+	fakeExecPlanBody      = "# Fake ExecPlan\n\n## Progress\n\n- [x] Plan generated."
+	persistedExecPlanBody = "# Persisted plan\n\n## Progress\n\n- [x] Existing task."
+)
+
 func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	t.Parallel()
 
@@ -1127,10 +1132,10 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 	if result.Issue.ExecPlan == nil {
 		t.Fatal("result.Issue.ExecPlan = nil, want exec plan")
 	}
-	if result.Issue.ExecPlan.Body != "# Fake ExecPlan\n\nPlan details." {
+	if result.Issue.ExecPlan.Body != fakeExecPlanBody {
 		t.Fatalf("ExecPlan.Body = %q, want fake plan", result.Issue.ExecPlan.Body)
 	}
-	if tracker.execPlan.Body != "# Fake ExecPlan\n\nPlan details." {
+	if tracker.execPlan.Body != fakeExecPlanBody {
 		t.Fatalf("tracker exec plan = %q, want fake plan", tracker.execPlan.Body)
 	}
 	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionExecPlan {
@@ -1148,7 +1153,7 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 	if !strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
 		t.Fatalf("prompts log missing exec plan turn: %q", logText)
 	}
-	if !strings.Contains(logText, "Work on COLIN-108.\n\nExecPlan:\n\n# Fake ExecPlan\n\nPlan details.") {
+	if !strings.Contains(logText, "Work on COLIN-108.\n\nExecPlan:\n\n"+fakeExecPlanBody) {
 		t.Fatalf("prompts log missing coding prompt with injected plan: %q", logText)
 	}
 }
@@ -1195,7 +1200,7 @@ func TestRunnerReusesExistingExecPlanWithoutCreatingAnother(t *testing.T) {
 			State:         "In Progress",
 			ExecPlanCount: 1,
 			ExecPlan: &domain.ExecPlan{
-				Body: "# Persisted plan\n\nExisting details.",
+				Body: persistedExecPlanBody,
 			},
 		},
 	}
@@ -1214,12 +1219,15 @@ func TestRunnerReusesExistingExecPlanWithoutCreatingAnother(t *testing.T) {
 		State:         "In Progress",
 		ExecPlanCount: 1,
 		ExecPlan: &domain.ExecPlan{
-			Body: "# Persisted plan\n\nExisting details.",
+			Body: persistedExecPlanBody,
 		},
 	}, nil, nil)
 
 	if result.Status != "succeeded" {
 		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Review" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Review")
 	}
 	if tracker.execPlan.Body != "" {
 		t.Fatalf("tracker exec plan = %q, want no new exec plan persisted", tracker.execPlan.Body)
@@ -1239,8 +1247,235 @@ func TestRunnerReusesExistingExecPlanWithoutCreatingAnother(t *testing.T) {
 	if strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
 		t.Fatalf("prompts log unexpectedly created a second exec plan: %q", logText)
 	}
-	if !strings.Contains(logText, "Work on COLIN-109.\n\nExecPlan:\n\n# Persisted plan\n\nExisting details.") {
+	if !strings.Contains(logText, "Work on COLIN-109.\n\nExecPlan:\n\n"+persistedExecPlanBody) {
 		t.Fatalf("prompts log missing coding prompt with reused plan: %q", logText)
+	}
+}
+
+func TestRunnerKeepsExecPlanIssueOutOfReviewWhileProgressRemains(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	fileBodies, err := json.Marshal([]string{
+		"# Persisted plan\n\n## Progress\n\n- [x] First task\n- [ ] Remaining task",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_EXEC_PLAN_FILE_BODIES_JSON=%q %q -test.run=TestHelperProcessFakeCodex --",
+		string(fileBodies),
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:            "issue-1",
+			Identifier:    "COLIN-153",
+			Title:         "Slack support",
+			State:         "In Progress",
+			ExecPlanCount: 1,
+			ExecPlan: &domain.ExecPlan{
+				Body: persistedExecPlanBody,
+			},
+			ColinMetadata: &domain.ColinMetadata{
+				ExecPlanDecision: domain.ExecPlanDecisionExecPlan,
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), tracker.refreshedIssue, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Refine" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
+	}
+	if tracker.updatedState != "Refine" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Refine")
+	}
+	if tracker.execPlan.Body != "# Persisted plan\n\n## Progress\n\n- [x] First task\n- [ ] Remaining task" {
+		t.Fatalf("tracker.execPlan.Body = %q, want synced updated progress", tracker.execPlan.Body)
+	}
+	if !strings.Contains(result.Summary, "Remaining ExecPlan tasks:") {
+		t.Fatalf("Summary = %q, want remaining-task note", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Remaining task") {
+		t.Fatalf("Summary = %q, want named remaining task", result.Summary)
+	}
+}
+
+func TestRunnerMovesExecPlanIssueToReviewAfterRemainingProgressCompletes(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	fileBodies, err := json.Marshal([]string{
+		"# Persisted plan\n\n## Progress\n\n- [x] First task\n- [ ] Remaining task",
+		"# Persisted plan\n\n## Progress\n\n- [x] First task\n- [x] Remaining task",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_EXEC_PLAN_FILE_BODIES_JSON=%q %q -test.run=TestHelperProcessFakeCodex --",
+		string(fileBodies),
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       2,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:            "issue-1",
+			Identifier:    "COLIN-153",
+			Title:         "Slack support",
+			State:         "In Progress",
+			ExecPlanCount: 1,
+			ExecPlan: &domain.ExecPlan{
+				Body: persistedExecPlanBody,
+			},
+			ColinMetadata: &domain.ColinMetadata{
+				ExecPlanDecision: domain.ExecPlanDecisionExecPlan,
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), tracker.refreshedIssue, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Review" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Review")
+	}
+	if tracker.execPlan.Body != "# Persisted plan\n\n## Progress\n\n- [x] First task\n- [x] Remaining task" {
+		t.Fatalf("tracker.execPlan.Body = %q, want final completed plan", tracker.execPlan.Body)
+	}
+}
+
+func TestRunnerMovesExecPlanIssueToRefineWhenWorkingCopyDisappears(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_REMOVE_EXEC_PLAN_FILE=1 %q -test.run=TestHelperProcessFakeCodex --",
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	issue := domain.Issue{
+		ID:            "issue-1",
+		Identifier:    "COLIN-153",
+		Title:         "Slack support",
+		State:         "In Progress",
+		ExecPlanCount: 1,
+		ExecPlan: &domain.ExecPlan{
+			Body: persistedExecPlanBody,
+		},
+		ColinMetadata: &domain.ColinMetadata{
+			ExecPlanDecision: domain.ExecPlanDecisionExecPlan,
+		},
+	}
+	tracker := &stubTracker{refreshedIssue: issue}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), issue, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Refine" {
+		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
+	}
+	if !strings.Contains(result.Summary, "failed to read the ExecPlan working copy") {
+		t.Fatalf("Summary = %q, want missing-file blocker", result.Summary)
 	}
 }
 
@@ -1634,7 +1869,7 @@ func TestRunnerParsesExecPlanTurnsFromCompletedItemTextOnly(t *testing.T) {
 	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionExecPlan {
 		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionExecPlan)
 	}
-	if tracker.execPlan.Body != "# Fake ExecPlan\n\nPlan details." {
+	if tracker.execPlan.Body != fakeExecPlanBody {
 		t.Fatalf("tracker.execPlan.Body = %q, want fake exec plan body", tracker.execPlan.Body)
 	}
 }
@@ -1680,7 +1915,7 @@ func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
 			Title:      "Add exec plans",
 			State:      "Todo",
 			ExecPlan: &domain.ExecPlan{
-				Body: "# Persisted plan\n\nExisting details.",
+				Body: persistedExecPlanBody,
 			},
 		},
 	}
@@ -1699,7 +1934,7 @@ func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
 		Description: testStringPtr("Create and reuse an execution plan."),
 		State:       "Todo",
 		ExecPlan: &domain.ExecPlan{
-			Body: "# Persisted plan\n\nExisting details.",
+			Body: persistedExecPlanBody,
 		},
 	}, nil, nil)
 
@@ -1712,7 +1947,7 @@ func TestRunnerDoesNotInjectPersistedExecPlanWhenDisabled(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	logText := string(logData)
-	if strings.Contains(logText, "ExecPlan:\n\n# Persisted plan\n\nExisting details.") {
+	if strings.Contains(logText, "ExecPlan:\n\n"+persistedExecPlanBody) {
 		t.Fatalf("prompts log unexpectedly injected persisted exec plan: %q", logText)
 	}
 }
@@ -1948,6 +2183,7 @@ func runFakeCodex() error {
 
 	var threadID string
 	var turnID string
+	codingTurnCount := 0
 
 	for {
 		msg, err := readJSONMessage(reader)
@@ -2003,6 +2239,12 @@ func runFakeCodex() error {
 				if err := runFakeMergeRecovery(promptCwd, promptText); err != nil {
 					return err
 				}
+			}
+			if strings.Contains(promptText, "ExecPlan working copy: ") {
+				if err := updateFakeExecPlanWorkingCopy(promptText, codingTurnCount); err != nil {
+					return err
+				}
+				codingTurnCount++
 			}
 			if err := writeJSONMessage(writer, map[string]any{
 				"id":     "approval-1",
@@ -2098,7 +2340,7 @@ func fakeCodexTurnText(prompt string) string {
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_TEXT"); ok {
 			return value
 		}
-		return "# Fake ExecPlan\n\nPlan details."
+		return fakeExecPlanBody
 	}
 	if isMergeRecoveryPrompt(prompt) {
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_MERGE_RECOVERY_TEXT"); ok {
@@ -2167,6 +2409,34 @@ func appendPromptLog(path string, prompt string) error {
 	}
 	_, err = fmt.Fprintln(file, "===END===")
 	return err
+}
+
+func updateFakeExecPlanWorkingCopy(prompt string, turnIndex int) error {
+	path := extractPromptField(prompt, "ExecPlan working copy:")
+	if path == "" {
+		return nil
+	}
+	if os.Getenv("COLIN_FAKE_CODEX_REMOVE_EXEC_PLAN_FILE") == "1" {
+		return os.Remove(path)
+	}
+	body := strings.TrimSpace(os.Getenv("COLIN_FAKE_CODEX_EXEC_PLAN_FILE_BODY"))
+	if raw := strings.TrimSpace(os.Getenv("COLIN_FAKE_CODEX_EXEC_PLAN_FILE_BODIES_JSON")); raw != "" {
+		var bodies []string
+		if err := json.Unmarshal([]byte(raw), &bodies); err != nil {
+			return err
+		}
+		if len(bodies) > 0 {
+			index := turnIndex
+			if index >= len(bodies) {
+				index = len(bodies) - 1
+			}
+			body = strings.TrimSpace(bodies[index])
+		}
+	}
+	if body == "" {
+		return nil
+	}
+	return os.WriteFile(path, []byte(body+"\n"), 0o600)
 }
 
 func isMergeRecoveryPrompt(prompt string) bool {

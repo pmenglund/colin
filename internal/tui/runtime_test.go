@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/pmenglund/colin/internal/domain"
 )
@@ -201,6 +202,15 @@ func TestModelQRequestsShutdownDrainWhenWorkersAreRunning(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q", view, want)
 		}
+	}
+	if strings.Contains(view, "q/esc quit  shutdown requested") {
+		t.Fatalf("view = %q, want shutdown message moved out of the header", view)
+	}
+	if strings.Index(view, "Workers") > strings.Index(view, "shutdown requested; waiting for 1 worker to go idle") {
+		t.Fatalf("view = %q, want shutdown message after workers section", view)
+	}
+	if got := shutdownStyle.GetForeground(); got != lipgloss.Color("208") {
+		t.Fatalf("shutdown foreground = %v, want orange 208", got)
 	}
 }
 

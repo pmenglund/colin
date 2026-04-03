@@ -114,6 +114,9 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 	if err := applyTargetsConfig(&cfg, def.Config); err != nil {
 		return domain.ServiceConfig{}, err
 	}
+	if err := applySlackConfig(&cfg, def.Config.Slack); err != nil {
+		return domain.ServiceConfig{}, err
+	}
 
 	normalizeStateList(cfg.Tracker.ActiveStates)
 	normalizeStateList(cfg.Tracker.TerminalStates)
@@ -518,6 +521,19 @@ func applyServerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowServerConfi
 	}
 	if value, ok := intValue(raw.LogBufferLines); ok && value > 0 {
 		cfg.Server.LogBufferLines = value
+	}
+	return nil
+}
+
+func applySlackConfig(cfg *domain.ServiceConfig, raw domain.WorkflowSlackConfig) error {
+	if value := stringValue(raw.BotToken); value != "" {
+		cfg.Slack.BotToken = resolveEnvToken(value)
+	}
+	if value := stringValue(raw.ChannelID); value != "" {
+		cfg.Slack.ChannelID = strings.TrimSpace(resolveEnvToken(value))
+	}
+	if (cfg.Slack.BotToken == "") != (cfg.Slack.ChannelID == "") {
+		return fmt.Errorf("%w: slack.bot_token and slack.channel_id must both be set", ErrInvalidWorkflowConfig)
 	}
 	return nil
 }

@@ -44,9 +44,28 @@ func TestObservabilityServerRoutes(t *testing.T) {
 	handler, err := NewObservabilityServer(func(context.Context) (domain.Snapshot, error) {
 		now := time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC)
 		return domain.Snapshot{
-			GeneratedAt: now,
-			Counts:      map[string]int{"running": 1, "retrying": 0},
-			IssueStates: map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
+			GeneratedAt:       now,
+			ShutdownRequested: true,
+			Counts:            map[string]int{"running": 1, "retrying": 0},
+			IssueStates:       map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
+			StateIssues: map[string][]domain.StateIssueSummary{
+				"In Progress": {
+					{
+						ID:         "issue-1",
+						Identifier: "COLIN-93",
+						Title:      "Add dashboard",
+						URL:        "https://linear.app/example/issue/COLIN-93",
+					},
+				},
+				"Review": {
+					{
+						ID:         "issue-2",
+						Identifier: "COLIN-94",
+						Title:      "Sync review labels",
+						URL:        "https://linear.app/example/issue/COLIN-94",
+					},
+				},
+			},
 			PausedIssueStates: map[string]domain.PausedStateSummary{
 				"Review": {
 					Count: 1,
@@ -165,6 +184,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="worker-card-COLIN-93"`) {
 			t.Fatalf("missing worker card: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="state-issues-trigger-review"`) {
+			t.Fatalf("missing state issue trigger: %s", text)
+		}
+		if !strings.Contains(text, `href="/linear/issues/issue-2/metadata"`) {
+			t.Fatalf("missing state issue detail link: %s", text)
+		}
 		if !strings.Contains(text, `data-testid="paused-issues-review"`) {
 			t.Fatalf("missing paused issue indicator: %s", text)
 		}
@@ -173,6 +198,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(text, `data-refresh-status="live"`) {
 			t.Fatalf("missing live refresh status: %s", text)
+		}
+		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
+			t.Fatalf("missing shutdown alert: %s", text)
 		}
 	})
 
@@ -198,6 +226,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="refresh-status"`) {
 			t.Fatalf("missing refresh status indicator: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
+			t.Fatalf("missing shutdown alert: %s", text)
+		}
 	})
 
 	t.Run("api", func(t *testing.T) {
@@ -215,6 +246,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if got := snapshot.IssueStates["Review"]; got != 2 {
 			t.Fatalf("review count = %d, want 2", got)
+		}
+		if got := len(snapshot.StateIssues["Review"]); got != 1 {
+			t.Fatalf("review issue list length = %d, want 1", got)
+		}
+		if !snapshot.ShutdownRequested {
+			t.Fatal("shutdown requested = false, want true")
 		}
 		if got := snapshot.PausedIssueStates["Review"].Count; got != 1 {
 			t.Fatalf("review paused count = %d, want 1", got)

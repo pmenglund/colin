@@ -786,24 +786,28 @@ func TestUpsertIssueMetadata(t *testing.T) {
 
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
-		ActualBranchName:       "colin-94",
-		ExecPlanDecision:       domain.ExecPlanDecisionOneShot,
-		ReviewPublishDirective: domain.ReviewPublishDirectiveSkip,
-		LastRunType:            "coding",
-		LastOutcome:            "needs_spec",
-		LastSummaryCommentID:   "comment-1",
-		PullRequestNumber:      11,
-		PullRequestURL:         "https://github.com/pmenglund/colin/pull/11",
-		PullRequestState:       "OPEN",
-		PullRequestHeadRef:     "pmenglund/colin-94",
-		PullRequestBaseRef:     "main",
-		LoopFailureFingerprint: "review_publish\nReview\nno commits",
-		LoopFailureCount:       2,
-		PausedAt:               &now,
-		PausedRunType:          "review_publish",
-		PausedState:            "Review",
-		PausedReason:           "no commits between main and branch",
-		UpdatedAt:              &now,
+		ActualBranchName:        "colin-94",
+		ExecPlanDecision:        domain.ExecPlanDecisionOneShot,
+		ReviewPublishDirective:  domain.ReviewPublishDirectiveSkip,
+		LastRunType:             "coding",
+		LastOutcome:             "needs_spec",
+		LastSummaryCommentID:    "comment-1",
+		PullRequestNumber:       11,
+		PullRequestURL:          "https://github.com/pmenglund/colin/pull/11",
+		PullRequestState:        "OPEN",
+		PullRequestHeadRef:      "pmenglund/colin-94",
+		PullRequestBaseRef:      "main",
+		LoopFailureFingerprint:  "review_publish\nReview\nno commits",
+		LoopFailureCount:        2,
+		PausedAt:                &now,
+		PausedRunType:           "review_publish",
+		PausedState:             "Review",
+		PausedReason:            "no commits between main and branch",
+		SlackChannelID:          "C12345678",
+		SlackMessageTS:          "1743270000.123456",
+		SlackPermalink:          "https://example.slack.com/archives/C12345678/p1743270000123456",
+		SlackSummaryFingerprint: "fp-1",
+		UpdatedAt:               &now,
 	})
 	if err != nil {
 		t.Fatalf("UpsertIssueMetadata() error = %v", err)
@@ -850,11 +854,26 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotMetadata["paused_reason"] != "no commits between main and branch" {
 		t.Fatalf("paused_reason = %v", gotMetadata["paused_reason"])
 	}
+	if gotMetadata["slack_channel_id"] != "C12345678" {
+		t.Fatalf("slack_channel_id = %v, want C12345678", gotMetadata["slack_channel_id"])
+	}
+	if gotMetadata["slack_message_ts"] != "1743270000.123456" {
+		t.Fatalf("slack_message_ts = %v, want 1743270000.123456", gotMetadata["slack_message_ts"])
+	}
+	if gotMetadata["slack_permalink"] != "https://example.slack.com/archives/C12345678/p1743270000123456" {
+		t.Fatalf("slack_permalink = %v, want permalink", gotMetadata["slack_permalink"])
+	}
+	if gotMetadata["slack_summary_fingerprint"] != "fp-1" {
+		t.Fatalf("slack_summary_fingerprint = %v, want fp-1", gotMetadata["slack_summary_fingerprint"])
+	}
 	if gotMetadata["actual_branch_name"] != "colin-94" {
 		t.Fatalf("actual_branch_name = %v, want colin-94", gotMetadata["actual_branch_name"])
 	}
 	if metadata.AttachmentID != "attachment-1" {
 		t.Fatalf("metadata.AttachmentID = %q, want %q", metadata.AttachmentID, "attachment-1")
+	}
+	if metadata.URL != "https://colin.example.test/root/linear/issues/issue-1/metadata" {
+		t.Fatalf("metadata.URL = %q, want metadata attachment URL", metadata.URL)
 	}
 	if metadata.ActualBranchName != "colin-94" {
 		t.Fatalf("metadata.ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
@@ -870,6 +889,9 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.LoopFailureCount != 2 {
 		t.Fatalf("metadata.LoopFailureCount = %d, want 2", metadata.LoopFailureCount)
+	}
+	if metadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743270000123456" {
+		t.Fatalf("metadata.SlackPermalink = %q, want permalink", metadata.SlackPermalink)
 	}
 }
 
@@ -1246,6 +1268,110 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	}
 	if gotMetadata["body"] != "# Plan\n\nDetails." {
 		t.Fatalf("body = %v, want plan body", gotMetadata["body"])
+	}
+	if plan.AttachmentID != "attachment-2" {
+		t.Fatalf("plan.AttachmentID = %q, want %q", plan.AttachmentID, "attachment-2")
+	}
+}
+
+func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
+	t.Parallel()
+
+	var (
+		queryCount      int
+		updateCount     int
+		gotAttachmentID string
+		gotTitle        string
+		gotURL          string
+		gotMetadata     map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "query IssueExecPlans"):
+			queryCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":    "attachment-2",
+									"title": "Colin ExecPlan",
+									"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
+									"metadata": map[string]any{
+										"body": "# Old plan",
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpdateIssueExecPlan"):
+			updateCount++
+			gotAttachmentID, _ = request.Variables["id"].(string)
+			input, _ := request.Variables["input"].(map[string]any)
+			gotTitle, _ = input["title"].(string)
+			gotURL, _ = input["url"].(string)
+			gotMetadata, _ = input["metadata"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentUpdate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       gotAttachmentID,
+							"title":    gotTitle,
+							"url":      gotURL,
+							"metadata": gotMetadata,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	plan, err := client.UpsertIssueExecPlan(context.Background(), "issue-1", domain.ExecPlan{
+		Body:      "# Updated plan\n\n## Progress\n\n- [x] Done",
+		UpdatedAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueExecPlan() error = %v", err)
+	}
+	if queryCount != 1 {
+		t.Fatalf("queryCount = %d, want 1", queryCount)
+	}
+	if updateCount != 1 {
+		t.Fatalf("updateCount = %d, want 1", updateCount)
+	}
+	if gotAttachmentID != "attachment-2" {
+		t.Fatalf("attachment id = %q, want %q", gotAttachmentID, "attachment-2")
+	}
+	if gotTitle != "Colin ExecPlan" {
+		t.Fatalf("title = %q, want %q", gotTitle, "Colin ExecPlan")
+	}
+	if gotURL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
+		t.Fatalf("url = %q, want %q", gotURL, "http://127.0.0.1/linear/issues/issue-1/exec-plan")
+	}
+	if gotMetadata["body"] != "# Updated plan\n\n## Progress\n\n- [x] Done" {
+		t.Fatalf("body = %v, want updated plan body", gotMetadata["body"])
 	}
 	if plan.AttachmentID != "attachment-2" {
 		t.Fatalf("plan.AttachmentID = %q, want %q", plan.AttachmentID, "attachment-2")
@@ -1785,19 +1911,23 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 										"title": "Colin metadata",
 										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
 										"metadata": map[string]any{
-											"actual_branch_name":       "colin-94",
-											"exec_plan_decision":       "one_shot",
-											"review_publish_directive": "skip",
-											"last_run_type":            "coding",
-											"last_outcome":             "needs_spec",
-											"last_summary_comment_id":  "comment-2",
-											"loop_failure_fingerprint": "review_publish\nReview\nno commits",
-											"loop_failure_count":       3,
-											"paused_at":                base.Add(3 * time.Minute).Format(time.RFC3339),
-											"paused_run_type":          "review_publish",
-											"paused_state":             "Review",
-											"paused_reason":            "no commits between main and branch",
-											"updated_at":               base.Add(2 * time.Minute).Format(time.RFC3339),
+											"actual_branch_name":        "colin-94",
+											"exec_plan_decision":        "one_shot",
+											"review_publish_directive":  "skip",
+											"last_run_type":             "coding",
+											"last_outcome":              "needs_spec",
+											"last_summary_comment_id":   "comment-2",
+											"loop_failure_fingerprint":  "review_publish\nReview\nno commits",
+											"loop_failure_count":        3,
+											"paused_at":                 base.Add(3 * time.Minute).Format(time.RFC3339),
+											"paused_run_type":           "review_publish",
+											"paused_state":              "Review",
+											"paused_reason":             "no commits between main and branch",
+											"slack_channel_id":          "C12345678",
+											"slack_message_ts":          "1743270000.123456",
+											"slack_permalink":           "https://example.slack.com/archives/C12345678/p1743270000123456",
+											"slack_summary_fingerprint": "fp-1",
+											"updated_at":                base.Add(2 * time.Minute).Format(time.RFC3339),
 											"codex_output": []map[string]any{
 												{
 													"timestamp": base.Add(90 * time.Second).Format(time.RFC3339),
@@ -1854,6 +1984,9 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	if issues[0].ColinMetadata == nil {
 		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
 	}
+	if issues[0].ColinMetadata.URL != "https://colin.example.test/linear/issues/issue-1/metadata" {
+		t.Fatalf("URL = %q, want metadata attachment URL", issues[0].ColinMetadata.URL)
+	}
 	if issues[0].ColinMetadata.ReviewPublishDirective != "skip" {
 		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ColinMetadata.ReviewPublishDirective, "skip")
 	}
@@ -1874,6 +2007,9 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.PausedRunType != "review_publish" {
 		t.Fatalf("PausedRunType = %q, want review_publish", issues[0].ColinMetadata.PausedRunType)
+	}
+	if issues[0].ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743270000123456" {
+		t.Fatalf("SlackPermalink = %q, want permalink", issues[0].ColinMetadata.SlackPermalink)
 	}
 }
 
@@ -2019,6 +2155,9 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 	}
 	if issues[0].ExecPlan.Body != "# Plan\n\nDetails." {
 		t.Fatalf("ExecPlan.Body = %q, want plan body", issues[0].ExecPlan.Body)
+	}
+	if issues[0].ExecPlan.URL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
+		t.Fatalf("ExecPlan.URL = %q, want attachment URL", issues[0].ExecPlan.URL)
 	}
 }
 

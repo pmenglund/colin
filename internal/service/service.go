@@ -19,6 +19,8 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/logbuffer"
+	"github.com/pmenglund/colin/internal/notify"
+	slacknotify "github.com/pmenglund/colin/internal/notify/slack"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repoops"
@@ -183,6 +185,10 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	manager := workspace.NewManager(cfg, logger)
 	repoManager := repoops.NewManager(cfg, logger)
 	runner := automation.NewRunner(cfg, def, trackerClient, manager, logger)
+	notifier := notify.NewNoop()
+	if strings.TrimSpace(cfg.Slack.BotToken) != "" && strings.TrimSpace(cfg.Slack.ChannelID) != "" {
+		notifier = slacknotify.New(cfg.Slack.BotToken, cfg.Slack.ChannelID)
+	}
 	logger.Info(
 		"runtime loaded",
 		"workflow_path", path,
@@ -201,6 +207,7 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 		Repo:      repoManager,
 		Workspace: manager,
 		Runner:    runner,
+		Notifier:  notifier,
 	}, nil
 }
 

@@ -434,6 +434,22 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 			"Merge":       1,
 			"Done":        14,
 		},
+		StateIssues: map[string][]domain.StateIssueSummary{
+			"Todo": {
+				{ID: "issue-demo-3", Identifier: "COLIN-19", Title: "Tighten stale refresh messaging", URL: "https://linear.app/example/issue/COLIN-19"},
+			},
+			"In Progress": {
+				{ID: "issue-demo-1", Identifier: "COLIN-7", Title: "Render live dashboard cards", URL: issueURL},
+				{ID: "issue-demo-4", Identifier: "COLIN-22", Title: "Improve issue detail routing", URL: "https://linear.app/example/issue/COLIN-22"},
+			},
+			"Review": {
+				{ID: "issue-demo-5", Identifier: "COLIN-24", Title: "Keep review labels synced", URL: "https://linear.app/example/issue/COLIN-24"},
+				{ID: "issue-demo-6", Identifier: "COLIN-25", Title: "Retry failed branch publish", URL: "https://linear.app/example/issue/COLIN-25"},
+			},
+			"Merge": {
+				{ID: "issue-demo-7", Identifier: "COLIN-26", Title: "Finalize webhook rollout", URL: "https://linear.app/example/issue/COLIN-26"},
+			},
+		},
 		PausedIssueStates: map[string]domain.PausedStateSummary{
 			"Review": {
 				Count: 1,
@@ -530,6 +546,26 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 			},
 		}
 		return issue, nil
+	}
+	for state, issues := range snapshot.StateIssues {
+		for _, issue := range issues {
+			if issue.ID != issueID {
+				continue
+			}
+			issueURL := issue.URL
+			return domain.Issue{
+				ID:         issue.ID,
+				Identifier: issue.Identifier,
+				Title:      issue.Title,
+				State:      state,
+				URL:        &issueURL,
+				ColinMetadata: &domain.ColinMetadata{
+					LastRunType: "coding",
+					LastOutcome: "ready_for_review",
+					UpdatedAt:   ptrTime(snapshot.GeneratedAt),
+				},
+			}, nil
+		}
 	}
 	return domain.Issue{}, errors.New("issue not found")
 }
