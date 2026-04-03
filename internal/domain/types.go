@@ -28,6 +28,7 @@ const (
 	RunOutcomeNeedsSpec        RunOutcome = "needs_spec"
 	RunOutcomeMaxTurns         RunOutcome = "max_turns"
 	RunOutcomeExecPlanConflict RunOutcome = "exec_plan_conflict"
+	RunOutcomeExecPlanInvalid  RunOutcome = "exec_plan_invalid"
 	RunOutcomeMerged           RunOutcome = "merged"
 	RunOutcomeReadyForMergeFix RunOutcome = "ready_for_merge_retry"
 

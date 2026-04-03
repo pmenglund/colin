@@ -28,12 +28,12 @@ Colin actively works issues in these coding states:
 - `Todo`
 - `In Progress`
 
-When Colin starts a `Todo` issue, it moves it to `In Progress`, keeps retrying while the issue remains active, and stops work if the issue leaves the active state set. If a reviewed issue is moved from `Review` back to `Todo` on the same PR, Colin resumes work immediately and reuses any review feedback or still-open review threads it can already see.
+When Colin starts a `Todo` issue, it moves it to `In Progress`, keeps retrying while the issue remains active, and stops work if the issue leaves the active state set. If a reviewed issue is moved from `Review` back to `Todo` on the same PR, Colin resumes work immediately and reuses any review feedback or still-open review threads it can already see. For issues backed by a stored ExecPlan, Colin also keeps the ExecPlan's `## Progress` section up to date during implementation and will not hand the issue to `Review` until every listed task is complete.
 
 Colin uses these handoff states:
 
-- `Review`: Colin prepares the branch and pull request for human review. Human action is required to review the PR and then move the issue either back to `Todo` for more work on the same PR or forward to `Merge`.
-- `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`.
+- `Review`: Colin prepares the branch and pull request for human review. Human action is required to review the PR and then move the issue either back to `Todo` for more work on the same PR or forward to `Merge`. ExecPlan-backed issues only reach `Review` after every task in the plan's `## Progress` section is checked off.
+- `Refine`: Colin stops for clarification because the issue is underspecified, capped, or has invalid metadata. Human action is required to improve the issue and move it back to `Todo`. Colin also uses `Refine` when an ExecPlan-backed run cannot safely complete its remaining plan tasks or when the stored ExecPlan is invalid.
 - `Merge`: Colin performs merge automation. Human action is only required if Colin sends the issue back to `Review` because of merge or review problems, or if no post-merge Linear automation target is configured.
 
 Colin's `[colin]` comments are meant to make the next step explicit. When an issue returns from `Review` to `Todo`, Colin says whether it is still waiting for GitHub review threads to sync or whether more PR feedback still needs to be addressed. When an issue is in `Merge`, Colin says whether it is retrying automatically while Codex review is pending, or whether a human needs to resolve review feedback or a merge problem before moving the issue forward again.

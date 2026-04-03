@@ -563,7 +563,7 @@ func (c *Client) UpsertIssueExecPlan(ctx context.Context, issueID string, plan d
 	switch len(existingPlans) {
 	case 0:
 	case 1:
-		return existingPlans[0], nil
+		return c.updateIssueExecPlan(ctx, existingPlans[0].AttachmentID, issueID, plan)
 	default:
 		return domain.ExecPlan{}, fmt.Errorf("%w: issue %s has %d Colin ExecPlan attachments", tracker.ErrDuplicateExecPlans, strings.TrimSpace(issueID), len(existingPlans))
 	}
@@ -597,6 +597,42 @@ mutation UpsertIssueExecPlan($input: AttachmentCreateInput!) {
 		return domain.ExecPlan{}, ErrUnknownPayload
 	}
 	attachment, ok := nestedMap(resp, "data", "attachmentCreate", "attachment")
+	if !ok {
+		return domain.ExecPlan{}, ErrUnknownPayload
+	}
+	return parseColinExecPlanAttachment(attachment)
+}
+
+func (c *Client) updateIssueExecPlan(ctx context.Context, attachmentID string, issueID string, plan domain.ExecPlan) (domain.ExecPlan, error) {
+	const query = `
+mutation UpdateIssueExecPlan($id: String!, $input: AttachmentUpdateInput!) {
+  attachmentUpdate(id: $id, input: $input) {
+    success
+    attachment {
+      id
+      title
+      url
+      metadata
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"id": attachmentID,
+		"input": map[string]any{
+			"title":    colinExecPlanAttachmentTitle,
+			"url":      c.execPlanAttachmentURL(ctx, issueID),
+			"metadata": colinExecPlanValue(plan),
+		},
+	})
+	if err != nil {
+		return domain.ExecPlan{}, err
+	}
+	success, _ := nestedBool(resp, "data", "attachmentUpdate", "success")
+	if !success {
+		return domain.ExecPlan{}, ErrUnknownPayload
+	}
+	attachment, ok := nestedMap(resp, "data", "attachmentUpdate", "attachment")
 	if !ok {
 		return domain.ExecPlan{}, ErrUnknownPayload
 	}

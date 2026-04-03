@@ -1176,6 +1176,110 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	}
 }
 
+func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
+	t.Parallel()
+
+	var (
+		queryCount      int
+		updateCount     int
+		gotAttachmentID string
+		gotTitle        string
+		gotURL          string
+		gotMetadata     map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "query IssueExecPlans"):
+			queryCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":    "attachment-2",
+									"title": "Colin ExecPlan",
+									"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
+									"metadata": map[string]any{
+										"body": "# Old plan",
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpdateIssueExecPlan"):
+			updateCount++
+			gotAttachmentID, _ = request.Variables["id"].(string)
+			input, _ := request.Variables["input"].(map[string]any)
+			gotTitle, _ = input["title"].(string)
+			gotURL, _ = input["url"].(string)
+			gotMetadata, _ = input["metadata"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentUpdate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       gotAttachmentID,
+							"title":    gotTitle,
+							"url":      gotURL,
+							"metadata": gotMetadata,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	plan, err := client.UpsertIssueExecPlan(context.Background(), "issue-1", domain.ExecPlan{
+		Body:      "# Updated plan\n\n## Progress\n\n- [x] Done",
+		UpdatedAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueExecPlan() error = %v", err)
+	}
+	if queryCount != 1 {
+		t.Fatalf("queryCount = %d, want 1", queryCount)
+	}
+	if updateCount != 1 {
+		t.Fatalf("updateCount = %d, want 1", updateCount)
+	}
+	if gotAttachmentID != "attachment-2" {
+		t.Fatalf("attachment id = %q, want %q", gotAttachmentID, "attachment-2")
+	}
+	if gotTitle != "Colin ExecPlan" {
+		t.Fatalf("title = %q, want %q", gotTitle, "Colin ExecPlan")
+	}
+	if gotURL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
+		t.Fatalf("url = %q, want %q", gotURL, "http://127.0.0.1/linear/issues/issue-1/exec-plan")
+	}
+	if gotMetadata["body"] != "# Updated plan\n\n## Progress\n\n- [x] Done" {
+		t.Fatalf("body = %v, want updated plan body", gotMetadata["body"])
+	}
+	if plan.AttachmentID != "attachment-2" {
+		t.Fatalf("plan.AttachmentID = %q, want %q", plan.AttachmentID, "attachment-2")
+	}
+}
+
 func TestUpsertIssueExecPlanRejectsDuplicates(t *testing.T) {
 	t.Parallel()
 

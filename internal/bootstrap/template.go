@@ -124,13 +124,17 @@ Definition of done:
 - Implement the requested change.
 - Add or update tests when behavior changes.
 - Leave the repo in a clean, reviewable state ready for ` + "`Review`" + `.
+- When Colin provides an ExecPlan working-copy path, keep that file updated as the living plan while you work.
+- For ExecPlan-backed issues, do not treat the work as done until every checkbox under the ExecPlan's ` + "`## Progress`" + ` section is complete.
 - Do not merge changes yourself during coding turns; Colin will publish in ` + "`Review`" + ` and merge in ` + "`Merge`" + `.
 - Summarize what changed in a way that makes the result easy to verify: describe the before and after, what was tested, and any remaining risk.
 
 Output contract:
 - If the issue is still too underspecified to implement safely, begin your final response with ` + "`COLIN_OUTCOME: NEEDS_SPEC`" + `.
 - After ` + "`COLIN_OUTCOME: NEEDS_SPEC`" + `, explain what information is missing and include the exact sentence ` + "`The spec should be improved before implementation.`" + `
+- For ExecPlan-backed issues, also use ` + "`COLIN_OUTCOME: NEEDS_SPEC`" + ` when you cannot safely complete the remaining ` + "`## Progress`" + ` tasks.
 - If the issue is implementable, begin your final response with ` + "`COLIN_OUTCOME: READY_FOR_REVIEW`" + `.
+- For ExecPlan-backed issues, use ` + "`COLIN_OUTCOME: READY_FOR_REVIEW`" + ` only after every checkbox under ` + "`## Progress`" + ` is complete.
 - After ` + "`COLIN_OUTCOME: READY_FOR_REVIEW`" + `, include a short review-friendly summary with the change, the before and after, the verification you ran, and any remaining risk.
 - Prefer Playwright screenshots for browser-visible changes, and prefer terminal or TUI screen captures for terminal-visible changes.
 - Colin posts text comments to Linear, so always include textual descriptions of the before and after and mention any screenshots or screen grabs in words even when capture succeeds.
