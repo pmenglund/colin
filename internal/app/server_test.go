@@ -47,7 +47,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			GeneratedAt:       now,
 			ShutdownRequested: true,
 			Counts:            map[string]int{"running": 1, "retrying": 0},
-			IssueStates:       map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
+			IssueStates:       map[string]int{"Todo": 5, "In Progress": 1, "Review": 1},
 			StateIssues: map[string][]domain.StateIssueSummary{
 				"In Progress": {
 					{
@@ -179,8 +179,8 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, "<html") {
 			t.Fatalf("expected full document, got %s", text)
 		}
-		if !strings.Contains(text, `data-testid="shell-instance"`) {
-			t.Fatalf("missing shell marker: %s", text)
+		if strings.Contains(text, `data-testid="shell-instance"`) {
+			t.Fatalf("unexpected shell renderer card: %s", text)
 		}
 		if !strings.Contains(text, `data-testid="worker-card-COLIN-93"`) {
 			t.Fatalf("missing worker card: %s", text)
@@ -193,6 +193,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(text, `data-testid="state-issues-trigger-review"`) {
 			t.Fatalf("missing state issue trigger: %s", text)
+		}
+		if !strings.Contains(text, `href="https://linear.app/example/issue/COLIN-94"`) {
+			t.Fatalf("missing state issue linear link: %s", text)
 		}
 		if !strings.Contains(text, `href="/linear/issues/issue-2/metadata"`) {
 			t.Fatalf("missing state issue detail link: %s", text)
@@ -251,8 +254,8 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if got := snapshot.Counts["running"]; got != 1 {
 			t.Fatalf("running count = %d, want 1", got)
 		}
-		if got := snapshot.IssueStates["Review"]; got != 2 {
-			t.Fatalf("review count = %d, want 2", got)
+		if got := snapshot.IssueStates["Review"]; got != 1 {
+			t.Fatalf("review count = %d, want 1", got)
 		}
 		if got := len(snapshot.StateIssues["Review"]); got != 1 {
 			t.Fatalf("review issue list length = %d, want 1", got)

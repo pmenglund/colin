@@ -786,6 +786,8 @@ func TestUpsertIssueMetadata(t *testing.T) {
 
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
+		CodexThreadID:           "thread-1",
+		ProgressRootCommentID:   "comment-root-1",
 		ActualBranchName:        "colin-94",
 		ExecPlanDecision:        domain.ExecPlanDecisionOneShot,
 		ReviewPublishDirective:  domain.ReviewPublishDirectiveSkip,
@@ -823,6 +825,12 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if gotMetadata["review_publish_directive"] != "skip" {
 		t.Fatalf("review_publish_directive = %v, want skip", gotMetadata["review_publish_directive"])
+	}
+	if gotMetadata["codex_thread_id"] != "thread-1" {
+		t.Fatalf("codex_thread_id = %v, want thread-1", gotMetadata["codex_thread_id"])
+	}
+	if gotMetadata["progress_root_comment_id"] != "comment-root-1" {
+		t.Fatalf("progress_root_comment_id = %v, want comment-root-1", gotMetadata["progress_root_comment_id"])
 	}
 	if gotMetadata["exec_plan_decision"] != string(domain.ExecPlanDecisionOneShot) {
 		t.Fatalf("exec_plan_decision = %v, want %q", gotMetadata["exec_plan_decision"], domain.ExecPlanDecisionOneShot)
@@ -874,6 +882,12 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.URL != "https://colin.example.test/root/linear/issues/issue-1/metadata" {
 		t.Fatalf("metadata.URL = %q, want metadata attachment URL", metadata.URL)
+	}
+	if metadata.CodexThreadID != "thread-1" {
+		t.Fatalf("metadata.CodexThreadID = %q, want thread-1", metadata.CodexThreadID)
+	}
+	if metadata.ProgressRootCommentID != "comment-root-1" {
+		t.Fatalf("metadata.ProgressRootCommentID = %q, want comment-root-1", metadata.ProgressRootCommentID)
 	}
 	if metadata.ActualBranchName != "colin-94" {
 		t.Fatalf("metadata.ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
@@ -1909,6 +1923,8 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 										"title": "Colin metadata",
 										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
 										"metadata": map[string]any{
+											"codex_thread_id":           "thread-1",
+											"progress_root_comment_id":  "comment-root-1",
 											"actual_branch_name":        "colin-94",
 											"exec_plan_decision":        "one_shot",
 											"review_publish_directive":  "skip",
@@ -1999,6 +2015,12 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.ActualBranchName != "colin-94" {
 		t.Fatalf("ActualBranchName = %q, want %q", issues[0].ColinMetadata.ActualBranchName, "colin-94")
+	}
+	if issues[0].ColinMetadata.CodexThreadID != "thread-1" {
+		t.Fatalf("CodexThreadID = %q, want thread-1", issues[0].ColinMetadata.CodexThreadID)
+	}
+	if issues[0].ColinMetadata.ProgressRootCommentID != "comment-root-1" {
+		t.Fatalf("ProgressRootCommentID = %q, want comment-root-1", issues[0].ColinMetadata.ProgressRootCommentID)
 	}
 	if issues[0].ColinMetadata.LoopFailureCount != 3 {
 		t.Fatalf("LoopFailureCount = %d, want 3", issues[0].ColinMetadata.LoopFailureCount)

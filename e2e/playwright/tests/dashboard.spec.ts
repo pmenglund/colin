@@ -16,23 +16,25 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   );
   await page.getByTestId("state-issues-trigger-in-progress").click();
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("COLIN-7");
-  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Linear" })).toHaveAttribute(
+  await expect(page.getByTestId("state-issues-in-progress")).toContainText("Issue ID");
+  await expect(page.getByTestId("state-issues-in-progress")).toContainText("Title");
+  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "COLIN-7" })).toHaveAttribute(
     "href",
     "https://linear.app/example/issue/COLIN-7",
   );
-  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Web UI details" })).toHaveAttribute(
+  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").getByRole("link", { name: "Render live dashboard cards" })).toHaveAttribute(
     "href",
     "/linear/issues/issue-demo-1/metadata",
   );
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
   await expect(page.getByTestId("context-window-COLIN-7")).toHaveText("Context window: 70% left (78.4K used / 258K)");
   await expect(page.getByTestId("context-window-bar-COLIN-7")).toHaveAttribute("aria-valuenow", "30");
+  await expect(page.getByTestId("shell-instance")).toHaveCount(0);
 });
 
-test("worker card expands and refresh updates the fragment without reloading the shell", async ({ page }) => {
+test("worker card expands and refresh updates the fragment while preserving expanded state", async ({ page }) => {
   await page.goto("/");
 
-  const shellInstance = await page.getByTestId("shell-instance").textContent();
   const before = await page.getByTestId("turn-count-COLIN-7").textContent();
   const details = page.locator("#worker-output-details-COLIN-7");
   const stateIssuesDetails = page.locator("#state-issues-details-in-progress");
@@ -78,9 +80,6 @@ test("worker card expands and refresh updates the fragment without reloading the
     }).format(new Date(value));
   }, refreshedTimestamp);
   await expect(outputTime).toHaveText(expectedRefreshedLocalTime);
-
-  const afterShellInstance = await page.getByTestId("shell-instance").textContent();
-  expect(afterShellInstance).toBe(shellInstance);
 });
 
 test("dashboard marks the view stale when refresh fails and recovers after a later success", async ({ page }) => {

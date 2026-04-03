@@ -96,6 +96,8 @@ func ManagedCodexReviewLabels() []string {
 type ColinMetadata struct {
 	AttachmentID            string
 	URL                     string
+	CodexThreadID           string
+	ProgressRootCommentID   string
 	ActualBranchName        string
 	ExecPlanDecision        ExecPlanDecision
 	ReviewPublishDirective  ReviewPublishDirective

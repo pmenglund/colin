@@ -15,8 +15,9 @@ func (o *Orchestrator) reconcileRunning(ctx context.Context) {
 		return
 	}
 	o.reconcileStalled()
-	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
-		o.logger.Debug("running-state refresh deferred by Linear request budget", append([]any{"delay", delay.String()}, o.linearRateLimitLogArgs()...)...)
+	decision := o.linearBudgetDecision(time.Now().UTC(), linearRequestRunning)
+	if !decision.Allowed {
+		o.logger.Debug("running-state refresh deferred by Linear request budget", o.linearBudgetLogArgs(decision)...)
 		return
 	}
 
@@ -38,7 +39,7 @@ func (o *Orchestrator) reconcileRunning(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		entry.issue = issue
+		entry.issue = mergeRunningIssueContext(entry.issue, issue)
 		if o.isTerminal(issue.State) {
 			o.logger.Info("stopping terminal issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", issue.State)
 			o.requestStop(issueID, "terminal", true)
@@ -106,16 +107,15 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	}
 	delete(o.running, event.issueID)
 	o.totalTokens.SecondsRunning += time.Since(entry.startedAt).Seconds()
+	event.result.Issue = mergeRunningIssueContext(entry.issue, event.result.Issue)
 	if len(entry.outputLog) > 0 {
 		issue := event.result.Issue
-		if strings.TrimSpace(issue.ID) == "" {
-			issue = entry.issue
-		}
 		event.result.Issue = o.persistIssueOutputMetadata(ctx, issue, entry.outputLog)
 	}
 
 	switch entry.stopReason {
 	case "terminal":
+		event.result.Issue = o.clearPersistentThreadMetadata(ctx, event.result.Issue)
 		if event.result.WorkspacePath != "" {
 			if err := o.runtime.Workspace.Remove(ctx, event.result.WorkspacePath); err != nil {
 				o.logger.Warn("workspace cleanup failed", "issue_id", event.issueID, "error", err)
@@ -306,9 +306,70 @@ func (o *Orchestrator) postRunSummary(ctx context.Context, entry *runningEntry, 
 	if strings.TrimSpace(summary) == "" || entry == nil {
 		return issue
 	}
-	comment, commentID := o.postIssueStatusDetailed(ctx, issue, entry.identifier, entry.comment, summary)
+	issue, comment, commentID := o.postIssueStatusDetailed(ctx, issue, entry.identifier, entry.comment, summary)
 	entry.comment = comment
 	return o.persistSummaryCommentMetadata(ctx, issue, commentID)
+}
+
+func (o *Orchestrator) clearPersistentThreadMetadata(ctx context.Context, issue domain.Issue) domain.Issue {
+	if issue.ColinMetadata == nil {
+		return issue
+	}
+	if strings.TrimSpace(issue.ColinMetadata.CodexThreadID) == "" && strings.TrimSpace(issue.ColinMetadata.ProgressRootCommentID) == "" {
+		return issue
+	}
+
+	metadata := *issue.ColinMetadata
+	metadata.CodexThreadID = ""
+	metadata.ProgressRootCommentID = ""
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	if o.runtime.Tracker == nil {
+		issue.ColinMetadata = &metadata
+		return issue
+	}
+	persisted, err := o.runtime.Tracker.UpsertIssueMetadata(ctx, issue.ID, metadata)
+	if err != nil {
+		o.logger.Warn("failed to clear persistent issue thread metadata", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+		issue.ColinMetadata = &metadata
+		return issue
+	}
+	issue.ColinMetadata = &persisted
+	return issue
+}
+
+func mergeRunningIssueContext(previous, current domain.Issue) domain.Issue {
+	if strings.TrimSpace(current.ID) == "" {
+		return previous
+	}
+	if current.ColinMetadata == nil {
+		current.ColinMetadata = previous.ColinMetadata
+	} else if previous.ColinMetadata != nil {
+		merged := *current.ColinMetadata
+		if strings.TrimSpace(merged.CodexThreadID) == "" {
+			merged.CodexThreadID = previous.ColinMetadata.CodexThreadID
+		}
+		if strings.TrimSpace(merged.ProgressRootCommentID) == "" {
+			merged.ProgressRootCommentID = previous.ColinMetadata.ProgressRootCommentID
+		}
+		if strings.TrimSpace(merged.LastSummaryCommentID) == "" {
+			merged.LastSummaryCommentID = previous.ColinMetadata.LastSummaryCommentID
+		}
+		if len(merged.CodexOutput) == 0 && len(previous.ColinMetadata.CodexOutput) > 0 {
+			merged.CodexOutput = append([]domain.OutputLog(nil), previous.ColinMetadata.CodexOutput...)
+		}
+		current.ColinMetadata = &merged
+	}
+	if current.PullRequest == nil {
+		current.PullRequest = previous.PullRequest
+	}
+	if current.CreatedAt == nil {
+		current.CreatedAt = previous.CreatedAt
+	}
+	if current.UpdatedAt == nil {
+		current.UpdatedAt = previous.UpdatedAt
+	}
+	return current
 }
 
 func (o *Orchestrator) scheduleRetry(issueID, identifier string, attempt int, errText string, delay time.Duration, comment *commentThreadState, notifyLinear bool) {
@@ -354,13 +415,17 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		o.logger.Info("retry dropped during shutdown drain", "issue_id", issueID, "issue_identifier", state.entry.Identifier)
 		return
 	}
-	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
+	decision := o.linearBudgetDecision(time.Now().UTC(), linearRequestDispatch)
+	if !decision.Allowed {
+		delay := decision.Delay
+		if delay <= 0 {
+			delay = time.Second
+		}
 		args := []any{
 			"issue_id", issueID,
 			"issue_identifier", state.entry.Identifier,
-			"delay", delay.String(),
 		}
-		args = append(args, o.linearRateLimitLogArgs()...)
+		args = append(args, o.linearBudgetLogArgs(decision)...)
 		o.logger.Info("retry deferred by Linear request budget", args...)
 		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt, "tracker request throttled by Linear budget", delay, state.comment, state.notifyLinear)
 		return

@@ -204,10 +204,11 @@ Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen c
 - Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
 - On startup, Colin ensures the Linear issue label `paused` exists and never dispatches issues carrying that label.
 - On startup, Colin also ensures the managed Codex PR review labels `codex-review: pending`, `codex-review: approved`, and `codex-review: unresolved-feedback` exist.
-- During a run, Colin creates a top-level Linear progress comment and adds high-level replies as work advances so the current session can be followed without reading process logs.
+- During a run, Colin keeps one top-level Linear progress comment thread per issue and adds high-level replies there as work advances so the current session can be followed without reading process logs.
 - Colin prefixes its own Linear comments with `[colin]` and, when an issue returns from `Review` to `Todo`, injects human review comments from that latest review cycle into the next coding prompt as review feedback.
 - Colin stores its own workflow metadata on the Linear issue via a dedicated `Colin metadata` attachment instead of hiding machine markers inside comment bodies.
 - That attachment links to `/linear/issues/<issue-id>/metadata` in Colin and shows the latest persisted Colin metadata plus the captured Codex output for that issue.
+- Colin also stores the active Codex thread id and the root Linear progress-comment id in that metadata so retries, review returns, and merge follow-up can continue in the same Codex conversation and Linear thread for that issue until `Refine` or a terminal state resets them.
 - When the optional `slack` workflow section is configured, Colin also stores the Slack channel, message timestamp, permalink, and summary fingerprint in that same metadata attachment so Slack updates survive retries and restarts.
 - When `agent.create_exec_plan` is enabled, Colin first records whether the issue should be handled as `one_shot` or `exec_plan` in the `Colin metadata` attachment.
 - When that stored decision is `exec_plan`, Colin keeps exactly one dedicated `Colin ExecPlan` attachment on the Linear issue, injects that plan into the first implementation turn, and keeps the attachment updated as a living document while implementation progresses.
@@ -382,7 +383,7 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 
 - By default `colin` stays quiet after startup and only prints the single `Colin is running. Web UI: ...` line.
 - Pass `--verbose` to restore the structured service log stream for startup, dispatches, retries, Codex session progress, and handoff automation.
-- Progress is also written back to Linear as one top-level comment thread per run phase, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
+- Progress is also written back to Linear as one top-level comment thread per issue, with replies for major events such as session start, turn completion, retries, publish completion, and merge completion.
 - Colin's own Linear comments are prefixed with `[colin]` so they can be distinguished from human review feedback even when Colin posts through the same Linear account.
 - Colin creates the Linear issue label `paused` at startup if it does not already exist.
 - The `paused` label is a hard stop for Colin. Remove it when you want Colin to resume work on that issue.

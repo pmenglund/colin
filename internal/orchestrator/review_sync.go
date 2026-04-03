@@ -30,7 +30,7 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	workspace, err := o.runtime.Workspace.Ensure(ctx, issue)
 	if err != nil {
 		state = o.ensureReviewSyncState(issue, state, now)
-		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
+		issue, state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
 			"%s\n- Blocker: failed to prepare workspace for GitHub review sync: %v",
 			userworkflow.ReviewSyncWaiting(domain.PullRequestRef{}, reviewReturnedToTodoAt(issue), now.Sub(state.firstObserved), state.timedOut),
 			err,
@@ -43,7 +43,7 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	reviewContext, err := o.runtime.Repo.ReviewContext(ctx, issue, workspace.Path)
 	if err != nil {
 		state = o.ensureReviewSyncState(issue, state, now)
-		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
+		issue, state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
 			"%s\n- Blocker: failed to read GitHub review threads: %v",
 			userworkflow.ReviewSyncWaiting(domain.PullRequestRef{}, reviewReturnedToTodoAt(issue), now.Sub(state.firstObserved), state.timedOut),
 			err,
@@ -63,7 +63,7 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 	if len(reviewContext.Threads) > 0 {
 		issue.ReviewThreads = reviewContext.Threads
 		if state != nil && state.comment != nil && state.comment.RootCommentID != "" {
-			state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, userworkflow.ReviewSyncReady(reviewContext.PullRequest, len(reviewContext.Threads)))
+			issue, state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, userworkflow.ReviewSyncReady(reviewContext.PullRequest, len(reviewContext.Threads)))
 		}
 	}
 	delete(o.reviewSync, issue.ID)

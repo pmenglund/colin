@@ -1401,6 +1401,8 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 	metadata := domain.ColinMetadata{}
 	metadata.AttachmentID, _ = stringValue(node["id"])
 	metadata.URL = strings.TrimSpace(url)
+	metadata.CodexThreadID, _ = stringValue(metadataMap["codex_thread_id"])
+	metadata.ProgressRootCommentID, _ = stringValue(metadataMap["progress_root_comment_id"])
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
 	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
 		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
@@ -1493,6 +1495,8 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
+		"codex_thread_id":           strings.TrimSpace(metadata.CodexThreadID),
+		"progress_root_comment_id":  strings.TrimSpace(metadata.ProgressRootCommentID),
 		"actual_branch_name":        strings.TrimSpace(metadata.ActualBranchName),
 		"exec_plan_decision":        strings.TrimSpace(string(metadata.ExecPlanDecision)),
 		"review_publish_directive":  strings.TrimSpace(string(metadata.ReviewPublishDirective)),

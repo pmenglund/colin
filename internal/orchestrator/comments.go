@@ -19,11 +19,7 @@ func (o *Orchestrator) handleCommentEvent(ctx context.Context, entry *runningEnt
 	if runType == "" {
 		runType = runTypeForState(o, entry.issue.State)
 	}
-	if entry.comment == nil {
-		entry.comment = &commentThreadState{RunType: runType}
-	} else if entry.comment.RunType != runType {
-		entry.comment = &commentThreadState{RunType: runType}
-	}
+	entry.comment = commentState(entry.issue, entry.comment, runType)
 
 	if shouldCreateRootComment(event.Event) && entry.comment.RootCommentID == "" {
 		o.createRootComment(ctx, entry, event)
@@ -57,6 +53,7 @@ func (o *Orchestrator) createRootComment(ctx context.Context, entry *runningEntr
 		return
 	}
 	entry.comment.RootCommentID = commentID
+	entry.issue = o.persistProgressRootCommentMetadata(ctx, entry.issue, commentID)
 	o.logger.Info(
 		"created Linear progress comment",
 		"issue_id", entry.issue.ID,
@@ -88,18 +85,16 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 	return commentID
 }
 
-func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) *commentThreadState {
-	comment, _ = o.postIssueStatusDetailed(ctx, issue, identifier, comment, body)
-	return comment
+func (o *Orchestrator) postIssueStatus(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) (domain.Issue, *commentThreadState) {
+	issue, comment, _ = o.postIssueStatusDetailed(ctx, issue, identifier, comment, body)
+	return issue, comment
 }
 
-func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) (*commentThreadState, string) {
+func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain.Issue, identifier string, comment *commentThreadState, body string) (domain.Issue, *commentThreadState, string) {
 	if o.runtime.Tracker == nil || strings.TrimSpace(body) == "" {
-		return comment, ""
+		return issue, comment, ""
 	}
-	if comment == nil {
-		comment = &commentThreadState{RunType: codex.RunTypeCoding}
-	}
+	comment = commentState(issue, comment, runTypeForState(o, issue.State))
 	body = colinCommentBody(body)
 
 	if comment.RootCommentID == "" {
@@ -113,10 +108,11 @@ func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain
 				"issue_identifier", identifier,
 				"error", err,
 			)
-			return comment, ""
+			return issue, comment, ""
 		}
 		comment.RootCommentID = commentID
-		return comment, commentID
+		issue = o.persistProgressRootCommentMetadata(ctx, issue, commentID)
+		return issue, comment, commentID
 	}
 
 	commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
@@ -130,9 +126,9 @@ func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain
 			"comment_id", comment.RootCommentID,
 			"error", err,
 		)
-		return comment, ""
+		return issue, comment, ""
 	}
-	return comment, commentID
+	return issue, comment, commentID
 }
 
 func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.Context) (string, error)) (string, error) {
@@ -142,26 +138,36 @@ func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.C
 }
 
 func (o *Orchestrator) persistSummaryCommentMetadata(ctx context.Context, issue domain.Issue, commentID string) domain.Issue {
-	return o.persistIssueMetadata(ctx, issue, strings.TrimSpace(commentID), nil)
+	return o.persistIssueMetadata(ctx, issue, strings.TrimSpace(commentID), "", nil)
+}
+
+func (o *Orchestrator) persistProgressRootCommentMetadata(ctx context.Context, issue domain.Issue, commentID string) domain.Issue {
+	return o.persistIssueMetadata(ctx, issue, "", strings.TrimSpace(commentID), nil)
 }
 
 func (o *Orchestrator) persistIssueOutputMetadata(ctx context.Context, issue domain.Issue, output []domain.OutputLog) domain.Issue {
-	return o.persistIssueMetadata(ctx, issue, "", output)
+	return o.persistIssueMetadata(ctx, issue, "", "", output)
 }
 
-func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Issue, commentID string, output []domain.OutputLog) domain.Issue {
+func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Issue, summaryCommentID string, progressRootCommentID string, output []domain.OutputLog) domain.Issue {
 	if o.runtime.Tracker == nil {
 		return issue
 	}
-	if strings.TrimSpace(commentID) == "" && len(output) == 0 {
+	if strings.TrimSpace(summaryCommentID) == "" && strings.TrimSpace(progressRootCommentID) == "" && len(output) == 0 {
 		return issue
 	}
-	metadata := domain.ColinMetadata{LastSummaryCommentID: strings.TrimSpace(commentID)}
+	metadata := domain.ColinMetadata{
+		LastSummaryCommentID:  strings.TrimSpace(summaryCommentID),
+		ProgressRootCommentID: strings.TrimSpace(progressRootCommentID),
+	}
 	if issue.ColinMetadata != nil {
 		metadata = *issue.ColinMetadata
 	}
-	if strings.TrimSpace(commentID) != "" {
-		metadata.LastSummaryCommentID = strings.TrimSpace(commentID)
+	if strings.TrimSpace(summaryCommentID) != "" {
+		metadata.LastSummaryCommentID = strings.TrimSpace(summaryCommentID)
+	}
+	if strings.TrimSpace(progressRootCommentID) != "" {
+		metadata.ProgressRootCommentID = strings.TrimSpace(progressRootCommentID)
 	}
 	if len(output) > 0 {
 		metadata.CodexOutput = append([]domain.OutputLog(nil), output...)
@@ -174,7 +180,7 @@ func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Is
 			"failed to persist summary comment metadata",
 			"issue_id", issue.ID,
 			"issue_identifier", issue.Identifier,
-			"comment_id", commentID,
+			"comment_id", summaryCommentID,
 			"error", err,
 		)
 		issue.ColinMetadata = &metadata
@@ -227,6 +233,17 @@ func colinCommentBody(body string) string {
 		return body
 	}
 	return "[colin] " + body
+}
+
+func commentState(issue domain.Issue, comment *commentThreadState, runType string) *commentThreadState {
+	if comment == nil {
+		comment = &commentThreadState{}
+	}
+	comment.RunType = runType
+	if comment.RootCommentID == "" && issue.ColinMetadata != nil {
+		comment.RootCommentID = strings.TrimSpace(issue.ColinMetadata.ProgressRootCommentID)
+	}
+	return comment
 }
 
 func (o *Orchestrator) replyBodyForEvent(entry *runningEntry, event codex.Event) (string, bool) {

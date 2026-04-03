@@ -1,10 +1,14 @@
 package orchestrator
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/pmenglund/colin/internal/agent/codex"
+	"github.com/pmenglund/colin/internal/domain"
 )
 
 func TestColinCommentBodyPrefixesMessages(t *testing.T) {
@@ -56,5 +60,73 @@ func TestRootCommentBodyOmitsRedundantIssueAndState(t *testing.T) {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("rootCommentBody() = %q, want no substring %q", got, unwanted)
 		}
+	}
+}
+
+func TestPostIssueStatusDetailedReusesPersistedProgressRootComment(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Tracker: tracker,
+		},
+	}
+
+	issue, comment, commentID := orch.postIssueStatusDetailed(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-108",
+		State:      "Todo",
+		ColinMetadata: &domain.ColinMetadata{
+			ProgressRootCommentID: "root-existing",
+		},
+	}, "COLIN-108", nil, "Review sync is waiting.")
+
+	if commentID != "reply" {
+		t.Fatalf("commentID = %q, want reply", commentID)
+	}
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length = %d, want 0", got)
+	}
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
+	}
+	if comment == nil || comment.RootCommentID != "root-existing" {
+		t.Fatalf("comment = %#v, want root-existing", comment)
+	}
+	if issue.ColinMetadata == nil || issue.ColinMetadata.ProgressRootCommentID != "root-existing" {
+		t.Fatalf("issue.ColinMetadata = %#v, want persisted root-existing", issue.ColinMetadata)
+	}
+}
+
+func TestPostIssueStatusDetailedPersistsCreatedProgressRootComment(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{
+			Tracker: tracker,
+		},
+	}
+
+	issue, comment, commentID := orch.postIssueStatusDetailed(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-108",
+		State:      "Todo",
+	}, "COLIN-108", nil, "Review sync is waiting.")
+
+	if commentID != "root" {
+		t.Fatalf("commentID = %q, want root", commentID)
+	}
+	if comment == nil || comment.RootCommentID != "root" {
+		t.Fatalf("comment = %#v, want root", comment)
+	}
+	if tracker.metadata.ProgressRootCommentID != "root" {
+		t.Fatalf("metadata.ProgressRootCommentID = %q, want root", tracker.metadata.ProgressRootCommentID)
+	}
+	if issue.ColinMetadata == nil || issue.ColinMetadata.ProgressRootCommentID != "root" {
+		t.Fatalf("issue.ColinMetadata = %#v, want persisted root", issue.ColinMetadata)
 	}
 }
