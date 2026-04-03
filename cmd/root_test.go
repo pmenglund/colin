@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pmenglund/colin/internal/bootstrap"
+	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/pmenglund/colin/internal/domain"
 )
 
@@ -422,8 +423,8 @@ func TestSetupGitHubHelpExplainsPurpose(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "github", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
-		t.Fatalf("run(setup github --help) exit code = %d, want 0", code)
+	if code := run([]string{"setup", "github", "token", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup github token --help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -442,7 +443,45 @@ func TestSetupGitHubHelpExplainsPurpose(t *testing.T) {
 	}
 }
 
-func TestRunPassesWorkflowFlagToSetupGitHubWebhook(t *testing.T) {
+func TestSetupGitHubHelpListsSubcommands(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "github", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup github --help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	got := stdout.String()
+	for _, want := range []string{"token", "webhook", "setup github webhook"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help output = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRunRejectsRemovedSetupGitHubWebhookAlias(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "github-webhook"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
+		t.Fatalf("run(setup github-webhook) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "unknown command \"github-webhook\" for \"colin setup\"") {
+		t.Fatalf("stderr = %q, want removed command error", got)
+	}
+}
+
+func TestRunPassesWorkflowFlagToSetupGitHubWebhookSubcommand(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
@@ -472,8 +511,46 @@ func TestRunPassesWorkflowFlagToSetupGitHubWebhook(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"setup", "github-webhook", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
-		t.Fatalf("run(setup github-webhook --workflow) exit code = %d, want 0", code)
+	if code := run([]string{"setup", "github", "webhook", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup github webhook --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+}
+
+func TestRunPassesWorkflowFlagToSetupGitHubTokenSubcommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupGitHub: func(cmd *cobra.Command, workflowPath string) int {
+			gotWorkflow = workflowPath
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "github", "token", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup github token --workflow) exit code = %d, want 0", code)
 	}
 	if gotWorkflow != "/tmp/custom.md" {
 		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
@@ -519,7 +596,63 @@ func TestRunPassesWorkflowFlagToSetupLinearWebhook(t *testing.T) {
 	}
 }
 
-func TestRunPassesWorkflowFlagToSetupLinearApp(t *testing.T) {
+func TestRunPassesWorkflowFlagToSetupLinearWebhookSubcommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+	var gotName string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			t.Fatal("runRoot should not be called")
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			gotWorkflow = workflowPath
+			gotName = webhookName
+			return 0
+		},
+	}
+
+	if code := run([]string{"setup", "linear", "webhook", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup linear webhook --workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != "/tmp/custom.md" {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	}
+	if gotName != "colin" {
+		t.Fatalf("webhook name = %q, want %q", gotName, "colin")
+	}
+}
+
+func TestRunRejectsRemovedSetupLinearAppAlias(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "linear-app"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
+		t.Fatalf("run(setup linear-app) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "unknown command \"linear-app\" for \"colin setup\"") {
+		t.Fatalf("stderr = %q, want removed command error", got)
+	}
+}
+
+func TestRunPassesWorkflowFlagToSetupLinearAppSubcommand(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
@@ -549,8 +682,8 @@ func TestRunPassesWorkflowFlagToSetupLinearApp(t *testing.T) {
 		},
 	}
 
-	if code := run([]string{"setup", "linear-app", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
-		t.Fatalf("run(setup linear-app --workflow) exit code = %d, want 0", code)
+	if code := run([]string{"setup", "linear", "app", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(setup linear app --workflow) exit code = %d, want 0", code)
 	}
 	if gotWorkflow != "/tmp/custom.md" {
 		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
@@ -563,8 +696,8 @@ func TestSetupGitHubWebhookHelpExplainsPurpose(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "github-webhook", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
-		t.Fatalf("run(setup github-webhook --help) exit code = %d, want 0", code)
+	if code := run([]string{"setup", "github", "webhook", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup github webhook --help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -580,7 +713,7 @@ func TestSetupGitHubWebhookHelpExplainsPurpose(t *testing.T) {
 	if !strings.Contains(got, "pull_request_review") {
 		t.Fatalf("help output = %q, want event subscription", got)
 	}
-	if !strings.Contains(got, "github-webhook") {
+	if !strings.Contains(got, "setup github webhook") {
 		t.Fatalf("help output = %q, want command name", got)
 	}
 }
@@ -625,8 +758,8 @@ func TestSetupLinearWebhookHelpExplainsPurpose(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "linear", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
-		t.Fatalf("run(setup linear --help) exit code = %d, want 0", code)
+	if code := run([]string{"setup", "linear", "webhook", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup linear webhook --help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -642,8 +775,29 @@ func TestSetupLinearWebhookHelpExplainsPurpose(t *testing.T) {
 	if !strings.Contains(got, "--name") {
 		t.Fatalf("help output = %q, want name flag", got)
 	}
-	if !strings.Contains(got, "setup linear") {
+	if !strings.Contains(got, "setup linear webhook") {
 		t.Fatalf("help output = %q, want command name", got)
+	}
+}
+
+func TestSetupLinearHelpListsSubcommands(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"setup", "linear", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup linear --help) exit code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	got := stdout.String()
+	for _, want := range []string{"webhook", "app", "setup linear app"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help output = %q, want %q", got, want)
+		}
 	}
 }
 
@@ -653,8 +807,8 @@ func TestSetupLinearAppHelpExplainsPurpose(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := run([]string{"setup", "linear-app", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
-		t.Fatalf("run(setup linear-app --help) exit code = %d, want 0", code)
+	if code := run([]string{"setup", "linear", "app", "--help"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(setup linear app --help) exit code = %d, want 0", code)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -670,7 +824,7 @@ func TestSetupLinearAppHelpExplainsPurpose(t *testing.T) {
 	if !strings.Contains(got, "should not disable Colin's existing issue-webhook or polling wake-up path") {
 		t.Fatalf("help output = %q, want webhook guidance", got)
 	}
-	if !strings.Contains(got, "setup linear-app") {
+	if !strings.Contains(got, "setup linear app") {
 		t.Fatalf("help output = %q, want command name", got)
 	}
 }
@@ -696,10 +850,7 @@ func TestRenderSetupStatusColorizesCheckLabels(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&stdout)
-
-	renderSetupStatus(cmd, domain.FunnelSetupStatus{
+	renderSetupStatusWithRenderer(clioutput.New(&stdout, true), domain.FunnelSetupStatus{
 		Checks: []domain.SetupCheck{
 			{Status: "ok", Label: "Tailscale is running"},
 			{Status: "error", Label: "MagicDNS is enabled"},
@@ -708,14 +859,14 @@ func TestRenderSetupStatusColorizesCheckLabels(t *testing.T) {
 	})
 
 	got := stdout.String()
-	if !strings.Contains(got, setupStatusOKStyle.Render("[OK]")) {
+	if !strings.Contains(got, "[OK] Tailscale is running") {
 		t.Fatalf("output = %q, want colored OK label", got)
 	}
-	if !strings.Contains(got, setupStatusErrorStyle.Render("[ERROR]")) {
+	if !strings.Contains(got, "[ERROR] MagicDNS is enabled") {
 		t.Fatalf("output = %q, want colored ERROR label", got)
 	}
-	if !strings.Contains(got, setupStatusMutedStyle.Render("[DISABLED]")) {
-		t.Fatalf("output = %q, want muted DISABLED label", got)
+	if !strings.Contains(got, "[INFO] Webhook listener is disabled") {
+		t.Fatalf("output = %q, want INFO label for disabled checks", got)
 	}
 }
 
@@ -754,8 +905,8 @@ func TestRunConfigCommandWritesWorkflow(t *testing.T) {
 	if !strings.Contains(gotFile, "api_key: $LINEAR_API_KEY") {
 		t.Fatalf("workflow file = %q, want env token", gotFile)
 	}
-	if got := stdout.String(); !strings.Contains(got, "Wrote WORKFLOW.md") {
-		t.Fatalf("stdout = %q, want written message", got)
+	if got := stdout.String(); !strings.Contains(got, "Workflow file: WORKFLOW.md") {
+		t.Fatalf("stdout = %q, want workflow summary", got)
 	}
 }
 

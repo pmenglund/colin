@@ -5,22 +5,14 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/spf13/cobra"
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/service"
 	"github.com/pmenglund/colin/internal/tui"
-)
-
-var (
-	setupStatusOKStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	setupStatusErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	setupStatusMutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	setupStatusWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 )
 
 type runtimeService interface {
@@ -152,32 +144,36 @@ func announceStartup(cmd *cobra.Command, dashboardEnabled bool, dashboardURL fun
 }
 
 func renderSetupStatus(cmd *cobra.Command, status domain.FunnelSetupStatus) {
-	cmd.Printf("Funnel ready: %t\n", status.Ready)
+	renderSetupStatusWithRenderer(newCommandRenderer(cmd), status)
+}
+
+func renderSetupStatusWithRenderer(renderer *clioutput.Renderer, status domain.FunnelSetupStatus) {
+	renderer.Section("Overview")
+	if status.Ready {
+		renderer.Status(clioutput.StatusOK, "Funnel ready", "true")
+	} else {
+		renderer.Status(clioutput.StatusAction, "Funnel ready", "false")
+	}
 	if status.LocalBaseURL != "" {
-		cmd.Printf("Local UI URL: %s\n", status.LocalBaseURL)
+		renderer.Item("Local UI URL", status.LocalBaseURL)
 	}
 	if status.TailnetUIBaseURL != "" {
-		cmd.Printf("Tailnet UI URL: %s\n", status.TailnetUIBaseURL)
+		renderer.Item("Tailnet UI URL", status.TailnetUIBaseURL)
 	}
 	if status.LocalWebhookBaseURL != "" {
-		cmd.Printf("Local webhook URL: %s\n", status.LocalWebhookBaseURL)
+		renderer.Item("Local webhook URL", status.LocalWebhookBaseURL)
 	}
 	if status.PublicBaseURL != "" {
-		cmd.Printf("Public webhook URL: %s\n", status.PublicBaseURL)
+		renderer.Item("Public webhook URL", status.PublicBaseURL)
 	}
 	if status.LinearWebhookURL != "" {
-		cmd.Printf("Linear webhook URL: %s\n", status.LinearWebhookURL)
+		renderer.Item("Linear webhook URL", status.LinearWebhookURL)
 	}
 	if status.GitHubWebhookURL != "" {
-		cmd.Printf("GitHub webhook URL: %s\n", status.GitHubWebhookURL)
+		renderer.Item("GitHub webhook URL", status.GitHubWebhookURL)
 	}
-	if status.SuggestedServeCommand != "" {
-		cmd.Printf("Suggested Serve command: %s\n", status.SuggestedServeCommand)
-	}
-	if status.SuggestedCommand != "" {
-		cmd.Printf("Suggested Funnel command: %s\n", status.SuggestedCommand)
-	}
-	cmd.Println("Checks:")
+
+	renderer.Section("Checks")
 	for _, check := range status.Checks {
 		line := check.Detail
 		if line == "" {
@@ -185,27 +181,31 @@ func renderSetupStatus(cmd *cobra.Command, status domain.FunnelSetupStatus) {
 		} else if check.Remediation != "" {
 			line += " " + check.Remediation
 		}
-		cmd.Printf("- %s %s", renderSetupCheckStatus(check.Status), check.Label)
-		if line != "" {
-			cmd.Printf(": %s", line)
-		}
-		cmd.Println()
+		renderer.Status(renderSetupCheckStatus(check.Status), check.Label, line)
+	}
+
+	if status.SuggestedServeCommand != "" || status.SuggestedCommand != "" {
+		renderer.Section("Next steps")
+	}
+	if status.SuggestedServeCommand != "" {
+		renderer.Status(clioutput.StatusAction, "Suggested Serve command", status.SuggestedServeCommand)
+	}
+	if status.SuggestedCommand != "" {
+		renderer.Status(clioutput.StatusAction, "Suggested Funnel command", status.SuggestedCommand)
 	}
 }
 
-func renderSetupCheckStatus(status string) string {
-	label := "[" + strings.ToUpper(status) + "]"
-
-	switch strings.ToLower(status) {
+func renderSetupCheckStatus(status string) clioutput.StatusKind {
+	switch status {
 	case "ok":
-		return setupStatusOKStyle.Render(label)
+		return clioutput.StatusOK
 	case "error":
-		return setupStatusErrorStyle.Render(label)
+		return clioutput.StatusError
 	case "disabled", "skipped":
-		return setupStatusMutedStyle.Render(label)
+		return clioutput.StatusInfo
 	case "warn":
-		return setupStatusWarnStyle.Render(label)
+		return clioutput.StatusWarn
 	default:
-		return label
+		return clioutput.StatusInfo
 	}
 }

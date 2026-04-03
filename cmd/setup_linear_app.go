@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/pmenglund/colin/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -19,19 +20,25 @@ func runSetupLinearApp(cmd *cobra.Command, workflowPath string) int {
 		return 1
 	}
 
-	cmd.Printf("Linear project: %s\n", result.ProjectSlug)
-	cmd.Printf("Webhook URL: %s\n", result.WebhookURL)
-	cmd.Printf("App actor: %s\n", result.ActorType)
-	cmd.Printf("Assignment behavior: %s\n", result.AssignmentBehavior)
-	cmd.Printf("Required webhook categories: %s\n", strings.Join(result.RequiredWebhookCategories, ", "))
-	cmd.Printf("Optional classic wake-up webhooks: %s\n", strings.Join(result.OptionalWakeupEvents, ", "))
+	renderer := newCommandRenderer(cmd)
+	renderer.Section("Overview")
+	renderer.Item("Linear project", result.ProjectSlug)
+	renderer.Item("Webhook URL", result.WebhookURL)
+	renderer.Item("App actor", result.ActorType)
+	renderer.Item("Assignment behavior", result.AssignmentBehavior)
+	renderer.Item("Required webhook categories", strings.Join(result.RequiredWebhookCategories, ", "))
+	renderer.Item("Optional classic wake-up webhooks", strings.Join(result.OptionalWakeupEvents, ", "))
+
+	renderer.Section("Checks")
 	if result.SigningSecretConfigured {
-		cmd.Println("Signing secret: configured")
+		renderer.Status(clioutput.StatusOK, "Signing secret", "configured")
 	} else {
-		cmd.Printf("Next step: store the shared webhook secret in `tracker.webhook_signing_secret: $%s`.\n", result.SigningSecretEnvVar)
+		renderer.Status(clioutput.StatusAction, "Signing secret", "store the shared webhook secret in `tracker.webhook_signing_secret: $"+result.SigningSecretEnvVar+"`")
 	}
-	cmd.Println("Autonomous behavior: Colin should proactively create an agent session when it picks up work on its own.")
-	cmd.Println("Note: Keep Colin's existing issue-webhook and polling wake-up path enabled. The Linear app should share `/webhooks/linear`; it should not disable the webhook.")
-	cmd.Println("Note: `colin setup linear` is the legacy team-webhook helper. Configure app-owned webhooks from the Linear app setup itself.")
+
+	renderer.Section("Notes")
+	renderer.Status(clioutput.StatusInfo, "Autonomous behavior", "Colin should proactively create an agent session when it picks up work on its own")
+	renderer.Status(clioutput.StatusInfo, "", "Keep Colin's existing issue-webhook and polling wake-up path enabled. The Linear app should share `/webhooks/linear`; it should not disable the webhook")
+	renderer.Status(clioutput.StatusInfo, "", "`colin setup linear webhook` is the team-webhook helper. Configure app-owned webhooks from the Linear app setup itself")
 	return 0
 }

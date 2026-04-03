@@ -92,6 +92,8 @@ If fine-grained personal access tokens are blocked by org policy, require approv
 
 If operators need explicit URLs instead of Colin's defaults, set `server.webhook_public_url` for externally reachable webhook URLs and `server.ui_url` for operator-facing dashboard or metadata links. `server.public_url` remains as a deprecated fallback for the webhook public URL.
 
+Use `colin config` to write or refresh `WORKFLOW.md`. After that, use `colin setup ...` to inspect and prepare the external environment the workflow depends on.
+
 Before configuring incoming Linear or GitHub webhooks, use Colin's Tailscale readiness flow to make sure the webhook endpoints are publicly reachable:
 
 ```bash
@@ -103,7 +105,7 @@ That command checks Tailscale, explains that Colin uses Tailscale Serve for the 
 To create or repair the watched project's Linear webhook after public ingress is ready, run:
 
 ```bash
-colin setup linear
+colin setup linear webhook
 ```
 
 That command creates or repairs one team-scoped Linear webhook for the watched project, points it at `<public-base-url>/webhooks/linear`, and reminds you to store the signing secret as `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
@@ -111,7 +113,7 @@ That command creates or repairs one team-scoped Linear webhook for the watched p
 To sketch the self-hosted Linear app shape for the same workflow, run:
 
 ```bash
-colin setup linear-app
+colin setup linear app
 ```
 
 That command does not mutate Linear. It prints the app-facing webhook URL, reminds you that the app should be an assignable `actor=app` installation, lists `AgentSessionEvent` as the required webhook category, and explicitly says that Colin should keep its existing issue-webhook and polling wake-up path enabled. The app should share `/webhooks/linear`; it should not disable the webhook.
@@ -119,7 +121,7 @@ That command does not mutate Linear. It prints the app-facing webhook URL, remin
 To print the GitHub webhook settings for the watched repository after public ingress is ready, run:
 
 ```bash
-colin setup github-webhook
+colin setup github webhook
 ```
 
 That command prints the watched repository, the final GitHub webhook URL `<public-base-url>/webhooks/github`, the shared-secret env var `GITHUB_WEBHOOK_SECRET`, and the GitHub event subscriptions that wake Colin's orchestrator loop.
@@ -130,7 +132,7 @@ Because `--workflow` is a persistent root flag, the same override also applies t
 colin --workflow /path/to/WORKFLOW.md setup tailscale
 ```
 
-`setup repo` accepts the same `--workflow` override. `setup github` remains as a compatibility alias for GitHub-backed workflows. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
+`setup repo` accepts the same `--workflow` override. `setup github` remains the GitHub-specific token shortcut, and `setup github token` makes that relationship explicit in the command tree. If the workflow file is missing, Colin falls back to `git remote origin` in the current checkout to determine which GitHub repository to scope the token to.
 
 ## Releasing Colin
 
@@ -372,9 +374,9 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - The dashboard binds loopback only by default. The default UI port is `8888`, `server.port: 0` requests an ephemeral UI port for development/tests, and CLI `--port` overrides `server.port`.
 - Colin keeps dashboard and metadata URLs private by default. If `server.ui_url` is unset, Linear metadata links use the preferred Tailscale Serve URL when Colin is exposed from `/`, favoring HTTPS when available; otherwise they point at the local Colin UI address.
 - Colin uses Tailscale Funnel only for `/webhooks/*`. When webhook support is enabled, `server.webhook_port` controls the dedicated local webhook listener and defaults to `8998` from `colin config`. When `server.webhook_public_url` is unset, Colin auto-detects an active Funnel for that webhook port and derives the public webhook base URL from it. `server.public_url` is still accepted as a deprecated fallback for `server.webhook_public_url`.
-- Colin can provision a Linear webhook for the watched project with `colin setup linear`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
-- Colin can also print a self-hosted Linear app sketch with `colin setup linear-app`. That sketch keeps `/webhooks/linear` as the callback URL and treats app-triggered agent sessions as additive to the existing issue-webhook wake-up path.
-- Colin can print the watched repository's GitHub webhook settings with `colin setup github-webhook`. The GitHub signing secret should be stored via `repo.webhook_signing_secret: $GITHUB_WEBHOOK_SECRET`.
+- Colin can provision a Linear webhook for the watched project with `colin setup linear webhook`. The Linear signing secret should be stored via `tracker.webhook_signing_secret: $LINEAR_WEBHOOK_SECRET`.
+- Colin can also print a self-hosted Linear app sketch with `colin setup linear app`. That sketch keeps `/webhooks/linear` as the callback URL and treats app-triggered agent sessions as additive to the existing issue-webhook wake-up path.
+- Colin can print the watched repository's GitHub webhook settings with `colin setup github webhook`. The GitHub signing secret should be stored via `repo.webhook_signing_secret: $GITHUB_WEBHOOK_SECRET`.
 - Watched-project Linear `Issue` `create` webhook deliveries can trigger a best-effort immediate reconciliation between poll intervals, and watched-project `Issue` `update` deliveries can do the same when they include scheduling-relevant field changes such as `stateId`, `projectId`, `teamId`, `priority`, `title`, `description`, `branchName`, or `labelIds`.
 - Colin keeps a structured in-memory log buffer and exposes it at `/api/v1/logs`. The default buffer size is `1000` lines, and `server.log_buffer_lines` changes that retention count.
 - `/api/v1/logs?level=info` hides `debug` chatter while keeping higher-severity records. `/api/v1/logs?level=debug` returns the full retained buffer.
