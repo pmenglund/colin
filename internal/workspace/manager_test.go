@@ -199,6 +199,33 @@ func TestEnsureUsesBranchTemplateWhenTrackerDoesNotProvideBranch(t *testing.T) {
 	}
 }
 
+func TestEnsureNamespacesWorkspaceByTargetWhenMultiTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{Root: root},
+		Targets: []domain.TargetConfig{
+			{Key: "project-1-api", ProjectSlug: "project-1"},
+			{Key: "project-2-web", ProjectSlug: "project-2"},
+		},
+	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	ws, err := manager.Ensure(context.Background(), domain.Issue{
+		Identifier:  "ABC-123",
+		ProjectSlug: "project-2",
+	})
+	if err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+
+	want := filepath.Join(root, "project-2-web", "ABC-123")
+	if ws.Path != want {
+		t.Fatalf("ws.Path = %q, want %q", ws.Path, want)
+	}
+}
+
 func mustRun(t *testing.T, cwd string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)

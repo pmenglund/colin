@@ -106,25 +106,25 @@ query ProjectTeamInfo($slug: String!) {
   }
 }
 `
-	resp, err := c.doQuery(ctx, query, map[string]any{"slug": c.project})
+	resp, err := c.doQuery(ctx, query, map[string]any{"slug": c.primaryProjectSlug})
 	if err != nil {
 		return projectTeam{}, err
 	}
 	nodes, ok := nestedSlice(resp, "data", "projects", "nodes")
 	if !ok || len(nodes) == 0 {
-		return projectTeam{}, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, c.project)
+		return projectTeam{}, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, c.primaryProjectSlug)
 	}
 	teamNodes, ok := nestedSlice(nodes[0], "teams", "nodes")
 	if !ok || len(teamNodes) == 0 {
-		return projectTeam{}, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, c.project)
+		return projectTeam{}, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, c.primaryProjectSlug)
 	}
 	if len(teamNodes) != 1 {
-		return projectTeam{}, fmt.Errorf("project %q has %d teams; linear webhook setup requires exactly 1 team", c.project, len(teamNodes))
+		return projectTeam{}, fmt.Errorf("project %q has %d teams; linear webhook setup requires exactly 1 team", c.primaryProjectSlug, len(teamNodes))
 	}
 	teamID, _ := stringValue(teamNodes[0]["id"])
 	teamName, _ := stringValue(teamNodes[0]["name"])
 	if strings.TrimSpace(teamID) == "" {
-		return projectTeam{}, fmt.Errorf("%w: project %q team id missing", ErrUnknownPayload, c.project)
+		return projectTeam{}, fmt.Errorf("%w: project %q team id missing", ErrUnknownPayload, c.primaryProjectSlug)
 	}
 	if strings.TrimSpace(teamName) == "" {
 		teamName = teamID

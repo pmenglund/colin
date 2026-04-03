@@ -34,8 +34,8 @@ type tailscaleInspector interface {
 	ResolveUIBaseURL(context.Context, *int) string
 }
 
-type watchedProjectIDProvider interface {
-	WatchedProjectID() string
+type watchedProjectIDsProvider interface {
+	WatchedProjectIDs() []string
 }
 
 const githubStartupValidationTimeout = 10 * time.Second
@@ -186,7 +186,8 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	logger.Info(
 		"runtime loaded",
 		"workflow_path", path,
-		"project_slug", cfg.Tracker.ProjectSlug,
+		"target_count", len(cfg.Targets),
+		"target_projects", cfg.WatchedProjectSlugs(),
 		"poll_interval", cfg.Polling.Interval.String(),
 		"workspace_root", cfg.Workspace.Root,
 		"publish_states", cfg.Repo.PublishStates,
@@ -412,7 +413,7 @@ func (s *Service) newDashboardHandler() (http.Handler, error) {
 func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
 	return func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
 		runtime := s.currentRuntime()
-		if !shouldQueueImmediateLinearRefresh(event, watchedProjectID(runtime.Tracker)) {
+		if !shouldQueueImmediateLinearRefresh(event, watchedProjectIDs(runtime.Tracker)) {
 			return app.LinearWebhookTriggerResult{}
 		}
 		reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
@@ -445,7 +446,7 @@ func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider 
 func (s *Service) githubWebhookTrigger() app.GitHubWebhookTrigger {
 	return func(_ context.Context, event app.GitHubWebhookEvent) app.GitHubWebhookTriggerResult {
 		runtime := s.currentRuntime()
-		if !shouldQueueImmediateGitHubRefresh(event, watchedRepositoryFullName(runtime.Config)) {
+		if !shouldQueueImmediateGitHubRefresh(event, watchedRepositoryFullNames(runtime.Config)) {
 			return app.GitHubWebhookTriggerResult{}
 		}
 		reason := fmt.Sprintf("github webhook delivery=%s event=%s action=%s repository=%s", event.DeliveryID, event.Event, event.Action, event.RepositoryFullName)
@@ -538,19 +539,38 @@ func webhookPublicURL(cfg domain.ServerConfig) string {
 	return strings.TrimSpace(cfg.PublicURL)
 }
 
-func watchedProjectID(client any) string {
-	provider, ok := client.(watchedProjectIDProvider)
+func watchedProjectIDs(client any) []string {
+	provider, ok := client.(watchedProjectIDsProvider)
 	if !ok || provider == nil {
-		return ""
+		return nil
 	}
-	return strings.TrimSpace(provider.WatchedProjectID())
+	return provider.WatchedProjectIDs()
 }
 
-func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProjectID string) bool {
-	if strings.TrimSpace(watchedProjectID) == "" {
+func watchedProjectID(client any) string {
+	ids := watchedProjectIDs(client)
+	if len(ids) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(ids[0])
+}
+
+func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProjectIDs []string) bool {
+	if len(watchedProjectIDs) == 0 {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(event.ProjectID), watchedProjectID) {
+	projectID := strings.TrimSpace(event.ProjectID)
+	if projectID == "" {
+		return false
+	}
+	matched := false
+	for _, watchedProjectID := range watchedProjectIDs {
+		if strings.EqualFold(projectID, strings.TrimSpace(watchedProjectID)) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(event.Action)) {
@@ -563,29 +583,52 @@ func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProj
 	}
 }
 
-func watchedRepositoryFullName(cfg domain.ServiceConfig) string {
-	if strings.TrimSpace(cfg.Workspace.RepoURL) == "" {
-		return ""
-	}
+func watchedRepositoryFullNames(cfg domain.ServiceConfig) []string {
 	adapter, err := repohost.Lookup(cfg.Repo.Backend)
 	if err != nil {
-		return ""
+		return nil
 	}
-	repo, err := adapter.ParseRepositoryURL(cfg.Workspace.RepoURL)
-	if err != nil {
-		return ""
+	repos := make([]string, 0, len(cfg.Targets))
+	seen := map[string]struct{}{}
+	for _, repoURL := range cfg.WatchedRepoURLs() {
+		repo, err := adapter.ParseRepositoryURL(repoURL)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(repo.Owner) == "" || strings.TrimSpace(repo.Name) == "" {
+			continue
+		}
+		fullName := normalizeRepositoryFullName(repo.Owner + "/" + repo.Name)
+		if _, ok := seen[fullName]; ok {
+			continue
+		}
+		seen[fullName] = struct{}{}
+		repos = append(repos, fullName)
 	}
-	if strings.TrimSpace(repo.Owner) == "" || strings.TrimSpace(repo.Name) == "" {
-		return ""
-	}
-	return normalizeRepositoryFullName(repo.Owner + "/" + repo.Name)
+	return repos
 }
 
-func shouldQueueImmediateGitHubRefresh(event app.GitHubWebhookEvent, watchedRepo string) bool {
-	if strings.TrimSpace(watchedRepo) == "" {
+func watchedRepositoryFullName(cfg domain.ServiceConfig) string {
+	repos := watchedRepositoryFullNames(cfg)
+	if len(repos) == 0 {
+		return ""
+	}
+	return repos[0]
+}
+
+func shouldQueueImmediateGitHubRefresh(event app.GitHubWebhookEvent, watchedRepos []string) bool {
+	if len(watchedRepos) == 0 {
 		return false
 	}
-	if normalizeRepositoryFullName(event.RepositoryFullName) != normalizeRepositoryFullName(watchedRepo) {
+	repoName := normalizeRepositoryFullName(event.RepositoryFullName)
+	matched := false
+	for _, watchedRepo := range watchedRepos {
+		if repoName == normalizeRepositoryFullName(watchedRepo) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(event.Event)) {

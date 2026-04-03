@@ -151,6 +151,82 @@ func TestNewFailsWhenWorkflowStateMissing(t *testing.T) {
 	}
 }
 
+func TestNewTracksMultipleWatchedProjects(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		slug, _ := request.Variables["slug"].(string)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": slug + "-id",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Product",
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Done"},
+												{"name": "Refine"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := New(domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			Kind:           "linear",
+			Endpoint:       server.URL,
+			APIKey:         "token",
+			ProjectSlug:    "project-1",
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Done"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Targets: []domain.TargetConfig{
+			{ProjectSlug: "project-1"},
+			{ProjectSlug: "project-2"},
+		},
+		Codex: domain.CodexConfig{
+			Command: "codex app-server",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	got := client.WatchedProjectIDs()
+	if len(got) != 2 || got[0] != "project-1-id" || got[1] != "project-2-id" {
+		t.Fatalf("WatchedProjectIDs() = %v, want [project-1-id project-2-id]", got)
+	}
+}
+
 func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	t.Parallel()
 

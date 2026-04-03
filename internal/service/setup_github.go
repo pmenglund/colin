@@ -22,6 +22,7 @@ type RepoTokenSetupResult struct {
 	RepositoryURL      string
 	RepositoryOwner    string
 	RepositoryName     string
+	RepositoryNames    []string
 	RepositorySource   string
 	Instructions       string
 	RecommendedEnvVar  string
@@ -56,12 +57,18 @@ func LoadRepoTokenSetup(workflowPath string, workingDir string, optionFns ...Opt
 		return RepoTokenSetupResult{}, err
 	}
 
+	repositoryNames, err := watchedRepositoryNames(backend, workflowPath, workingDir, opts)
+	if err != nil {
+		return RepoTokenSetupResult{}, err
+	}
+
 	return RepoTokenSetupResult{
 		Backend:            backend,
 		BackendDisplayName: adapter.DisplayName(),
 		RepositoryURL:      repo.URL,
 		RepositoryOwner:    repo.Owner,
 		RepositoryName:     repo.Name,
+		RepositoryNames:    repositoryNames,
 		RepositorySource:   source,
 		Instructions:       adapter.RenderSetupInstructions(repo, "colin setup repo"),
 		RecommendedEnvVar:  adapter.RecommendedEnvVar(),
@@ -115,6 +122,51 @@ func resolveRepoSetup(workflowPath string, workingDir string, opts options) (str
 	}
 
 	return "", "", "", fmt.Errorf("%w: configure `workspace.repo_url` in WORKFLOW.md or set `remote.origin.url` in this checkout", ErrMissingGitHubRepository)
+}
+
+func watchedRepositoryNames(backend string, workflowPath string, workingDir string, opts options) ([]string, error) {
+	loader := workflow.Loader{}
+	path := loader.ResolvePath(workflowPath)
+	if _, err := os.Stat(path); err == nil {
+		_, cfg, err := loadConfig(workflowPath, opts)
+		if err != nil {
+			return nil, err
+		}
+		adapter, err := repohost.Lookup(backend)
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(cfg.Targets))
+		for _, repoURL := range cfg.WatchedRepoURLs() {
+			repo, err := adapter.ParseRepositoryURL(repoURL)
+			if err != nil {
+				continue
+			}
+			name := strings.TrimSpace(repo.Owner + "/" + repo.Name)
+			if name == "/" || name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
+
+	if remoteURL := gitOutput(workingDir, "config", "--get", "remote.origin.url"); remoteURL != "" {
+		adapter, err := repohost.Lookup(backend)
+		if err == nil {
+			if repo, err := adapter.ParseRepositoryURL(remoteURL); err == nil {
+				return []string{strings.TrimSpace(repo.Owner + "/" + repo.Name)}, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func gitOutput(workingDir string, args ...string) string {

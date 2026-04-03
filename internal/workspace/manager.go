@@ -78,8 +78,12 @@ func SanitizeBranchName(value string) string {
 
 // Ensure creates or reuses the workspace for an issue and runs first-creation setup.
 func (m *Manager) Ensure(ctx context.Context, issue domain.Issue) (domain.Workspace, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
 	key := SanitizeWorkspaceKey(issue.Identifier)
-	path := filepath.Join(m.root, key)
+	path := filepath.Join(m.root, workspaceRelativePath(m.cfg, target, key))
 	if err := ensureWithinRoot(m.root, path); err != nil {
 		return domain.Workspace{}, err
 	}
@@ -108,8 +112,8 @@ func (m *Manager) Ensure(ctx context.Context, issue domain.Issue) (domain.Worksp
 		CreatedNow:   createdNow,
 	}
 
-	if m.cfg.Workspace.RepoURL != "" {
-		if err := m.populateGitWorkspace(ctx, workspace, issue); err != nil {
+	if strings.TrimSpace(target.RepoURL) != "" {
+		if err := m.populateGitWorkspace(ctx, workspace, issue, target); err != nil {
 			if createdNow {
 				if cleanupErr := os.RemoveAll(path); cleanupErr != nil {
 					m.logger.Warn("failed to clean up newly created workspace after git setup error", "workspace_path", path, "error", cleanupErr)
@@ -166,11 +170,18 @@ func (m *Manager) Remove(ctx context.Context, workspacePath string) error {
 	return os.RemoveAll(workspacePath)
 }
 
-func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Workspace, issue domain.Issue) error {
+func workspaceRelativePath(cfg domain.ServiceConfig, target domain.TargetConfig, issueKey string) string {
+	if !cfg.MultiTarget() {
+		return issueKey
+	}
+	return filepath.Join(SanitizeWorkspaceKey(target.Key), issueKey)
+}
+
+func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Workspace, issue domain.Issue, target domain.TargetConfig) error {
 	gitDir := filepath.Join(workspace.Path, ".git")
 	clonedNow := false
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "clone", m.cfg.Workspace.RepoURL, "."); err != nil {
+		if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "clone", target.RepoURL, "."); err != nil {
 			return fmt.Errorf("git clone: %w", err)
 		}
 		clonedNow = true
@@ -182,7 +193,7 @@ func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Wor
 	if err != nil {
 		return err
 	}
-	if err := prepareBranch(ctx, workspace.Path, m.cfg.Workspace.BaseRef, branch, clonedNow); err != nil {
+	if err := prepareBranch(ctx, workspace.Path, target.BaseRef, branch, clonedNow); err != nil {
 		return err
 	}
 	return nil

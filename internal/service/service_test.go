@@ -1142,7 +1142,7 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldQueueImmediateLinearRefresh(tc.event, tc.projectID); got != tc.want {
+			if got := shouldQueueImmediateLinearRefresh(tc.event, []string{tc.projectID}); got != tc.want {
 				t.Fatalf("shouldQueueImmediateLinearRefresh() = %t, want %t", got, tc.want)
 			}
 		})
@@ -1227,7 +1227,7 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldQueueImmediateGitHubRefresh(tc.event, tc.watchedRepo); got != tc.want {
+			if got := shouldQueueImmediateGitHubRefresh(tc.event, []string{tc.watchedRepo}); got != tc.want {
 				t.Fatalf("shouldQueueImmediateGitHubRefresh() = %t, want %t", got, tc.want)
 			}
 		})
@@ -1238,11 +1238,11 @@ func TestWatchedRepositoryFullNameUsesConfiguredRepoURL(t *testing.T) {
 	t.Parallel()
 
 	cfg := domain.ServiceConfig{
-		Workspace: domain.WorkspaceConfig{
-			RepoURL: "git@github.com:acme/widgets.git",
-		},
 		Repo: domain.RepoConfig{
 			Backend: "github",
+		},
+		Targets: []domain.TargetConfig{
+			{RepoURL: "git@github.com:acme/widgets.git"},
 		},
 	}
 
@@ -1266,8 +1266,8 @@ type serviceInspectorStub struct {
 
 type providerStub struct{}
 
-func (providerStub) WatchedProjectID() string {
-	return "project-1"
+func (providerStub) WatchedProjectIDs() []string {
+	return []string{"project-1"}
 }
 
 func (s serviceInspectorStub) Check(context.Context, tsdiag.Options) domain.FunnelSetupStatus {

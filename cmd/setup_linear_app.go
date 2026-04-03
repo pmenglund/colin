@@ -22,7 +22,11 @@ func runSetupLinearApp(cmd *cobra.Command, workflowPath string) int {
 
 	renderer := newCommandRenderer(cmd)
 	renderer.Section("Overview")
-	renderer.Item("Linear project", result.ProjectSlug)
+	if len(result.ProjectSlugs) > 1 {
+		renderer.Item("Linear projects", strings.Join(result.ProjectSlugs, ", "))
+	} else {
+		renderer.Item("Linear project", result.ProjectSlug)
+	}
 	renderer.Item("Webhook URL", result.WebhookURL)
 	renderer.Item("App actor", result.ActorType)
 	renderer.Item("Assignment behavior", result.AssignmentBehavior)

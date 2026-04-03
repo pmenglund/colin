@@ -51,18 +51,20 @@ type ProjectSummary struct {
 
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
-	endpoint          string
-	apiKey            string
-	project           string
-	watchedProjectID  string
-	active            []string
-	client            *http.Client
-	uiBaseURL         string
-	uiBaseURLResolver func(context.Context) string
-	rateMu            sync.RWMutex
-	rateInfo          domain.RateLimitSnapshot
-	labelMu           sync.RWMutex
-	labelIDs          map[string]string
+	endpoint           string
+	apiKey             string
+	project            string
+	primaryProjectSlug string
+	projectsByID       map[string]string
+	watchedProjectIDs  []string
+	active             []string
+	client             *http.Client
+	uiBaseURL          string
+	uiBaseURLResolver  func(context.Context) string
+	rateMu             sync.RWMutex
+	rateInfo           domain.RateLimitSnapshot
+	labelMu            sync.RWMutex
+	labelIDs           map[string]string
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -72,13 +74,14 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	}
 	client := newAPIClient(cfg.Tracker.Endpoint, cfg.Tracker.APIKey)
 	client.project = cfg.Tracker.ProjectSlug
+	client.primaryProjectSlug = cfg.Tracker.ProjectSlug
 	client.active = slices.Clone(config.CandidateStates(cfg))
 	client.uiBaseURL = uiBaseURL(cfg.Server)
-	projectID, err := client.validateWorkflowStates(context.Background(), cfg)
+	projectIDs, err := client.validateWorkflowStates(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
-	client.watchedProjectID = projectID
+	client.watchedProjectIDs = projectIDs
 	return client, nil
 }
 
@@ -171,9 +174,10 @@ func newAPIClient(endpoint string, apiKey string) *Client {
 		endpoint = defaultEndpoint
 	}
 	return &Client{
-		endpoint: endpoint,
-		apiKey:   apiKey,
-		labelIDs: map[string]string{},
+		endpoint:     endpoint,
+		apiKey:       apiKey,
+		labelIDs:     map[string]string{},
+		projectsByID: map[string]string{},
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -190,10 +194,19 @@ func (c *Client) SetUIBaseURLResolver(resolver func(context.Context) string) {
 
 // WatchedProjectID returns the stable Linear project ID resolved from the configured project slug.
 func (c *Client) WatchedProjectID() string {
-	if c == nil {
+	ids := c.WatchedProjectIDs()
+	if len(ids) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(c.watchedProjectID)
+	return ids[0]
+}
+
+// WatchedProjectIDs returns the stable Linear project IDs resolved from the configured project slugs.
+func (c *Client) WatchedProjectIDs() []string {
+	if c == nil {
+		return nil
+	}
+	return slices.Clone(c.watchedProjectIDs)
 }
 
 // FetchCandidateIssues returns the current active issues for the configured Linear project.
@@ -221,6 +234,10 @@ query IssueStates($ids: [ID!]!) {
       id
       identifier
       title
+      project {
+        id
+        slugId
+      }
       state { name }
       updatedAt
     }
@@ -256,6 +273,10 @@ query IssueByID($id: String!) {
     title
     description
     priority
+    project {
+      id
+      slugId
+    }
     branchName
     url
     createdAt
@@ -612,12 +633,12 @@ func (c *Client) CurrentRateLimits() domain.RateLimitSnapshot {
 
 func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
 	const query = `
-query CandidateIssues($projectSlug: String!, $states: [String!], $after: String) {
+query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
   issues(
     first: 50
     after: $after
     filter: {
-      project: { slugId: { eq: $projectSlug } }
+      project: { id: { in: $projectIDs } }
       state: { name: { in: $states } }
     }
   ) {
@@ -628,6 +649,10 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
       title
       description
       priority
+      project {
+        id
+        slugId
+      }
       branchName
       url
       createdAt
@@ -683,9 +708,9 @@ query CandidateIssues($projectSlug: String!, $states: [String!], $after: String)
 	var out []domain.Issue
 	for {
 		variables := map[string]any{
-			"projectSlug": c.project,
-			"states":      states,
-			"after":       after,
+			"projectIDs": c.watchedProjectIDs,
+			"states":     states,
+			"after":      after,
 		}
 		resp, err := c.doQuery(ctx, query, variables)
 		if err != nil {
@@ -753,7 +778,7 @@ query IssueTeamStates($id: String!) {
 	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
 }
 
-func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) (string, error) {
+func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) ([]string, error) {
 	requiredStates := requiredWorkflowStates(cfg)
 
 	const query = `
@@ -776,61 +801,72 @@ query ProjectTeamStates($slug: String!) {
   }
 }
 `
-	resp, err := c.doQuery(ctx, query, map[string]any{"slug": c.project})
-	if err != nil {
-		return "", err
+	targets := cfg.Targets
+	if len(targets) == 0 && strings.TrimSpace(cfg.Tracker.ProjectSlug) != "" {
+		targets = []domain.TargetConfig{{ProjectSlug: cfg.Tracker.ProjectSlug}}
 	}
-	projects, ok := nestedSlice(resp, "data", "projects", "nodes")
-	if !ok || len(projects) == 0 {
-		return "", fmt.Errorf("%w: project %q not found", ErrUnknownPayload, c.project)
-	}
-	projectID, _ := stringValue(projects[0]["id"])
-	if strings.TrimSpace(projectID) == "" {
-		return "", fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, c.project)
-	}
-	teamNodes, ok := nestedSlice(projects[0], "teams", "nodes")
-	if !ok || len(teamNodes) == 0 {
-		return "", fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, c.project)
-	}
+	projectIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		projectSlug := strings.TrimSpace(target.ProjectSlug)
+		resp, err := c.doQuery(ctx, query, map[string]any{"slug": projectSlug})
+		if err != nil {
+			return nil, err
+		}
+		projects, ok := nestedSlice(resp, "data", "projects", "nodes")
+		if !ok || len(projects) == 0 {
+			return nil, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, projectSlug)
+		}
+		projectID, _ := stringValue(projects[0]["id"])
+		if strings.TrimSpace(projectID) == "" {
+			return nil, fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, projectSlug)
+		}
+		projectID = strings.TrimSpace(projectID)
+		projectIDs = append(projectIDs, projectID)
+		c.projectsByID[projectID] = projectSlug
+		teamNodes, ok := nestedSlice(projects[0], "teams", "nodes")
+		if !ok || len(teamNodes) == 0 {
+			return nil, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, projectSlug)
+		}
 
-	var missing []string
-	for _, team := range teamNodes {
-		available := make(map[string]struct{})
-		if stateNodes, ok := nestedSlice(team, "states", "nodes"); ok {
-			for _, stateNode := range stateNodes {
-				name, _ := stringValue(stateNode["name"])
-				key := config.StateKey(name)
-				if key == "" {
+		var missing []string
+		for _, team := range teamNodes {
+			available := make(map[string]struct{})
+			if stateNodes, ok := nestedSlice(team, "states", "nodes"); ok {
+				for _, stateNode := range stateNodes {
+					name, _ := stringValue(stateNode["name"])
+					key := config.StateKey(name)
+					if key == "" {
+						continue
+					}
+					available[key] = struct{}{}
+				}
+			}
+
+			var missingForTeam []string
+			for _, requirement := range requiredStates {
+				if requirement.satisfiedBy(available) {
 					continue
 				}
-				available[key] = struct{}{}
+				missingForTeam = append(missingForTeam, requirement.Description)
 			}
-		}
-
-		var missingForTeam []string
-		for _, requirement := range requiredStates {
-			if requirement.satisfiedBy(available) {
+			if len(missingForTeam) == 0 {
 				continue
 			}
-			missingForTeam = append(missingForTeam, requirement.Description)
-		}
-		if len(missingForTeam) == 0 {
-			continue
-		}
 
-		teamName, _ := stringValue(team["name"])
-		if strings.TrimSpace(teamName) == "" {
-			teamName, _ = stringValue(team["id"])
+			teamName, _ := stringValue(team["name"])
+			if strings.TrimSpace(teamName) == "" {
+				teamName, _ = stringValue(team["id"])
+			}
+			if strings.TrimSpace(teamName) == "" {
+				teamName = "unknown"
+			}
+			missing = append(missing, fmt.Sprintf("team %q missing [%s]", teamName, strings.Join(missingForTeam, ", ")))
 		}
-		if strings.TrimSpace(teamName) == "" {
-			teamName = "unknown"
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, projectSlug, strings.Join(missing, "; "))
 		}
-		missing = append(missing, fmt.Sprintf("team %q missing [%s]", teamName, strings.Join(missingForTeam, ", ")))
 	}
-	if len(missing) > 0 {
-		return "", fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, c.project, strings.Join(missing, "; "))
-	}
-	return strings.TrimSpace(projectID), nil
+	return projectIDs, nil
 }
 
 type workflowStateRequirement struct {
@@ -996,10 +1032,12 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 	state, _ := nestedString(node, "state", "name")
 
 	issue := domain.Issue{
-		ID:         id,
-		Identifier: identifier,
-		Title:      title,
-		State:      state,
+		ID:          id,
+		Identifier:  identifier,
+		Title:       title,
+		ProjectID:   strings.TrimSpace(projectID(node)),
+		ProjectSlug: strings.TrimSpace(projectSlug(node)),
+		State:       state,
 	}
 	if value, ok := stringValue(node["description"]); ok {
 		issue.Description = &value
@@ -1064,6 +1102,16 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 	}
 	issue.ReviewFeedback = extractReviewFeedback(issue.State, node)
 	return issue, nil
+}
+
+func projectID(node map[string]any) string {
+	value, _ := nestedString(node, "project", "id")
+	return value
+}
+
+func projectSlug(node map[string]any) string {
+	value, _ := nestedString(node, "project", "slugId")
+	return value
 }
 
 type linearComment struct {

@@ -98,6 +98,10 @@ func (m *Manager) ValidateGitHubAccess(ctx context.Context) error {
 
 // Publish commits workspace changes, pushes the issue branch, and creates or reuses a PR.
 func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath string) (Result, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return Result{}, err
+	}
 	branch, err := m.currentBranch(ctx, workspacePath)
 	if err != nil {
 		return Result{}, err
@@ -105,7 +109,7 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 
 	result := Result{
 		Branch:  branch,
-		BaseRef: m.cfg.Workspace.BaseRef,
+		BaseRef: target.BaseRef,
 	}
 
 	dirty, err := m.isDirty(ctx, workspacePath)
@@ -136,7 +140,7 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		return Result{}, err
 	}
 	if pr == nil {
-		reviewable, err := m.ReviewableArtifact(ctx, workspacePath)
+		reviewable, err := m.ReviewableArtifact(ctx, workspacePath, issue)
 		if err != nil {
 			return Result{}, err
 		}
@@ -261,7 +265,7 @@ func (m *Manager) CurrentBranch(ctx context.Context, workspacePath string) (stri
 }
 
 // ReviewableArtifact reports whether the workspace contains reviewable repository changes.
-func (m *Manager) ReviewableArtifact(ctx context.Context, workspacePath string) (bool, error) {
+func (m *Manager) ReviewableArtifact(ctx context.Context, workspacePath string, issue ...domain.Issue) (bool, error) {
 	dirty, err := m.isDirty(ctx, workspacePath)
 	if err != nil {
 		return false, err
@@ -269,7 +273,10 @@ func (m *Manager) ReviewableArtifact(ctx context.Context, workspacePath string) 
 	if dirty {
 		return true, nil
 	}
-	return m.branchAheadOfBase(ctx, workspacePath)
+	if len(issue) > 0 {
+		return m.branchAheadOfBase(ctx, workspacePath, issue[0])
+	}
+	return m.branchAheadOfBase(ctx, workspacePath, domain.Issue{})
 }
 
 // ReplyAndResolveReviewThread posts a reply and resolves a review thread.
@@ -352,8 +359,8 @@ func (m *Manager) isDirty(ctx context.Context, workspacePath string) (bool, erro
 	return strings.TrimSpace(out) != "", nil
 }
 
-func (m *Manager) branchAheadOfBase(ctx context.Context, workspacePath string) (bool, error) {
-	baseRef, err := m.baseComparisonRef(ctx, workspacePath)
+func (m *Manager) branchAheadOfBase(ctx context.Context, workspacePath string, issue domain.Issue) (bool, error) {
+	baseRef, err := m.baseComparisonRef(ctx, workspacePath, issue)
 	if err != nil {
 		return false, err
 	}
@@ -372,10 +379,14 @@ func (m *Manager) branchAheadOfBase(ctx context.Context, workspacePath string) (
 	return ahead > 0, nil
 }
 
-func (m *Manager) baseComparisonRef(ctx context.Context, workspacePath string) (string, error) {
+func (m *Manager) baseComparisonRef(ctx context.Context, workspacePath string, issue domain.Issue) (string, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return "", err
+	}
 	candidates := []string{
-		strings.TrimSpace(m.cfg.Workspace.BaseRef),
-		strings.TrimSpace(m.cfg.Repo.RemoteName) + "/" + strings.TrimSpace(m.cfg.Workspace.BaseRef),
+		strings.TrimSpace(target.BaseRef),
+		strings.TrimSpace(m.cfg.Repo.RemoteName) + "/" + strings.TrimSpace(target.BaseRef),
 	}
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
@@ -386,7 +397,7 @@ func (m *Manager) baseComparisonRef(ctx context.Context, workspacePath string) (
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("resolve base ref %q", strings.TrimSpace(m.cfg.Workspace.BaseRef))
+	return "", fmt.Errorf("resolve base ref %q", strings.TrimSpace(target.BaseRef))
 }
 
 func (m *Manager) ensureIdentity(ctx context.Context, workspacePath string) error {
@@ -406,7 +417,7 @@ func (m *Manager) ensureIdentity(ctx context.Context, workspacePath string) erro
 	return nil
 }
 
-func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch string) (*GitHubPullRequest, error) {
+func (m *Manager) findPullRequest(ctx context.Context, issue domain.Issue, workspacePath, branch string) (*GitHubPullRequest, error) {
 	owner, name, err := m.remoteRepository(ctx, workspacePath)
 	if err != nil {
 		return nil, err
@@ -415,7 +426,11 @@ func (m *Manager) findPullRequest(ctx context.Context, workspacePath, branch str
 	if err != nil {
 		return nil, err
 	}
-	return client.PullRequestByHead(ctx, owner, name, branch, m.cfg.Workspace.BaseRef)
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return nil, err
+	}
+	return client.PullRequestByHead(ctx, owner, name, branch, target.BaseRef)
 }
 
 func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*GitHubPullRequest, error) {
@@ -466,7 +481,7 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	}
 
 	if currentBranch != "" {
-		pr, err := m.findPullRequest(ctx, workspacePath, currentBranch)
+		pr, err := m.findPullRequest(ctx, issue, workspacePath, currentBranch)
 		if err != nil {
 			return nil, false, err
 		}
@@ -475,7 +490,7 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 		}
 	} else {
 		for _, branch := range m.reviewLookupBranches(ctx, issue, workspacePath) {
-			pr, err := m.findPullRequest(ctx, workspacePath, branch)
+			pr, err := m.findPullRequest(ctx, issue, workspacePath, branch)
 			if err != nil {
 				return nil, false, err
 			}
@@ -493,7 +508,7 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	if err != nil {
 		return nil, false, err
 	}
-	pr, err := m.findPullRequest(ctx, workspacePath, currentBranch)
+	pr, err := m.findPullRequest(ctx, issue, workspacePath, currentBranch)
 	if err != nil {
 		return nil, false, err
 	}
@@ -568,8 +583,12 @@ func duplicatePullRequestsError(prs []domain.PullRequestRef) error {
 }
 
 func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, issue domain.Issue, branch string) (string, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return "", err
+	}
 	title := fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
-	body, err := m.prBody(issue, branch, title)
+	body, err := m.prBody(issue, branch, title, target.BaseRef)
 	if err != nil {
 		return "", err
 	}
@@ -584,7 +603,7 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 	pr, err := client.CreatePullRequest(ctx, owner, name, CreatePullRequestInput{
 		Title: title,
 		Head:  branch,
-		Base:  m.cfg.Workspace.BaseRef,
+		Base:  target.BaseRef,
 		Body:  body,
 	})
 	if err != nil {
@@ -900,7 +919,7 @@ func commitMessage(issue domain.Issue) string {
 	return fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
 }
 
-func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string) (string, error) {
+func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, baseRef string) (string, error) {
 	templateText := strings.TrimSpace(m.cfg.Repo.PRTemplate)
 	if templateText == "" {
 		templateText = defaultPRTemplate()
@@ -908,7 +927,7 @@ func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string) (str
 	return workflow.RenderTemplate(templateText, map[string]any{
 		"issue":    prIssueMap(issue),
 		"branch":   branch,
-		"base_ref": m.cfg.Workspace.BaseRef,
+		"base_ref": baseRef,
 		"pr_title": prTitle,
 	})
 }

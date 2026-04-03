@@ -399,7 +399,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 				)
 				break
 			}
-			reviewable, err := r.reviewableCodingArtifact(ctx, ws.Path)
+			reviewable, err := r.reviewableCodingArtifact(ctx, ws.Path, current)
 			if err != nil {
 				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 			}
@@ -1453,11 +1453,18 @@ func reviewPublishDirective(issue domain.Issue) string {
 	return strings.TrimSpace(string(issue.ColinMetadata.ReviewPublishDirective))
 }
 
-func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath string) (bool, error) {
-	if r.repo == nil || strings.TrimSpace(r.cfg.Workspace.RepoURL) == "" {
+func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath string, issue domain.Issue) (bool, error) {
+	if r.repo == nil {
 		return true, nil
 	}
-	return r.repo.ReviewableArtifact(ctx, workspacePath)
+	target, err := domain.ResolveTargetForIssue(r.cfg, issue)
+	if err != nil {
+		return true, nil
+	}
+	if strings.TrimSpace(target.RepoURL) == "" {
+		return true, nil
+	}
+	return r.repo.ReviewableArtifact(ctx, workspacePath, issue)
 }
 
 func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *codex.Client, workspacePath string, issue domain.Issue) (domain.Issue, error) {

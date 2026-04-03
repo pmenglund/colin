@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -245,6 +246,73 @@ func TestBuildRejectsPartialWorkspaceGitConfig(t *testing.T) {
 	_, err := Build(def, "WORKFLOW.md")
 	if err != ErrInvalidWorkspaceGitConf {
 		t.Fatalf("Build() error = %v, want %v", err, ErrInvalidWorkspaceGitConf)
+	}
+}
+
+func TestBuildNormalizesExplicitTargets(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":    "linear",
+			"api_key": "token",
+		},
+		"targets": []map[string]any{
+			{
+				"name":         "api",
+				"project_slug": "project-1",
+				"repo_url":     "git@github.com:acme/api.git",
+				"base_ref":     "main",
+			},
+			{
+				"name":         "web",
+				"project_slug": "project-2",
+				"repo_url":     "git@github.com:acme/web.git",
+				"base_ref":     "trunk",
+			},
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(cfg.Targets) != 2 {
+		t.Fatalf("len(cfg.Targets) = %d, want 2", len(cfg.Targets))
+	}
+	if cfg.Targets[0].ProjectSlug != "project-1" || cfg.Targets[0].RepoURL != "git@github.com:acme/api.git" || cfg.Targets[0].BaseRef != "main" {
+		t.Fatalf("cfg.Targets[0] = %+v", cfg.Targets[0])
+	}
+	if cfg.Targets[1].ProjectSlug != "project-2" || cfg.Targets[1].RepoURL != "git@github.com:acme/web.git" || cfg.Targets[1].BaseRef != "trunk" {
+		t.Fatalf("cfg.Targets[1] = %+v", cfg.Targets[1])
+	}
+}
+
+func TestBuildRejectsMixedLegacyAndTargets(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"api_key":      "token",
+			"project_slug": "project-1",
+		},
+		"workspace": map[string]any{
+			"repo_url": "git@github.com:acme/api.git",
+			"base_ref": "main",
+		},
+		"targets": []map[string]any{
+			{
+				"project_slug": "project-2",
+				"repo_url":     "git@github.com:acme/web.git",
+				"base_ref":     "trunk",
+			},
+		},
+	})
+
+	_, err := Build(def, "WORKFLOW.md")
+	if !errors.Is(err, ErrInvalidWorkflowConfig) {
+		t.Fatalf("Build() error = %v, want ErrInvalidWorkflowConfig", err)
 	}
 }
 

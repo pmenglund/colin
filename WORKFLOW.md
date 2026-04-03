@@ -4,7 +4,6 @@ tracker:
   api_key: $LINEAR_API_KEY
   # Optional once you create a Linear webhook with `colin setup linear webhook`.
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
-  project_slug: 0ece25450f8d
   active_states:
     - Todo
     - In Progress
@@ -21,8 +20,6 @@ polling:
 
 workspace:
   root: ./.colin/workspaces
-  repo_url: git@github.com:pmenglund/colin.git
-  base_ref: main
 
 repo:
   api_token: $GITHUB_TOKEN
@@ -36,6 +33,12 @@ repo:
   remote_name: origin
   merge_method: squash
   branch_template: colin/{{.issue.title}}
+
+targets:
+  - name: colin
+    project_slug: 0ece25450f8d
+    repo_url: git@github.com:pmenglund/colin.git
+    base_ref: main
 
 hooks:
   timeout_ms: 60000
