@@ -547,6 +547,41 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	}
 }
 
+func TestRefreshIssueStateCountsOmitsHiddenStateIssueLists(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{
+			{ID: "1", Identifier: "COLIN-1", Title: "Ready", State: "Todo"},
+			{ID: "2", Identifier: "COLIN-2", Title: "Shipped", State: "Done"},
+		},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker, Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo"},
+				TerminalStates: []string{"Done"},
+			},
+		}},
+		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.refreshIssueStateCounts(context.Background())
+
+	if got := orch.issueStates["Done"]; got != 1 {
+		t.Fatalf("Done count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Todo"]); got != 1 {
+		t.Fatalf("Todo issue list length = %d, want 1", got)
+	}
+	if _, ok := orch.stateIssues["Done"]; ok {
+		t.Fatalf("unexpected Done issue list: %+v", orch.stateIssues["Done"])
+	}
+}
+
 func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing.T) {
 	t.Parallel()
 
@@ -607,6 +642,65 @@ func TestHandleCodexEventUpdatesIssueCountsForObservedStateTransition(t *testing
 	}
 	if got := orch.running["issue-1"].issue.State; got != "In Progress" {
 		t.Fatalf("running issue state = %q, want %q", got, "In Progress")
+	}
+}
+
+func TestHandleCodexEventRemovesStateIssueWhenTransitionLeavesDashboardStates(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo"},
+				TerminalStates: []string{"Done"},
+			},
+			Codex: domain.CodexConfig{Command: "codex"},
+		}},
+		running: map[string]*runningEntry{
+			"issue-1": {
+				issue: domain.Issue{
+					ID:         "issue-1",
+					Identifier: "COLIN-1",
+					Title:      "Ship it",
+					State:      "Todo",
+				},
+			},
+		},
+		issueStates: map[string]int{
+			"Todo": 1,
+			"Done": 0,
+		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Todo": {
+				{ID: "issue-1", Identifier: "COLIN-1", Title: "Ship it"},
+			},
+		},
+	}
+
+	orch.handleCodexEvent(context.Background(), codex.Event{
+		Event:      codex.EventIssueStateRefreshed,
+		IssueID:    "issue-1",
+		Identifier: "COLIN-1",
+		Timestamp:  time.Now().UTC(),
+		PrevState:  "Todo",
+		State:      "Done",
+	})
+
+	if got := orch.issueStates["Todo"]; got != 0 {
+		t.Fatalf("Todo count = %d, want 0", got)
+	}
+	if got := orch.issueStates["Done"]; got != 1 {
+		t.Fatalf("Done count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Todo"]); got != 0 {
+		t.Fatalf("Todo issue list length = %d, want 0", got)
+	}
+	if _, ok := orch.stateIssues["Done"]; ok {
+		t.Fatalf("unexpected Done issue list: %+v", orch.stateIssues["Done"])
+	}
+	if got := orch.running["issue-1"].issue.State; got != "Done" {
+		t.Fatalf("running issue state = %q, want %q", got, "Done")
 	}
 }
 

@@ -387,8 +387,6 @@ func statsGrid(snapshot domain.Snapshot) g.Node {
 }
 
 func stateCountsPanel(snapshot domain.Snapshot) g.Node {
-	states := []string{"Backlog", "Todo", "In Progress", "Refine", "Review", "Merge"}
-
 	return h.Section(
 		h.Class("table-card"),
 		h.Data("testid", "linear-state-counts"),
@@ -396,7 +394,7 @@ func stateCountsPanel(snapshot domain.Snapshot) g.Node {
 		h.P(g.Text("Tracked Linear issues in the active handoff pipeline.")),
 		h.Div(
 			h.Class("state-count-grid"),
-			g.Map(states, func(state string) g.Node {
+			g.Map(domain.DashboardStateNames(), func(state string) g.Node {
 				return stateCountCard(state, snapshot.IssueStates[state], snapshot.StateIssues[state], snapshot.PausedIssueStates[state])
 			}),
 		),

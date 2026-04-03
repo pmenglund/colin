@@ -251,6 +251,7 @@ func (o *Orchestrator) enterShutdownDrain() {
 
 func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Issue {
 	stateNames := trackedStateNames(o.runtime.Config)
+	dashboardStates := dashboardStateNames()
 	if len(stateNames) == 0 {
 		o.issueStates = map[string]int{}
 		o.stateIssues = map[string][]domain.StateIssueSummary{}
@@ -269,7 +270,9 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 	paused := map[string]domain.PausedStateSummary{}
 	for _, issue := range issues {
 		counts[issue.State]++
-		stateIssues[issue.State] = append(stateIssues[issue.State], stateIssueSummary(issue))
+		if config.ContainsState(dashboardStates, issue.State) {
+			stateIssues[issue.State] = append(stateIssues[issue.State], stateIssueSummary(issue))
+		}
 		if !hasIssueLabel(issue, domain.PausedIssueLabel) {
 			continue
 		}
@@ -421,6 +424,10 @@ func trackedStateNames(cfg domain.ServiceConfig) []string {
 	return out
 }
 
+func dashboardStateNames() []string {
+	return domain.DashboardStateNames()
+}
+
 func buildPausedIssueSearchURL(issueURL string, state string) string {
 	parsed, err := url.Parse(strings.TrimSpace(issueURL))
 	if err != nil {
@@ -558,11 +565,11 @@ func (o *Orchestrator) applyObservedStateIssueTransition(issue domain.Issue, pre
 		return
 	}
 
-	trackedStates := trackedStateNames(o.runtime.Config)
-	if len(trackedStates) == 0 {
+	dashboardStates := dashboardStateNames()
+	if len(dashboardStates) == 0 {
 		return
 	}
-	if !config.ContainsState(trackedStates, previousState) || !config.ContainsState(trackedStates, currentState) {
+	if !config.ContainsState(dashboardStates, previousState) && !config.ContainsState(dashboardStates, currentState) {
 		return
 	}
 
@@ -589,6 +596,9 @@ func (o *Orchestrator) applyObservedStateIssueTransition(issue domain.Issue, pre
 		o.stateIssues[state] = append([]domain.StateIssueSummary(nil), filtered...)
 	}
 
+	if !config.ContainsState(dashboardStates, currentState) {
+		return
+	}
 	o.stateIssues[currentState] = append(o.stateIssues[currentState], summary)
 	sort.Slice(o.stateIssues[currentState], func(i, j int) bool {
 		left := o.stateIssues[currentState][i]
