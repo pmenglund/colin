@@ -152,6 +152,9 @@ func TestEnterShutdownDrainClearsRetriesAndBlocksDispatch(t *testing.T) {
 	if !orch.draining {
 		t.Fatal("draining = false, want true")
 	}
+	if !orch.shutdownRequested.Load() {
+		t.Fatal("shutdownRequested = false, want true")
+	}
 	if got := len(orch.retrying); got != 0 {
 		t.Fatalf("retrying count = %d, want 0", got)
 	}
@@ -165,6 +168,40 @@ func TestEnterShutdownDrainClearsRetriesAndBlocksDispatch(t *testing.T) {
 		State:      "Todo",
 	}) {
 		t.Fatal("shouldDispatch() = true, want false while draining")
+	}
+}
+
+func TestRequestShutdownDrainLatchesImmediately(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		eventCh: make(chan any, 1),
+		running: map[string]*runningEntry{},
+		claimed: map[string]struct{}{},
+	}
+	orch.loopStarted.Store(true)
+
+	if ok := orch.RequestShutdownDrain(); !ok {
+		t.Fatal("RequestShutdownDrain() = false, want true")
+	}
+	if !orch.shutdownRequested.Load() {
+		t.Fatal("shutdownRequested = false, want true")
+	}
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-151",
+		Title:      "blocked by shutdown request",
+		State:      "Todo",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false after shutdown request")
+	}
+	select {
+	case raw := <-orch.eventCh:
+		if _, ok := raw.(shutdownDrainRequestedEvent); !ok {
+			t.Fatalf("queued event = %T, want shutdownDrainRequestedEvent", raw)
+		}
+	default:
+		t.Fatal("shutdown drain event was not queued")
 	}
 }
 
@@ -964,6 +1001,25 @@ func TestSnapshotReturnsCachedSnapshotWithoutEventLoopRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSnapshotReflectsShutdownRequest(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{Tracker: &trackerStub{}},
+	}
+	orch.publishSnapshot(time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC))
+	orch.loopStarted.Store(true)
+	orch.shutdownRequested.Store(true)
+
+	snapshot, err := orch.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v, want nil", err)
+	}
+	if !snapshot.ShutdownRequested {
+		t.Fatal("Snapshot().ShutdownRequested = false, want true")
+	}
+}
+
 func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -1079,6 +1135,36 @@ func TestHandleWorkerExitSchedulesContinuationRetry(t *testing.T) {
 	}
 	if retry.entry.Error != "" {
 		t.Fatalf("retry error = %q", retry.entry.Error)
+	}
+}
+
+func TestHandleRetryDropsClaimedIssueAfterShutdownRequest(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		running:  map[string]*runningEntry{},
+		retrying: map[string]*retryState{},
+		claimed: map[string]struct{}{
+			"issue-1": {},
+		},
+	}
+	orch.shutdownRequested.Store(true)
+	orch.retrying["issue-1"] = &retryState{
+		entry: domain.RetryEntry{
+			IssueID:    "issue-1",
+			Identifier: "COLIN-151",
+			Attempt:    2,
+		},
+	}
+
+	orch.handleRetry(context.Background(), "issue-1")
+
+	if _, ok := orch.retrying["issue-1"]; ok {
+		t.Fatal("retrying entry still present after shutdown request")
+	}
+	if _, ok := orch.claimed["issue-1"]; ok {
+		t.Fatal("claimed issue should be released after shutdown request")
 	}
 }
 

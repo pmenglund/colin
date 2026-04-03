@@ -476,6 +476,7 @@ type StateIssueSummary struct {
 // Snapshot is a read-only summary of orchestrator state for observability.
 type Snapshot struct {
 	GeneratedAt       time.Time                      `json:"generated_at"`
+	ShutdownRequested bool                           `json:"shutdown_requested"`
 	Running           []SnapshotRunning              `json:"running"`
 	Retrying          []RetryEntry                   `json:"retrying"`
 	CodexTotals       Totals                         `json:"codex_totals"`

@@ -36,6 +36,7 @@ type Orchestrator struct {
 	eventCh           chan any
 	runtime           Runtime
 	loopStarted       atomic.Bool
+	shutdownRequested atomic.Bool
 	draining          bool
 	refreshReady      atomic.Bool
 	refreshPending    atomic.Bool

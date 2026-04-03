@@ -44,9 +44,10 @@ func TestObservabilityServerRoutes(t *testing.T) {
 	handler, err := NewObservabilityServer(func(context.Context) (domain.Snapshot, error) {
 		now := time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC)
 		return domain.Snapshot{
-			GeneratedAt: now,
-			Counts:      map[string]int{"running": 1, "retrying": 0},
-			IssueStates: map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
+			GeneratedAt:       now,
+			ShutdownRequested: true,
+			Counts:            map[string]int{"running": 1, "retrying": 0},
+			IssueStates:       map[string]int{"Todo": 5, "In Progress": 1, "Review": 2},
 			StateIssues: map[string][]domain.StateIssueSummary{
 				"In Progress": {
 					{
@@ -198,6 +199,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-refresh-status="live"`) {
 			t.Fatalf("missing live refresh status: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
+			t.Fatalf("missing shutdown alert: %s", text)
+		}
 	})
 
 	t.Run("fragment", func(t *testing.T) {
@@ -222,6 +226,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="refresh-status"`) {
 			t.Fatalf("missing refresh status indicator: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
+			t.Fatalf("missing shutdown alert: %s", text)
+		}
 	})
 
 	t.Run("api", func(t *testing.T) {
@@ -242,6 +249,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if got := len(snapshot.StateIssues["Review"]); got != 1 {
 			t.Fatalf("review issue list length = %d, want 1", got)
+		}
+		if !snapshot.ShutdownRequested {
+			t.Fatal("shutdown requested = false, want true")
 		}
 		if got := snapshot.PausedIssueStates["Review"].Count; got != 1 {
 			t.Fatalf("review paused count = %d, want 1", got)

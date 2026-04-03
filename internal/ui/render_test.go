@@ -14,9 +14,10 @@ func TestPageRendersDashboardShell(t *testing.T) {
 
 	issueURL := "https://linear.app/example/issue/COLIN-93"
 	snapshot := domain.Snapshot{
-		GeneratedAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
-		Counts:      map[string]int{"running": 1, "retrying": 1},
-		IssueStates: map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 3, "Merge": 1, "Done": 2},
+		GeneratedAt:       time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
+		ShutdownRequested: true,
+		Counts:            map[string]int{"running": 1, "retrying": 1},
+		IssueStates:       map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 3, "Merge": 1, "Done": 2},
 		StateIssues: map[string][]domain.StateIssueSummary{
 			"In Progress": {
 				{
@@ -91,10 +92,15 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-testid="dashboard-root"`,
 		`data-testid="refresh-button"`,
 		`data-testid="refresh-status"`,
+		`data-testid="shutdown-alert"`,
+		`data-testid="shutdown-alert-badge"`,
 		`data-refresh-status="live"`,
 		`data-generated-at="2026-03-28T12:00:00Z"`,
 		`title="Last successful update at 2026-03-28T12:00:00Z"`,
 		`Live data`,
+		`Warning`,
+		`Shutdown in progress`,
+		`Colin will not start new work`,
 		`data-refresh-toggle="true"`,
 		`❚❚`,
 		`<h1>Colin</h1>`,
@@ -258,8 +264,9 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	t.Parallel()
 
 	html := renderNode(t, Dashboard(domain.Snapshot{
-		GeneratedAt: time.Now().UTC(),
-		Counts:      map[string]int{},
+		GeneratedAt:       time.Now().UTC(),
+		ShutdownRequested: true,
+		Counts:            map[string]int{},
 	}))
 	if strings.Contains(html, "<html") {
 		t.Fatalf("fragment should not render document shell:\n%s", html)
@@ -272,6 +279,9 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	}
 	if !strings.Contains(html, `data-refresh-status="live"`) {
 		t.Fatalf("fragment missing live refresh status:\n%s", html)
+	}
+	if !strings.Contains(html, `data-testid="shutdown-alert"`) {
+		t.Fatalf("fragment missing shutdown alert:\n%s", html)
 	}
 }
 

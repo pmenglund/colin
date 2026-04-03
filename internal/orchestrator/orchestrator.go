@@ -72,11 +72,12 @@ func (o *Orchestrator) RequestShutdownDrain() bool {
 	if o == nil || !o.loopStarted.Load() {
 		return false
 	}
+	o.shutdownRequested.Store(true)
 	select {
 	case o.eventCh <- shutdownDrainRequestedEvent{}:
 		return true
 	default:
-		return false
+		return true
 	}
 }
 
@@ -234,6 +235,7 @@ func (o *Orchestrator) enterShutdownDrain() {
 	if o.draining {
 		return
 	}
+	o.shutdownRequested.Store(true)
 	o.draining = true
 	clearedRetries := 0
 	for issueID, state := range o.retrying {

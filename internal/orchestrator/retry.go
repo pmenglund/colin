@@ -349,7 +349,7 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		return
 	}
 	delete(o.retrying, issueID)
-	if o.draining {
+	if !o.acceptingNewWork() {
 		delete(o.claimed, issueID)
 		o.logger.Info("retry dropped during shutdown drain", "issue_id", issueID, "issue_identifier", state.entry.Identifier)
 		return

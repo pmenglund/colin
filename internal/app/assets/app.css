@@ -151,6 +151,55 @@ a {
   color: var(--muted);
 }
 
+.alert-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.alert-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.alert-warning {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid rgba(255, 179, 71, 0.92);
+  background:
+    linear-gradient(135deg, rgba(255, 179, 71, 0.34), rgba(122, 58, 12, 0.9)),
+    linear-gradient(180deg, rgba(255, 209, 102, 0.12), rgba(255, 179, 71, 0.04));
+  box-shadow:
+    0 0 0 1px rgba(255, 179, 71, 0.24) inset,
+    0 18px 48px rgba(255, 179, 71, 0.18);
+}
+
+.alert-warning::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0.45rem;
+  background: linear-gradient(180deg, #ffd580, #ff9f1a);
+}
+
+.alert-warning .alert-title {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.alert-warning .badge-warning {
+  border-color: rgba(255, 244, 222, 0.3);
+  background: rgba(255, 179, 71, 0.32);
+  color: #fff4de;
+}
+
+.alert-warning p {
+  color: #fff4de;
+}
+
 .toolbar-actions {
   display: flex;
   gap: 0.6rem;

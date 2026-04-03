@@ -168,7 +168,7 @@ Start Colin with the checked-in or newly generated workflow:
 colin
 ```
 
-In an interactive terminal, `colin` opens a Bubble Tea runtime dashboard by default. The overview shows the local and public URLs Colin is serving plus the current workers and their state. Press `l` to switch to the buffered log view, use the arrow keys or page keys to scroll, and press `esc` to stop Colin and exit the dashboard.
+In an interactive terminal, `colin` opens a Bubble Tea runtime dashboard by default. The overview shows the local and public URLs Colin is serving plus the current workers and their state. Press `l` to switch to the buffered log view, use the arrow keys or page keys to scroll, and press `q` to begin a shutdown drain. Once shutdown begins, Colin stops starting new work, shows a shutdown indicator in both dashboards, and waits for active workers to go idle; press `q` again or `esc` to exit immediately.
 
 These docs assume `colin` is installed on your `PATH`.
 

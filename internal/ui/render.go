@@ -340,6 +340,7 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 		g.Attr("hx-target", "#dashboard-root"),
 		g.Attr("hx-swap", "outerHTML"),
 		toolbar(snapshot),
+		shutdownAlert(snapshot),
 		statsGrid(snapshot),
 		h.Div(
 			h.Class("stack"),
@@ -349,6 +350,25 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 			rateLimitsPanel(snapshot),
 			apiPanel(snapshot),
 		),
+	)
+}
+
+func shutdownAlert(snapshot domain.Snapshot) g.Node {
+	if !snapshot.ShutdownRequested {
+		return nil
+	}
+
+	return h.Section(
+		h.Class("alert"),
+		h.Class("alert-warning"),
+		h.Data("testid", "shutdown-alert"),
+		g.Attr("aria-live", "polite"),
+		h.Div(
+			h.Class("alert-header"),
+			h.Span(h.Class("badge"), h.Class("badge-warning"), h.Data("testid", "shutdown-alert-badge"), g.Text("Warning")),
+			h.Div(h.Class("alert-title"), g.Text("Shutdown in progress")),
+		),
+		h.P(g.Text("Shutdown has begun. Colin will not start new work, and active workers are draining before exit.")),
 	)
 }
 

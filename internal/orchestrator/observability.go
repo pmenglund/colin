@@ -17,7 +17,9 @@ func (o *Orchestrator) Snapshot(ctx context.Context) (domain.Snapshot, error) {
 		return o.snapshotAt(time.Now().UTC()), nil
 	}
 	if cached, ok := o.snapshot.Load().(domain.Snapshot); ok {
-		return cloneSnapshot(cached), nil
+		out := cloneSnapshot(cached)
+		out.ShutdownRequested = o.shutdownRequested.Load()
+		return out, nil
 	}
 	return domain.Snapshot{}, nil
 }
@@ -56,11 +58,12 @@ func (o *Orchestrator) snapshotAt(now time.Time) domain.Snapshot {
 		totals.SecondsRunning += now.Sub(entry.startedAt).Seconds()
 	}
 	return domain.Snapshot{
-		GeneratedAt: now,
-		Running:     running,
-		Retrying:    retrying,
-		CodexTotals: totals,
-		RateLimits:  mergeRateLimits(o.rateLimits, o.runtime.Tracker.CurrentRateLimits()),
+		GeneratedAt:       now,
+		ShutdownRequested: o.shutdownRequested.Load(),
+		Running:           running,
+		Retrying:          retrying,
+		CodexTotals:       totals,
+		RateLimits:        mergeRateLimits(o.rateLimits, o.runtime.Tracker.CurrentRateLimits()),
 		Counts: map[string]int{
 			"running":  len(running),
 			"retrying": len(retrying),

@@ -12,7 +12,7 @@ import (
 )
 
 func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
-	if o.draining {
+	if !o.acceptingNewWork() {
 		return false
 	}
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
@@ -72,6 +72,10 @@ func (o *Orchestrator) hasStateSlots(state string) bool {
 }
 
 func (o *Orchestrator) dispatch(parent context.Context, issue domain.Issue, attempt *int, comment *commentThreadState) {
+	if !o.acceptingNewWork() {
+		o.logger.Info("skipping dispatch during shutdown drain", "issue_id", issue.ID, "issue_identifier", issue.Identifier)
+		return
+	}
 	ctx, cancel := context.WithCancel(parent)
 	runType := runTypeForState(o, issue.State)
 	if comment != nil && comment.RunType != runTypeForState(o, issue.State) {
@@ -162,4 +166,8 @@ func (o *Orchestrator) isDispatchable(state string) bool {
 
 func (o *Orchestrator) isTerminal(state string) bool {
 	return config.ContainsState(o.runtime.Config.Tracker.TerminalStates, state)
+}
+
+func (o *Orchestrator) acceptingNewWork() bool {
+	return !o.shutdownRequested.Load() && !o.draining
 }
