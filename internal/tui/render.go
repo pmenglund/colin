@@ -98,8 +98,17 @@ func renderHeaderStatus(m model) string {
 		subtleStyle.Render("l logs"),
 		subtleStyle.Render("q/esc quit"),
 	}
-	if m.quitting {
-		parts = append(parts, warnStyle.Render("shutting down"))
+	if m.shutdownRequested {
+		running := len(m.snapshot.Running)
+		switch {
+		case m.forceStopIssued:
+			parts = append(parts, warnStyle.Render("shutting down"))
+		case running > 0:
+			parts = append(parts, warnStyle.Render(fmt.Sprintf("shutdown requested; waiting for %d %s to go idle", running, pluralizeWorker(running))))
+			parts = append(parts, subtleStyle.Render("press q again to exit immediately"))
+		default:
+			parts = append(parts, warnStyle.Render("shutdown requested; workers are idle, exiting"))
+		}
 	} else if !m.lastRefresh.IsZero() {
 		parts = append(parts, subtleStyle.Render("refreshed "+humanizeAge(m.lastRefresh)))
 	}
@@ -123,22 +132,26 @@ func renderURLLine(label string, value string) string {
 
 func renderWorkerLine(worker domain.SnapshotRunning, width int) string {
 	state := renderState(worker.State)
-	last := strings.TrimSpace(worker.LastMessage)
-	if last == "" {
-		last = strings.TrimSpace(worker.LastEvent)
-	}
-	if last == "" {
-		last = "waiting for activity"
-	}
-	message := truncateRunes(last, lastMessageWidth)
+	status := renderWorkerRuntime(worker.StartedAt)
 	return fmt.Sprintf(
 		"%s  %s  %s  %s  %s",
 		titleStyle.Render(padRight(worker.Identifier, 12)),
 		state,
 		subtleStyle.Render(fmt.Sprintf("turn %d", worker.TurnCount)),
 		subtleStyle.Render(truncateRunes(worker.SessionID, 18)),
-		truncateRunes(message, maxInt(width-56, 16)),
+		subtleStyle.Render(truncateRunes(status, maxInt(width-56, 16))),
 	)
+}
+
+func renderWorkerRuntime(startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return "running time unknown"
+	}
+	elapsed := time.Since(startedAt).Round(time.Second)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return "running " + elapsed.String()
 }
 
 func renderRetryLine(retry domain.RetryEntry) string {
@@ -242,6 +255,13 @@ func humanizeAge(ts time.Time) string {
 		age = 0
 	}
 	return age.String() + " ago"
+}
+
+func pluralizeWorker(count int) string {
+	if count == 1 {
+		return "worker"
+	}
+	return "workers"
 }
 
 func minInt(a int, b int) int {

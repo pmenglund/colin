@@ -347,6 +347,11 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		return
 	}
 	delete(o.retrying, issueID)
+	if o.draining {
+		delete(o.claimed, issueID)
+		o.logger.Info("retry dropped during shutdown drain", "issue_id", issueID, "issue_identifier", state.entry.Identifier)
+		return
+	}
 	if delay := o.trackerThrottleDelay(time.Now().UTC()); delay > 0 {
 		args := []any{
 			"issue_id", issueID,

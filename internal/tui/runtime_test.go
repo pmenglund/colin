@@ -47,7 +47,7 @@ func (f fakeSource) FunnelSetupStatus(context.Context) domain.FunnelSetupStatus 
 func TestModelTogglesBetweenOverviewAndLogs(t *testing.T) {
 	t.Parallel()
 
-	m := newModel(context.Background(), fakeSource{}, nil, nil)
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
 	m.logs = sampleLogs(6)
 	m.height = 12
 
@@ -70,7 +70,7 @@ func TestModelTogglesBetweenOverviewAndLogs(t *testing.T) {
 func TestModelLogSelectionClampsWithinBounds(t *testing.T) {
 	t.Parallel()
 
-	m := newModel(context.Background(), fakeSource{}, nil, nil)
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
 	m.mode = modeLogs
 	m.height = 12
 	m.logs = sampleLogs(20)
@@ -111,7 +111,7 @@ func TestModelLogSelectionClampsWithinBounds(t *testing.T) {
 func TestModelLogSelectionAutoScrollsIntoView(t *testing.T) {
 	t.Parallel()
 
-	m := newModel(context.Background(), fakeSource{}, nil, nil)
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
 	m.mode = modeLogs
 	m.height = 12
 	m.logs = sampleLogs(20)
@@ -138,12 +138,12 @@ func TestModelEscStopsAndWaitsForServiceExit(t *testing.T) {
 	t.Parallel()
 
 	var stops int
-	m := newModel(context.Background(), fakeSource{}, nil, func() { stops++ })
+	m := newModel(context.Background(), fakeSource{}, nil, nil, func() { stops++ })
 
 	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	updated := next.(model)
-	if !updated.quitting {
-		t.Fatal("quitting = false, want true")
+	if !updated.forceStopIssued {
+		t.Fatal("forceStopIssued = false, want true")
 	}
 	if stops != 1 {
 		t.Fatalf("stop count = %d, want 1", stops)
@@ -153,28 +153,103 @@ func TestModelEscStopsAndWaitsForServiceExit(t *testing.T) {
 	}
 }
 
-func TestModelQStopsAndWaitsForServiceExit(t *testing.T) {
+func TestModelQRequestsShutdownDrainWhenWorkersAreRunning(t *testing.T) {
 	t.Parallel()
 
+	var drainRequests int
 	var stops int
-	m := newModel(context.Background(), fakeSource{}, nil, func() { stops++ })
+	now := time.Now().UTC()
+	source := fakeSource{
+		snapshot: domain.Snapshot{
+			Running: []domain.SnapshotRunning{{
+				Identifier: "COLIN-150",
+				State:      "In Progress",
+				StartedAt:  now.Add(-time.Minute),
+			}},
+		},
+	}
+	msg := refreshRuntime(context.Background(), source)()
+	m := newModel(context.Background(), source, nil, func() bool {
+		drainRequests++
+		return true
+	}, func() { stops++ })
+	next, _ := m.Update(msg)
+	m = next.(model)
 
 	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
 	updated := next.(model)
-	if !updated.quitting {
-		t.Fatal("quitting = false, want true")
+	if !updated.shutdownRequested {
+		t.Fatal("shutdownRequested = false, want true")
+	}
+	if updated.forceStopIssued {
+		t.Fatal("forceStopIssued = true, want false")
+	}
+	if drainRequests != 1 {
+		t.Fatalf("drainRequests = %d, want 1", drainRequests)
+	}
+	if stops != 0 {
+		t.Fatalf("stop count = %d, want 0", stops)
+	}
+	if cmd != nil {
+		t.Fatal("first q should not quit before workers drain")
+	}
+	view := stripANSI(updated.View().Content)
+	for _, want := range []string{
+		"shutdown requested; waiting for 1 worker to go idle",
+		"press q again to exit",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestModelSecondQExitsImmediatelyDuringShutdownDrain(t *testing.T) {
+	t.Parallel()
+
+	var stops int
+	m := newModel(context.Background(), fakeSource{}, nil, nil, func() { stops++ })
+	m.shutdownRequested = true
+
+	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	updated := next.(model)
+	if !updated.forceStopIssued {
+		t.Fatal("forceStopIssued = false, want true")
 	}
 	if stops != 1 {
 		t.Fatalf("stop count = %d, want 1", stops)
 	}
-	if cmd != nil {
-		t.Fatal("q should not quit before the service exits")
+	if cmd == nil {
+		t.Fatal("second q should exit immediately")
+	}
+}
+
+func TestModelShutdownDrainStopsOnceWorkersGoIdle(t *testing.T) {
+	t.Parallel()
+
+	var stops int
+	m := newModel(context.Background(), fakeSource{}, nil, nil, func() { stops++ })
+	m.shutdownRequested = true
+	m.snapshot = domain.Snapshot{
+		Running: []domain.SnapshotRunning{{
+			Identifier: "COLIN-150",
+		}},
+	}
+
+	next, _ := m.Update(refreshMsg{snapshot: domain.Snapshot{}})
+	updated := next.(model)
+	if !updated.forceStopIssued {
+		t.Fatal("forceStopIssued = false, want true")
+	}
+	if stops != 1 {
+		t.Fatalf("stop count = %d, want 1", stops)
 	}
 }
 
 func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	t.Parallel()
 
+	now := time.Now().UTC()
 	source := fakeSource{
 		dashboardURL: "http://127.0.0.1:7777",
 		setupURL:     "http://127.0.0.1:7777/setup/funnel",
@@ -185,6 +260,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 				SessionID:   "thread-1",
 				TurnCount:   2,
 				LastMessage: "Investigating worker output",
+				StartedAt:   now.Add(-2 * time.Minute),
 			}},
 		},
 		logs: sampleLogs(3),
@@ -196,7 +272,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		},
 	}
 	msg := refreshRuntime(context.Background(), source)()
-	m := newModel(context.Background(), source, nil, nil)
+	m := newModel(context.Background(), source, nil, nil, nil)
 
 	next, _ := m.Update(msg)
 	updated := next.(model)
@@ -210,6 +286,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	for _, want := range []string{
 		"COLIN-147",
 		"In Progress",
+		"running 2m",
 		"https://colin.tail.example.ts.net",
 		"linear hook https://colin.example.test/webhooks/linear",
 		"https://colin.example.test/webhooks/linear",
@@ -219,6 +296,9 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q", view, want)
 		}
+	}
+	if strings.Contains(view, "Investigating worker output") {
+		t.Fatalf("view = %q, want worker runtime instead of last message", view)
 	}
 	for _, unwanted := range []string{
 		"setup http://127.0.0.1:7777/setup/funnel",
@@ -244,7 +324,7 @@ func TestModelRefreshFallsBackToLocalDashboardWhenTailnetMissing(t *testing.T) {
 		},
 	}
 	msg := refreshRuntime(context.Background(), source)()
-	m := newModel(context.Background(), source, nil, nil)
+	m := newModel(context.Background(), source, nil, nil, nil)
 
 	next, _ := m.Update(msg)
 	view := stripANSI(next.(model).View().Content)
@@ -256,7 +336,7 @@ func TestModelRefreshFallsBackToLocalDashboardWhenTailnetMissing(t *testing.T) {
 func TestLogsViewShowsSelectedFullLineBelowList(t *testing.T) {
 	t.Parallel()
 
-	m := newModel(context.Background(), fakeSource{}, nil, nil)
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
 	m.mode = modeLogs
 	m.width = 40
 	m.height = 18
@@ -302,7 +382,7 @@ func TestRunReturnsServiceError(t *testing.T) {
 	errCh := make(chan error, 1)
 	errCh <- fmt.Errorf("boom")
 
-	err := Run(context.Background(), strings.NewReader(""), io.Discard, fakeSource{}, errCh, nil)
+	err := Run(context.Background(), strings.NewReader(""), io.Discard, fakeSource{}, errCh, nil, nil)
 	if err == nil || err.Error() != "boom" {
 		t.Fatalf("Run() error = %v, want boom", err)
 	}

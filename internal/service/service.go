@@ -107,6 +107,14 @@ func (s *Service) Run(ctx context.Context) error {
 	return s.orch.Run(ctx)
 }
 
+// RequestShutdownDrain asks the orchestrator to stop dispatching new work and let active workers finish.
+func (s *Service) RequestShutdownDrain() bool {
+	if s == nil || s.orch == nil {
+		return false
+	}
+	return s.orch.RequestShutdownDrain()
+}
+
 // DashboardURL returns the dashboard bind URL when the HTTP server is enabled.
 func (s *Service) DashboardURL() string {
 	s.serverMu.RLock()

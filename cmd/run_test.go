@@ -14,7 +14,8 @@ import (
 )
 
 type fakeRuntimeService struct {
-	run func(context.Context) error
+	run                  func(context.Context) error
+	requestShutdownDrain func() bool
 }
 
 func (f fakeRuntimeService) Run(ctx context.Context) error {
@@ -22,6 +23,13 @@ func (f fakeRuntimeService) Run(ctx context.Context) error {
 		return f.run(ctx)
 	}
 	return nil
+}
+
+func (f fakeRuntimeService) RequestShutdownDrain() bool {
+	if f.requestShutdownDrain != nil {
+		return f.requestShutdownDrain()
+	}
+	return false
 }
 
 func (fakeRuntimeService) DashboardEnabled() bool { return false }
@@ -62,7 +70,7 @@ func TestRunRootUsesRuntimeTUIWhenInteractiveAndNotVerbose(t *testing.T) {
 	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return true }
 
 	var tuiCalls int
-	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, stop func()) error {
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
 		tuiCalls++
 		stop()
 		return <-serviceErrCh
@@ -93,7 +101,7 @@ func TestRunRootSkipsRuntimeTUIWhenVerbose(t *testing.T) {
 	}
 	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return true }
 
-	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, stop func()) error {
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
 		t.Fatal("runRuntimeTUI should not be called for verbose mode")
 		return nil
 	}
@@ -118,7 +126,7 @@ func TestRunRootSkipsRuntimeTUIWhenNonInteractive(t *testing.T) {
 	}
 	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return false }
 
-	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, stop func()) error {
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
 		t.Fatal("runRuntimeTUI should not be called for non-interactive mode")
 		return nil
 	}

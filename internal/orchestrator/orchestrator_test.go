@@ -121,6 +121,51 @@ func (s *trackerStub) UpsertIssueExecPlan(_ context.Context, _ string, plan doma
 	return plan, nil
 }
 
+func TestEnterShutdownDrainClearsRetriesAndBlocksDispatch(t *testing.T) {
+	t.Parallel()
+
+	retryTimer := time.NewTimer(time.Hour)
+	defer retryTimer.Stop()
+
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		running: map[string]*runningEntry{},
+		claimed: map[string]struct{}{
+			"retry-issue": {},
+		},
+		retrying: map[string]*retryState{
+			"retry-issue": {
+				entry: domain.RetryEntry{Identifier: "COLIN-150"},
+				timer: retryTimer,
+			},
+		},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.enterShutdownDrain()
+
+	if !orch.draining {
+		t.Fatal("draining = false, want true")
+	}
+	if got := len(orch.retrying); got != 0 {
+		t.Fatalf("retrying count = %d, want 0", got)
+	}
+	if _, ok := orch.claimed["retry-issue"]; ok {
+		t.Fatal("claimed retry issue should be released during shutdown drain")
+	}
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-151",
+		Title:      "blocked by shutdown drain",
+		State:      "Todo",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false while draining")
+	}
+}
+
 func (s *trackerStub) CurrentRateLimits() domain.RateLimitSnapshot {
 	return s.rateLimits
 }

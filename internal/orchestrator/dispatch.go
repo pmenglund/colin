@@ -12,6 +12,9 @@ import (
 )
 
 func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
+	if o.draining {
+		return false
+	}
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
 		return false
 	}

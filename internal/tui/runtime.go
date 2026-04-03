@@ -56,28 +56,30 @@ type serviceDoneMsg struct {
 }
 
 type model struct {
-	ctx        context.Context
-	source     Source
-	serviceErr <-chan error
-	stop       func()
+	ctx                  context.Context
+	source               Source
+	serviceErr           <-chan error
+	requestShutdownDrain func() bool
+	forceStop            func()
 
-	mode         mode
-	width        int
-	height       int
-	dashboardURL string
-	setupURL     string
-	snapshot     domain.Snapshot
-	logs         domain.BufferedLogSnapshot
-	setup        domain.FunnelSetupStatus
-	logOffset    int
-	selectedLog  int
-	lastRefresh  time.Time
-	refreshErr   error
-	fatalErr     error
-	quitting     bool
+	mode              mode
+	width             int
+	height            int
+	dashboardURL      string
+	setupURL          string
+	snapshot          domain.Snapshot
+	logs              domain.BufferedLogSnapshot
+	setup             domain.FunnelSetupStatus
+	logOffset         int
+	selectedLog       int
+	lastRefresh       time.Time
+	refreshErr        error
+	fatalErr          error
+	shutdownRequested bool
+	forceStopIssued   bool
 }
 
-func Run(ctx context.Context, in io.Reader, out io.Writer, source Source, serviceErrs <-chan error, stop func()) error {
+func Run(ctx context.Context, in io.Reader, out io.Writer, source Source, serviceErrs <-chan error, requestShutdownDrain func() bool, forceStop func()) error {
 	if source == nil {
 		return fmt.Errorf("runtime tui source is required")
 	}
@@ -86,7 +88,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, source Source, servic
 	}
 
 	program := tea.NewProgram(
-		newModel(ctx, source, serviceErrs, stop),
+		newModel(ctx, source, serviceErrs, requestShutdownDrain, forceStop),
 		tea.WithInput(in),
 		tea.WithOutput(out),
 	)
@@ -101,19 +103,20 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, source Source, servic
 	return final.fatalErr
 }
 
-func newModel(ctx context.Context, source Source, serviceErrs <-chan error, stop func()) model {
+func newModel(ctx context.Context, source Source, serviceErrs <-chan error, requestShutdownDrain func() bool, forceStop func()) model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return model{
-		ctx:         ctx,
-		source:      source,
-		serviceErr:  serviceErrs,
-		stop:        stop,
-		mode:        modeOverview,
-		width:       defaultWidth,
-		height:      defaultHeight,
-		selectedLog: -1,
+		ctx:                  ctx,
+		source:               source,
+		serviceErr:           serviceErrs,
+		requestShutdownDrain: requestShutdownDrain,
+		forceStop:            forceStop,
+		mode:                 modeOverview,
+		width:                defaultWidth,
+		height:               defaultHeight,
+		selectedLog:          -1,
 	}
 }
 
@@ -141,9 +144,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case refreshTickMsg:
-		if m.quitting {
-			return m, nil
-		}
 		return m, refreshRuntime(m.ctx, m.source)
 	case refreshMsg:
 		followLatest := m.mode == modeLogs && m.isFollowingLatestLog()
@@ -162,8 +162,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ensureSelectedLogVisible()
 			}
 		}
-		if m.quitting {
-			return m, nil
+		if m.shutdownRequested && !m.forceStopIssued && len(m.snapshot.Running) == 0 {
+			m.forceStopIssued = true
+			if m.forceStop != nil {
+				m.forceStop()
+			}
 		}
 		return m, nextRefreshTick()
 	case serviceDoneMsg:
@@ -177,14 +180,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := strings.ToLower(msg.String())
 	switch key {
-	case "ctrl+c", "esc", "q":
-		if !m.quitting {
-			m.quitting = true
-			if m.stop != nil {
-				m.stop()
+	case "ctrl+c", "esc":
+		if !m.forceStopIssued {
+			m.forceStopIssued = true
+			if m.forceStop != nil {
+				m.forceStop()
 			}
 		}
 		return m, nil
+	case "q":
+		if !m.shutdownRequested {
+			m.shutdownRequested = true
+			if len(m.snapshot.Running) == 0 {
+				m.forceStopIssued = true
+				if m.forceStop != nil {
+					m.forceStop()
+				}
+				return m, nil
+			}
+			if m.requestShutdownDrain != nil {
+				m.requestShutdownDrain()
+			}
+			return m, nil
+		}
+		if !m.forceStopIssued {
+			m.forceStopIssued = true
+			if m.forceStop != nil {
+				m.forceStop()
+			}
+		}
+		return m, tea.Quit
 	case "l":
 		if m.mode == modeOverview {
 			m.mode = modeLogs

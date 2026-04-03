@@ -17,6 +17,7 @@ import (
 
 type runtimeService interface {
 	Run(context.Context) error
+	RequestShutdownDrain() bool
 	DashboardEnabled() bool
 	DashboardURL() string
 	FunnelSetupURL() string
@@ -29,8 +30,8 @@ var (
 	newRuntimeService = func(logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
 		return service.New(logger, workflowPath, options...)
 	}
-	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, stop func()) error {
-		return tui.Run(ctx, in, out, source, serviceErrCh, stop)
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
+		return tui.Run(ctx, in, out, source, serviceErrCh, requestShutdownDrain, stop)
 	}
 	runtimeIsInteractiveTerminal = isInteractiveTerminal
 )
@@ -65,7 +66,7 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 	}
 
 	if runtimeIsInteractiveTerminal(cmd.InOrStdin(), cmd.OutOrStdout()) {
-		if err := runRuntimeTUI(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), svc, runErrCh, stop); err != nil {
+		if err := runRuntimeTUI(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), svc, runErrCh, svc.RequestShutdownDrain, stop); err != nil {
 			logger.Error("service exited abnormally", "error", err)
 			return 1
 		}

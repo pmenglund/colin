@@ -580,6 +580,97 @@ func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	}
 }
 
+func TestPublishRebasesOntoRemoteBranchWhenPushIsRejectedAsNonFastForward(t *testing.T) {
+	workspacePath, remotePath := setupRepoAutomationTest(t)
+
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "initial\n")
+	runCmd(t, workspacePath, "git", "add", "feature.txt")
+	runCmd(t, workspacePath, "git", "commit", "-m", "initial feature work")
+	runCmd(t, workspacePath, "git", "push", "-u", "origin", "colin-93")
+
+	peerPath := filepath.Join(t.TempDir(), "peer")
+	runCmd(t, "", "git", "clone", remotePath, peerPath)
+	runCmd(t, peerPath, "git", "checkout", "colin-93")
+	runCmd(t, peerPath, "git", "config", "user.name", "Peer User")
+	runCmd(t, peerPath, "git", "config", "user.email", "peer@example.com")
+	writeFile(t, filepath.Join(peerPath, "remote.txt"), "remote\n")
+	runCmd(t, peerPath, "git", "add", "remote.txt")
+	runCmd(t, peerPath, "git", "commit", "-m", "remote branch update")
+	runCmd(t, peerPath, "git", "push", "origin", "colin-93")
+
+	writeFile(t, filepath.Join(workspacePath, "local.txt"), "local\n")
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	result, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Rebase divergent branch before publish",
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	if result.PRNumber != 11 {
+		t.Fatalf("result.PRNumber = %d, want 11", result.PRNumber)
+	}
+	if result.Action != "committed_and_pushed" {
+		t.Fatalf("result.Action = %q, want %q", result.Action, "committed_and_pushed")
+	}
+
+	remoteLog := runCmd(t, "", "git", "--git-dir", remotePath, "log", "--format=%s", "colin-93", "-n", "3")
+	for _, want := range []string{
+		"COLIN-93: Rebase divergent branch before publish",
+		"remote branch update",
+	} {
+		if !strings.Contains(remoteLog, want) {
+			t.Fatalf("remote log = %q, want %q", remoteLog, want)
+		}
+	}
+}
+
+func TestPublishReturnsErrorWhenAutomaticRebaseConflicts(t *testing.T) {
+	workspacePath, remotePath := setupRepoAutomationTest(t)
+
+	writeFile(t, filepath.Join(workspacePath, "shared.txt"), "base\n")
+	runCmd(t, workspacePath, "git", "add", "shared.txt")
+	runCmd(t, workspacePath, "git", "commit", "-m", "initial feature work")
+	runCmd(t, workspacePath, "git", "push", "-u", "origin", "colin-93")
+
+	peerPath := filepath.Join(t.TempDir(), "peer")
+	runCmd(t, "", "git", "clone", remotePath, peerPath)
+	runCmd(t, peerPath, "git", "checkout", "colin-93")
+	runCmd(t, peerPath, "git", "config", "user.name", "Peer User")
+	runCmd(t, peerPath, "git", "config", "user.email", "peer@example.com")
+	writeFile(t, filepath.Join(peerPath, "shared.txt"), "remote\n")
+	runCmd(t, peerPath, "git", "add", "shared.txt")
+	runCmd(t, peerPath, "git", "commit", "-m", "remote conflicting update")
+	runCmd(t, peerPath, "git", "push", "origin", "colin-93")
+
+	writeFile(t, filepath.Join(workspacePath, "shared.txt"), "local\n")
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Conflict while rebasing divergent branch",
+	}, workspacePath)
+	if err == nil {
+		t.Fatal("Publish() error = nil, want rebase conflict")
+	}
+	if !strings.Contains(err.Error(), "rebase onto origin/colin-93 failed") {
+		t.Fatalf("Publish() error = %v, want rebase failure", err)
+	}
+
+	status := runCmd(t, workspacePath, "git", "status", "--porcelain")
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("workspace status = %q, want clean after failed rebase recovery", status)
+	}
+}
+
 func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 

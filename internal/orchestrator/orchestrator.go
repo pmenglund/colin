@@ -65,6 +65,19 @@ func (o *Orchestrator) UpdateRuntime(runtime Runtime) {
 	o.eventCh <- configUpdatedEvent{runtime: runtime}
 }
 
+// RequestShutdownDrain asks the orchestrator to stop dispatching new work and let current workers drain.
+func (o *Orchestrator) RequestShutdownDrain() bool {
+	if o == nil || !o.loopStarted.Load() {
+		return false
+	}
+	select {
+	case o.eventCh <- shutdownDrainRequestedEvent{}:
+		return true
+	default:
+		return false
+	}
+}
+
 // Run starts the main event loop and exits when the provided context is canceled.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	o.loopStarted.Store(true)
@@ -117,6 +130,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 					}
 				}
 				tick.Reset(o.runtime.Config.Polling.Interval)
+			case shutdownDrainRequestedEvent:
+				o.enterShutdownDrain()
 			case codexEvent:
 				o.handleCodexEvent(ctx, event.event)
 			case workerExitedEvent:
@@ -145,6 +160,20 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	}
 	o.logger.Debug("poll tick started", args...)
 	o.reconcileRunning(ctx)
+	if o.draining {
+		trackedIssues := o.refreshIssueStateCounts(ctx)
+		o.syncCodexReviewLabels(ctx, trackedIssues)
+		args = []any{
+			"draining", true,
+			"running", len(o.running),
+			"retrying", len(o.retrying),
+		}
+		if summaries := o.runningIssueSummaries(time.Now().UTC()); len(summaries) > 0 {
+			args = append(args, "running_issues", summaries)
+		}
+		o.logger.Debug("poll tick completed", args...)
+		return
+	}
 	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
@@ -195,6 +224,27 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		args = append(args, "retry_issues", summaries)
 	}
 	o.logger.Debug("poll tick completed", args...)
+}
+
+func (o *Orchestrator) enterShutdownDrain() {
+	if o.draining {
+		return
+	}
+	o.draining = true
+	clearedRetries := 0
+	for issueID, state := range o.retrying {
+		if state.timer != nil {
+			state.timer.Stop()
+		}
+		delete(o.retrying, issueID)
+		delete(o.claimed, issueID)
+		clearedRetries++
+	}
+	o.logger.Info(
+		"shutdown drain requested",
+		"running", len(o.running),
+		"cleared_retries", clearedRetries,
+	)
 }
 
 func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Issue {

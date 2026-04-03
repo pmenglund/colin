@@ -34,6 +34,7 @@ type Orchestrator struct {
 	eventCh           chan any
 	runtime           Runtime
 	loopStarted       atomic.Bool
+	draining          bool
 	refreshReady      atomic.Bool
 	refreshPending    atomic.Bool
 	snapshot          atomic.Value
@@ -88,4 +89,5 @@ type workerExitedEvent struct {
 	result  codex.Result
 }
 type refreshRequestedEvent struct{ reason string }
+type shutdownDrainRequestedEvent struct{}
 type retryFiredEvent struct{ issueID string }

@@ -65,20 +65,9 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 		if state != nil && state.comment != nil && state.comment.RootCommentID != "" {
 			state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, userworkflow.ReviewSyncReady(reviewContext.PullRequest, len(reviewContext.Threads)))
 		}
-		delete(o.reviewSync, issue.ID)
-		return issue, true
 	}
-
-	state = o.ensureReviewSyncState(issue, state, now)
-	body := userworkflow.ReviewSyncWaiting(reviewContext.PullRequest, reviewReturnedToTodoAt(issue), now.Sub(state.firstObserved), state.timedOut)
-	state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, body)
-	if !state.timedOut && now.Sub(state.firstObserved) >= reviewSyncTimeout {
-		state.timedOut = true
-		state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, userworkflow.ReviewSyncTimedOut(reviewContext.PullRequest, reviewSyncTimeout, reviewSyncSlowPollInterval))
-	}
-	state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
-	o.reviewSync[issue.ID] = state
-	return issue, false
+	delete(o.reviewSync, issue.ID)
+	return issue, true
 }
 
 func (o *Orchestrator) cleanupReviewSync(active []domain.Issue) {

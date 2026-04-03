@@ -145,8 +145,11 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		}
 	}
 
-	if _, err := m.run(ctx, workspacePath, 2*time.Minute, "git", "push", "-u", m.cfg.Repo.RemoteName, branch); err != nil {
+	if _, err := m.pushBranch(ctx, workspacePath, branch); err != nil {
 		return Result{}, err
+	}
+	if commit, err := m.revParse(ctx, workspacePath, "HEAD"); err == nil {
+		result.Commit = commit
 	}
 	if result.Action == "" {
 		result.Action = "pushed"
@@ -820,6 +823,54 @@ func latestTimePtr(current *time.Time, candidate time.Time) *time.Time {
 		return &value
 	}
 	return current
+}
+
+func (m *Manager) pushBranch(ctx context.Context, workspacePath, branch string) (string, error) {
+	remoteName := strings.TrimSpace(m.cfg.Repo.RemoteName)
+	output, err := m.run(ctx, workspacePath, 2*time.Minute, "git", "push", "-u", remoteName, branch)
+	if err == nil {
+		return output, nil
+	}
+	if !isNonFastForwardPushError(err) {
+		return "", err
+	}
+
+	remoteBranch := remoteTrackingBranch(remoteName, branch)
+	m.logger.Info(
+		"push rejected as non-fast-forward; rebasing onto remote branch",
+		"workspace_path", workspacePath,
+		"branch", branch,
+		"remote_branch", remoteBranch,
+	)
+	if _, fetchErr := m.run(ctx, workspacePath, 2*time.Minute, "git", "fetch", remoteName, branch); fetchErr != nil {
+		return "", fmt.Errorf("push rejected and fetch for rebase failed: %w", fetchErr)
+	}
+	if _, resolveErr := m.revParse(ctx, workspacePath, remoteBranch); resolveErr != nil {
+		return "", fmt.Errorf("push rejected and remote branch %s is unavailable for rebase: %w", remoteBranch, resolveErr)
+	}
+	if _, rebaseErr := m.run(ctx, workspacePath, 2*time.Minute, "git", "rebase", remoteBranch); rebaseErr != nil {
+		m.abortRebase(ctx, workspacePath)
+		return "", fmt.Errorf("push rejected and rebase onto %s failed: %w", remoteBranch, rebaseErr)
+	}
+	return m.run(ctx, workspacePath, 2*time.Minute, "git", "push", "-u", remoteName, branch)
+}
+
+func (m *Manager) abortRebase(ctx context.Context, workspacePath string) {
+	if _, err := m.run(ctx, workspacePath, 30*time.Second, "git", "rebase", "--abort"); err != nil {
+		m.logger.Warn("failed to abort rebase after publish recovery error", "workspace_path", workspacePath, "error", err)
+	}
+}
+
+func isNonFastForwardPushError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "non-fast-forward") || strings.Contains(text, "failed to push some refs")
+}
+
+func remoteTrackingBranch(remoteName, branch string) string {
+	return strings.TrimSpace(remoteName) + "/" + strings.TrimSpace(branch)
 }
 
 func (m *Manager) run(ctx context.Context, cwd string, timeout time.Duration, name string, args ...string) (string, error) {
