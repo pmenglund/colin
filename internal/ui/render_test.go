@@ -17,7 +17,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		GeneratedAt:       time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
 		ShutdownRequested: true,
 		Counts:            map[string]int{"running": 1, "retrying": 1},
-		IssueStates:       map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 3, "Merge": 1, "Done": 2},
+		IssueStates:       map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 1, "Merge": 1, "Done": 2},
 		StateIssues: map[string][]domain.StateIssueSummary{
 			"In Progress": {
 				{
@@ -124,8 +124,10 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Issue is actively being worked.`,
 		`data-testid="state-issues-trigger-in-progress"`,
 		`data-testid="state-issues-in-progress"`,
+		`Issue ID`,
+		`Title`,
+		`href="https://linear.app/example/issue/COLIN-93"`,
 		`href="/linear/issues/issue-1/metadata"`,
-		`Web UI details`,
 		`Refine`,
 		`Issue needs human clarification before a PR can be reviewed.`,
 		`Review`,
@@ -184,7 +186,7 @@ func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
 func TestStateIssuePopoverRendersLinks(t *testing.T) {
 	t.Parallel()
 
-	html := renderNode(t, stateCountCard("Review", 2, []domain.StateIssueSummary{
+	html := renderNode(t, stateCountCard("Review", 1, []domain.StateIssueSummary{
 		{
 			ID:         "issue-2",
 			Identifier: "COLIN-94",
@@ -195,12 +197,14 @@ func TestStateIssuePopoverRendersLinks(t *testing.T) {
 
 	for _, want := range []string{
 		`data-testid="state-issues-trigger-review"`,
-		`View 1 issue`,
 		`data-testid="state-issues-review"`,
+		`Issue ID`,
+		`Title`,
 		`data-testid="state-issue-review-COLIN-94"`,
-		`href="https://linear.app/example/issue/COLIN-94"`,
+		`class="state-issue-id-link" href="https://linear.app/example/issue/COLIN-94"`,
 		`href="/linear/issues/issue-2/metadata"`,
-		`Web UI details`,
+		`>COLIN-94</a>`,
+		`>Polish review labels</a>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)
