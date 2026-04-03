@@ -733,8 +733,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 
 	runCmd(t, "", "git", "init", "--bare", remotePath)
 	runCmd(t, "", "git", "init", seedPath)
-	runCmd(t, seedPath, "git", "config", "user.name", "Test User")
-	runCmd(t, seedPath, "git", "config", "user.email", "test@example.com")
+	configureGitIdentity(t, seedPath, "Test User", "test@example.com")
 	writeFile(t, filepath.Join(seedPath, "README.md"), "seed\n")
 	runCmd(t, seedPath, "git", "add", "README.md")
 	runCmd(t, seedPath, "git", "commit", "-m", "seed")
@@ -743,6 +742,7 @@ func setupRepoAutomationTest(t *testing.T) (workspacePath string, remotePath str
 	runCmd(t, seedPath, "git", "push", "-u", "origin", "symphony")
 
 	runCmd(t, "", "git", "clone", remotePath, workspacePath)
+	configureGitIdentity(t, workspacePath, "Test User", "test@example.com")
 	runCmd(t, workspacePath, "git", "checkout", "-b", "colin-93", "origin/symphony")
 
 	return workspacePath, remotePath
@@ -762,6 +762,13 @@ func testConfig() domain.ServiceConfig {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func configureGitIdentity(t *testing.T, cwd, name, email string) {
+	t.Helper()
+
+	runCmd(t, cwd, "git", "config", "user.name", name)
+	runCmd(t, cwd, "git", "config", "user.email", email)
 }
 
 func runCmd(t *testing.T, cwd string, name string, args ...string) string {
