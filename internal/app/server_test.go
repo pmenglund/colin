@@ -178,8 +178,8 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, "<html") {
 			t.Fatalf("expected full document, got %s", text)
 		}
-		if !strings.Contains(text, `data-testid="shell-instance"`) {
-			t.Fatalf("missing shell marker: %s", text)
+		if strings.Contains(text, `data-testid="shell-instance"`) {
+			t.Fatalf("unexpected shell renderer card: %s", text)
 		}
 		if !strings.Contains(text, `data-testid="worker-card-COLIN-93"`) {
 			t.Fatalf("missing worker card: %s", text)
