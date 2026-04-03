@@ -352,6 +352,7 @@ func pullRequestFromAPI(pr *githubapi.PullRequest) *repohost.PullRequest {
 		URL:         pr.GetHTMLURL(),
 		State:       state,
 		Body:        pr.GetBody(),
+		Mergeable:   pr.Mergeable,
 		HeadRefName: pr.GetHead().GetRef(),
 		BaseRefName: pr.GetBase().GetRef(),
 	}

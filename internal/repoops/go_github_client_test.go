@@ -224,6 +224,37 @@ func TestGoGitHubClientCreateAndMergePullRequestUseREST(t *testing.T) {
 	}
 }
 
+func TestGoGitHubClientPullRequestByNumberReturnsMergeable(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/widgets/pulls/7" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{
+			"number":    7,
+			"html_url":  "https://github.com/acme/widgets/pull/7",
+			"state":     "open",
+			"mergeable": true,
+			"head":      map[string]any{"ref": "feature"},
+			"base":      map[string]any{"ref": "main"},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestGoGitHubClient(t, server)
+	pr, err := client.PullRequestByNumber(context.Background(), "acme", "widgets", 7)
+	if err != nil {
+		t.Fatalf("PullRequestByNumber() error = %v", err)
+	}
+	if pr == nil {
+		t.Fatal("PullRequestByNumber() = nil, want PR")
+	}
+	if pr.Mergeable == nil || !*pr.Mergeable {
+		t.Fatalf("pr.Mergeable = %#v, want true", pr.Mergeable)
+	}
+}
+
 func TestGoGitHubClientGraphQLPages(t *testing.T) {
 	t.Parallel()
 

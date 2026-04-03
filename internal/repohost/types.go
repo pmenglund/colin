@@ -36,6 +36,7 @@ type PullRequest struct {
 	URL         string
 	State       string
 	Body        string
+	Mergeable   *bool
 	HeadRefName string
 	BaseRefName string
 }
