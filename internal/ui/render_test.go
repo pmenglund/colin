@@ -154,6 +154,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 			t.Fatalf("render missing %q\n%s", want, html)
 		}
 	}
+	if strings.Contains(html, `data-testid="shell-instance"`) {
+		t.Fatalf("render should not include shell renderer card\n%s", html)
+	}
 	if strings.Contains(html, "Tracked Issues") {
 		t.Fatalf("render should not include tracked issues summary card\n%s", html)
 	}

@@ -13,8 +13,7 @@ import (
 )
 
 // Page renders the full document shell for the dashboard.
-func Page(snapshot domain.Snapshot, shellRenderedAt time.Time) g.Node {
-	shellID := shellRenderedAt.UTC().Format(time.RFC3339Nano)
+func Page(snapshot domain.Snapshot, _ time.Time) g.Node {
 	return h.Doctype(h.HTML(
 		h.Lang("en"),
 		h.Head(
@@ -31,27 +30,15 @@ func Page(snapshot domain.Snapshot, shellRenderedAt time.Time) g.Node {
 				h.Header(
 					h.Class("hero"),
 					h.Div(
-						h.Class("hero-grid"),
-						h.Div(
-							h.Span(h.Class("hero-label"), g.Text("Live Orchestrator View")),
-							h.H1(g.Text("Colin")),
-							h.P(
-								g.Text("Colin is a Go service that watches a Linear project, runs Codex in per-issue workspaces, and hands off review-ready changes. "),
-								h.A(
-									h.Href("https://github.com/pmenglund/colin"),
-									g.Text("View the GitHub repository"),
-								),
-								g.Text("."),
+						h.Span(h.Class("hero-label"), g.Text("Live Orchestrator View")),
+						h.H1(g.Text("Colin")),
+						h.P(
+							g.Text("Colin is a Go service that watches a Linear project, runs Codex in per-issue workspaces, and hands off review-ready changes. "),
+							h.A(
+								h.Href("https://github.com/pmenglund/colin"),
+								g.Text("View the GitHub repository"),
 							),
-						),
-						h.Div(
-							h.Class("shell-meta"),
-							h.Div(
-								h.Class("card"),
-								h.Data("testid", "shell-instance"),
-								h.Span(h.Class("badge badge-info"), g.Text("Shell Render")),
-								h.Div(h.Class("issue-title"), g.Text(shellID)),
-							),
+							g.Text("."),
 						),
 					),
 				),

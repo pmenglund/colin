@@ -25,12 +25,12 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
     "/linear/issues/issue-demo-1/metadata",
   );
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
+  await expect(page.getByTestId("shell-instance")).toHaveCount(0);
 });
 
-test("worker card expands and refresh updates the fragment without reloading the shell", async ({ page }) => {
+test("worker card expands and refresh updates the fragment while preserving expanded state", async ({ page }) => {
   await page.goto("/");
 
-  const shellInstance = await page.getByTestId("shell-instance").textContent();
   const before = await page.getByTestId("turn-count-COLIN-7").textContent();
   const details = page.locator("#worker-output-details-COLIN-7");
   const stateIssuesDetails = page.locator("#state-issues-details-in-progress");
@@ -76,9 +76,6 @@ test("worker card expands and refresh updates the fragment without reloading the
     }).format(new Date(value));
   }, refreshedTimestamp);
   await expect(outputTime).toHaveText(expectedRefreshedLocalTime);
-
-  const afterShellInstance = await page.getByTestId("shell-instance").textContent();
-  expect(afterShellInstance).toBe(shellInstance);
 });
 
 test("dashboard marks the view stale when refresh fails and recovers after a later success", async ({ page }) => {
