@@ -1056,6 +1056,76 @@ func TestSnapshotReflectsShutdownRequest(t *testing.T) {
 	}
 }
 
+func TestSubscribeSnapshotUpdatesReceivesPublishedSnapshots(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime:           Runtime{Tracker: &trackerStub{}},
+		subscribers:       map[uint64]chan domain.SnapshotUpdate{},
+		issueStates:       map[string]int{"Review": 2},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	updates := orch.SubscribeSnapshotUpdates(ctx)
+	firstTime := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	secondTime := firstTime.Add(2 * time.Second)
+	orch.publishSnapshot(firstTime)
+
+	first := <-updates
+	orch.publishSnapshot(secondTime)
+	second := <-updates
+	if first.Sequence != 1 || !first.GeneratedAt.Equal(firstTime) {
+		t.Fatalf("first update = %#v, want sequence 1 at %s", first, firstTime)
+	}
+	if second.Sequence != 2 || !second.GeneratedAt.Equal(secondTime) {
+		t.Fatalf("second update = %#v, want sequence 2 at %s", second, secondTime)
+	}
+
+	first.GeneratedAt = first.GeneratedAt.Add(-time.Hour)
+	latest := orch.LatestSnapshotUpdate()
+	if latest.Sequence != 2 || !latest.GeneratedAt.Equal(secondTime) {
+		t.Fatalf("LatestSnapshotUpdate() = %#v, want latest published value", latest)
+	}
+}
+
+func TestSubscribeSnapshotUpdatesCoalescesSlowSubscribers(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime:           Runtime{Tracker: &trackerStub{}},
+		subscribers:       map[uint64]chan domain.SnapshotUpdate{},
+		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	updates := orch.SubscribeSnapshotUpdates(ctx)
+	firstTime := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	secondTime := firstTime.Add(time.Second)
+	orch.publishSnapshot(firstTime)
+	orch.publishSnapshot(secondTime)
+
+	update := <-updates
+	if update.Sequence != 2 || !update.GeneratedAt.Equal(secondTime) {
+		t.Fatalf("coalesced update = %#v, want latest published value", update)
+	}
+}
+
 func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	t.Parallel()
 

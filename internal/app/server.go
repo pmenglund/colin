@@ -30,6 +30,9 @@ type LogProvider func(context.Context, *slog.Level) (domain.BufferedLogSnapshot,
 // FunnelSetupProvider returns the current Funnel readiness snapshot.
 type FunnelSetupProvider func(context.Context) (domain.FunnelSetupStatus, error)
 
+// SnapshotStreamProvider returns the current update marker and a live stream of later snapshot updates.
+type SnapshotStreamProvider func(context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error)
+
 // LinearWebhookEvent captures the minimal webhook context needed to trigger orchestration.
 type LinearWebhookEvent struct {
 	DeliveryID    string
@@ -79,10 +82,10 @@ type GitHubWebhookSecretProvider func(context.Context) string
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, nil, nil, nil, nil, nil)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, source.Stream, nil, nil, nil, nil, nil)
 }
 
-func normalizeServerProviders(provider SnapshotProvider, setupProvider FunnelSetupProvider, logProvider LogProvider) (SnapshotProvider, FunnelSetupProvider, LogProvider) {
+func normalizeServerProviders(provider SnapshotProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, streamProvider SnapshotStreamProvider) (SnapshotProvider, FunnelSetupProvider, LogProvider, SnapshotStreamProvider) {
 	if provider == nil {
 		provider = func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
@@ -101,7 +104,16 @@ func normalizeServerProviders(provider SnapshotProvider, setupProvider FunnelSet
 			return domain.BufferedLogSnapshot{}, nil
 		}
 	}
-	return provider, setupProvider, logProvider
+	if streamProvider == nil {
+		streamProvider = func(ctx context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error) {
+			snapshot, err := provider(ctx)
+			if err != nil {
+				return domain.SnapshotUpdate{}, nil, err
+			}
+			return domain.SnapshotUpdate{GeneratedAt: snapshot.GeneratedAt}, nil, nil
+		}
+	}
+	return provider, setupProvider, logProvider, streamProvider
 }
 
 func newAssetsFS() (fs.FS, error) {
@@ -113,8 +125,8 @@ func newAssetsFS() (fs.FS, error) {
 }
 
 // NewUIHandler returns the embedded dashboard and JSON state API without webhook routes.
-func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider) (http.Handler, error) {
-	provider, setupProvider, logProvider = normalizeServerProviders(provider, setupProvider, logProvider)
+func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, streamProvider SnapshotStreamProvider) (http.Handler, error) {
+	provider, setupProvider, logProvider, streamProvider = normalizeServerProviders(provider, setupProvider, logProvider, streamProvider)
 	assets, err := newAssetsFS()
 	if err != nil {
 		return nil, err
@@ -125,6 +137,49 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 	mux.HandleFunc("/linear", notFoundHandler)
 	mux.HandleFunc("/github", notFoundHandler)
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
+	mux.HandleFunc("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		initial, updates, err := streamProvider(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Accel-Buffering", "no")
+		if err := writeSSEEvent(w, "ready", initial); err != nil {
+			return
+		}
+		flusher.Flush()
+
+		keepalive := time.NewTicker(15 * time.Second)
+		defer keepalive.Stop()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case update := <-updates:
+				if err := writeSSEEvent(w, "snapshot", update); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-keepalive.C:
+				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+		}
+	})
 	mux.HandleFunc("/api/v1/logs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -325,8 +380,8 @@ func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretPr
 }
 
 // NewObservabilityServer returns the combined UI and webhook handler used in tests and previews.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
-	uiHandler, err := NewUIHandler(provider, issueProvider, setupProvider, logProvider)
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, streamProvider SnapshotStreamProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+	uiHandler, err := NewUIHandler(provider, issueProvider, setupProvider, logProvider, streamProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -386,6 +441,20 @@ func writeJSONError(w http.ResponseWriter, status int, err error) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
+func writeSSEEvent(w http.ResponseWriter, name string, payload domain.SnapshotUpdate) error {
+	if _, err := fmt.Fprintf(w, "event: %s\n", name); err != nil {
+		return err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", body); err != nil {
+		return err
+	}
+	return nil
+}
+
 func parseLogLevel(raw string) (*slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
@@ -413,6 +482,41 @@ type demoSnapshotSource struct {
 
 func newDemoSnapshotSource() *demoSnapshotSource {
 	return &demoSnapshotSource{}
+}
+
+func (s *demoSnapshotSource) Stream(ctx context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error) {
+	snapshot, err := s.Snapshot(ctx)
+	if err != nil {
+		return domain.SnapshotUpdate{}, nil, err
+	}
+
+	updates := make(chan domain.SnapshotUpdate, 1)
+	go func() {
+		ticker := time.NewTicker(1200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				update := domain.SnapshotUpdate{GeneratedAt: now.UTC()}
+				select {
+				case updates <- update:
+				default:
+					select {
+					case <-updates:
+					default:
+					}
+					select {
+					case updates <- update:
+					default:
+					}
+				}
+			}
+		}
+	}()
+
+	return domain.SnapshotUpdate{GeneratedAt: snapshot.GeneratedAt}, updates, nil
 }
 
 func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) {
