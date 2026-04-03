@@ -698,6 +698,50 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
+	case strings.Contains(request.Query, "IssueMetadataAttachments"):
+		s.mu.Lock()
+		metadata := s.metadata
+		s.mu.Unlock()
+		nodes := []map[string]any{}
+		if metadata != nil {
+			now := time.Now().UTC().Format(time.RFC3339)
+			nodes = append(nodes, map[string]any{
+				"id":        "attachment-1",
+				"title":     "Colin metadata",
+				"url":       "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+				"createdAt": now,
+				"updatedAt": now,
+				"metadata":  metadata,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issue": map[string]any{
+					"attachments": map[string]any{
+						"nodes": nodes,
+					},
+				},
+			},
+		})
+	case strings.Contains(request.Query, "attachmentUpdate"):
+		input, _ := request.Variables["input"].(map[string]any)
+		metadata, _ := input["metadata"].(map[string]any)
+		s.mu.Lock()
+		s.metadata = metadata
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"attachmentUpdate": map[string]any{
+					"success": true,
+					"attachment": map[string]any{
+						"id":       "attachment-1",
+						"title":    "Colin metadata",
+						"url":      "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+						"metadata": metadata,
+					},
+				},
+			},
+		})
 	case strings.Contains(request.Query, "IssueTeamStates"):
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
@@ -792,10 +836,12 @@ func (s *fakeLinearServer) issueNode(state string) map[string]any {
 	attachments := []map[string]any{}
 	if metadata != nil {
 		attachments = append(attachments, map[string]any{
-			"id":       "attachment-1",
-			"title":    "Colin metadata",
-			"url":      "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
-			"metadata": metadata,
+			"id":        "attachment-1",
+			"title":     "Colin metadata",
+			"url":       "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+			"createdAt": now,
+			"updatedAt": now,
+			"metadata":  metadata,
 		})
 	}
 	return map[string]any{

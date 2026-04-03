@@ -742,6 +742,8 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	t.Parallel()
 
 	var (
+		queryCount  int
+		createCount int
 		gotIssueID  string
 		gotTitle    string
 		gotURL      string
@@ -756,24 +758,41 @@ func TestUpsertIssueMetadata(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("Decode() error = %v", err)
 		}
-		input, _ := request.Variables["input"].(map[string]any)
-		gotIssueID, _ = input["issueId"].(string)
-		gotTitle, _ = input["title"].(string)
-		gotURL, _ = input["url"].(string)
-		gotMetadata, _ = input["metadata"].(map[string]any)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"attachmentCreate": map[string]any{
-					"success": true,
-					"attachment": map[string]any{
-						"id":       "attachment-1",
-						"title":    gotTitle,
-						"url":      gotURL,
-						"metadata": gotMetadata,
+		switch {
+		case strings.Contains(request.Query, "query IssueMetadataAttachments"):
+			queryCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{},
+						},
 					},
 				},
-			},
-		})
+			})
+		case strings.Contains(request.Query, "mutation UpsertIssueMetadata"):
+			createCount++
+			input, _ := request.Variables["input"].(map[string]any)
+			gotIssueID, _ = input["issueId"].(string)
+			gotTitle, _ = input["title"].(string)
+			gotURL, _ = input["url"].(string)
+			gotMetadata, _ = input["metadata"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentCreate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       "attachment-1",
+							"title":    gotTitle,
+							"url":      gotURL,
+							"metadata": gotMetadata,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
 	}))
 	defer server.Close()
 
@@ -813,6 +832,12 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("UpsertIssueMetadata() error = %v", err)
+	}
+	if queryCount != 1 {
+		t.Fatalf("queryCount = %d, want 1", queryCount)
+	}
+	if createCount != 1 {
+		t.Fatalf("createCount = %d, want 1", createCount)
 	}
 	if gotIssueID != "issue-1" {
 		t.Fatalf("issueId = %q, want %q", gotIssueID, "issue-1")
@@ -912,30 +937,52 @@ func TestUpsertIssueMetadata(t *testing.T) {
 func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
 	t.Parallel()
 
-	var gotURL string
+	var (
+		queryCount  int
+		createCount int
+		gotURL      string
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var request struct {
+			Query     string         `json:"query"`
 			Variables map[string]any `json:"variables"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("Decode() error = %v", err)
 		}
-		input, _ := request.Variables["input"].(map[string]any)
-		gotURL, _ = input["url"].(string)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"attachmentCreate": map[string]any{
-					"success": true,
-					"attachment": map[string]any{
-						"id":       "attachment-1",
-						"title":    "Colin metadata",
-						"url":      gotURL,
-						"metadata": map[string]any{},
+		switch {
+		case strings.Contains(request.Query, "query IssueMetadataAttachments"):
+			queryCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{},
+						},
 					},
 				},
-			},
-		})
+			})
+		case strings.Contains(request.Query, "mutation UpsertIssueMetadata"):
+			createCount++
+			input, _ := request.Variables["input"].(map[string]any)
+			gotURL, _ = input["url"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentCreate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       "attachment-1",
+							"title":    "Colin metadata",
+							"url":      gotURL,
+							"metadata": map[string]any{},
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
 	}))
 	defer server.Close()
 
@@ -952,8 +999,219 @@ func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
 	if _, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{}); err != nil {
 		t.Fatalf("UpsertIssueMetadata() error = %v", err)
 	}
+	if queryCount != 1 {
+		t.Fatalf("queryCount = %d, want 1", queryCount)
+	}
+	if createCount != 1 {
+		t.Fatalf("createCount = %d, want 1", createCount)
+	}
 	if gotURL != "https://colin.tail.example.ts.net/linear/issues/issue-1/metadata" {
 		t.Fatalf("url = %q", gotURL)
+	}
+}
+
+func TestUpsertIssueMetadataUpdatesExistingAttachment(t *testing.T) {
+	t.Parallel()
+
+	var (
+		queryCount      int
+		updateCount     int
+		gotAttachmentID string
+		gotTitle        string
+		gotMetadata     map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "query IssueMetadataAttachments"):
+			queryCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":        "attachment-7",
+									"title":     "Colin metadata",
+									"url":       "https://colin.example.test/root/linear/issues/issue-1/metadata",
+									"createdAt": "2026-03-29T17:00:00Z",
+									"updatedAt": "2026-03-29T17:10:00Z",
+									"metadata": map[string]any{
+										"slack_message_ts": "1743270000.123456",
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpdateIssueMetadata"):
+			updateCount++
+			gotAttachmentID, _ = request.Variables["id"].(string)
+			input, _ := request.Variables["input"].(map[string]any)
+			gotTitle, _ = input["title"].(string)
+			if _, ok := input["url"]; ok {
+				t.Fatal("attachment update input unexpectedly included url")
+			}
+			gotMetadata, _ = input["metadata"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentUpdate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       gotAttachmentID,
+							"title":    gotTitle,
+							"url":      "https://colin.example.test/root/linear/issues/issue-1/metadata",
+							"metadata": gotMetadata,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
+	}
+
+	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
+		SlackMessageTS: "1743270001.654321",
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueMetadata() error = %v", err)
+	}
+	if queryCount != 1 {
+		t.Fatalf("queryCount = %d, want 1", queryCount)
+	}
+	if updateCount != 1 {
+		t.Fatalf("updateCount = %d, want 1", updateCount)
+	}
+	if gotAttachmentID != "attachment-7" {
+		t.Fatalf("attachment id = %q, want %q", gotAttachmentID, "attachment-7")
+	}
+	if gotTitle != "Colin metadata" {
+		t.Fatalf("title = %q, want %q", gotTitle, "Colin metadata")
+	}
+	if gotMetadata["slack_message_ts"] != "1743270001.654321" {
+		t.Fatalf("slack_message_ts = %v, want updated timestamp", gotMetadata["slack_message_ts"])
+	}
+	if metadata.AttachmentID != "attachment-7" {
+		t.Fatalf("metadata.AttachmentID = %q, want %q", metadata.AttachmentID, "attachment-7")
+	}
+}
+
+func TestUpsertIssueMetadataUpdatesNewestDuplicateAttachment(t *testing.T) {
+	t.Parallel()
+
+	var (
+		createCount      int
+		gotAttachmentID  string
+		updateCount      int
+		expectedUpdateID = "attachment-new"
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "query IssueMetadataAttachments"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"id":        "attachment-old",
+									"title":     "Colin metadata",
+									"url":       "https://colin.example.test/root/linear/issues/issue-1/metadata",
+									"createdAt": "2026-03-29T17:00:00Z",
+									"updatedAt": "2026-03-29T17:01:00Z",
+									"metadata": map[string]any{
+										"slack_message_ts": "1743270000.111111",
+									},
+								},
+								{
+									"id":        expectedUpdateID,
+									"title":     "Colin metadata",
+									"url":       "https://colin.example.test/root/linear/issues/issue-1/metadata",
+									"createdAt": "2026-03-29T17:02:00Z",
+									"updatedAt": "2026-03-29T17:03:00Z",
+									"metadata": map[string]any{
+										"slack_message_ts": "1743270000.222222",
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpdateIssueMetadata"):
+			updateCount++
+			gotAttachmentID, _ = request.Variables["id"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentUpdate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       gotAttachmentID,
+							"title":    "Colin metadata",
+							"url":      "https://colin.example.test/root/linear/issues/issue-1/metadata",
+							"metadata": map[string]any{"slack_message_ts": "1743270000.333333"},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpsertIssueMetadata"):
+			createCount++
+			t.Fatalf("unexpected attachmentCreate mutation when duplicate metadata attachments already exist")
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
+	}
+
+	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
+		SlackMessageTS: "1743270000.333333",
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueMetadata() error = %v", err)
+	}
+	if updateCount != 1 {
+		t.Fatalf("updateCount = %d, want 1", updateCount)
+	}
+	if createCount != 0 {
+		t.Fatalf("createCount = %d, want 0", createCount)
+	}
+	if gotAttachmentID != expectedUpdateID {
+		t.Fatalf("attachment id = %q, want %q", gotAttachmentID, expectedUpdateID)
+	}
+	if metadata.AttachmentID != expectedUpdateID {
+		t.Fatalf("metadata.AttachmentID = %q, want %q", metadata.AttachmentID, expectedUpdateID)
 	}
 }
 
@@ -2030,6 +2288,95 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743270000123456" {
 		t.Fatalf("SlackPermalink = %q, want permalink", issues[0].ColinMetadata.SlackPermalink)
+	}
+}
+
+func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-165",
+							"title":      "PR merge failure",
+							"state":      map[string]any{"name": "In Progress"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":        "attachment-old",
+										"title":     "Colin metadata",
+										"url":       "https://colin.example.test/linear/issues/issue-1/metadata",
+										"createdAt": "2026-04-03T15:32:00Z",
+										"updatedAt": "2026-04-03T15:32:10Z",
+										"metadata": map[string]any{
+											"slack_channel_id": "C12345678",
+										},
+									},
+									{
+										"id":        "attachment-new",
+										"title":     "Colin metadata",
+										"url":       "https://colin.example.test/linear/issues/issue-1/metadata",
+										"createdAt": "2026-04-03T15:33:00Z",
+										"updatedAt": "2026-04-03T15:33:10Z",
+										"metadata": map[string]any{
+											"slack_channel_id":          "C12345678",
+											"slack_message_ts":          "1743723180.123456",
+											"slack_permalink":           "https://example.slack.com/archives/C12345678/p1743723180123456",
+											"slack_summary_fingerprint": "fp-2",
+										},
+									},
+								},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"In Progress"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if issues[0].ColinMetadata == nil {
+		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
+	}
+	if issues[0].ColinMetadata.AttachmentID != "attachment-new" {
+		t.Fatalf("AttachmentID = %q, want newest metadata attachment", issues[0].ColinMetadata.AttachmentID)
+	}
+	if issues[0].ColinMetadata.SlackMessageTS != "1743723180.123456" {
+		t.Fatalf("SlackMessageTS = %q, want newest metadata timestamp", issues[0].ColinMetadata.SlackMessageTS)
+	}
+	if issues[0].ColinMetadata.SlackSummaryFingerprint != "fp-2" {
+		t.Fatalf("SlackSummaryFingerprint = %q, want newest fingerprint", issues[0].ColinMetadata.SlackSummaryFingerprint)
 	}
 }
 

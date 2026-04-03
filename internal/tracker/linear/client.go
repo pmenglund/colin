@@ -293,14 +293,16 @@ query IssueByID($id: String!) {
         }
       }
     }
-    attachments(first: 50) {
-      nodes {
-        id
-        title
-        url
-        metadata
-      }
-    }
+	    attachments(first: 50) {
+	      nodes {
+	        id
+	        title
+	        url
+	        createdAt
+	        updatedAt
+	        metadata
+	      }
+	    }
     comments(first: 50) {
       nodes {
         id
@@ -540,6 +542,14 @@ mutation CreateCommentReply($input: CommentCreateInput!) {
 
 // UpsertIssueMetadata stores Colin-specific metadata on the Linear issue via a dedicated attachment.
 func (c *Client) UpsertIssueMetadata(ctx context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	existingMetadata, err := c.fetchIssueMetadataAttachments(ctx, issueID)
+	if err != nil {
+		return domain.ColinMetadata{}, err
+	}
+	if attachment, ok := selectCanonicalMetadataAttachment(existingMetadata); ok {
+		return c.updateIssueMetadata(ctx, attachment.metadata.AttachmentID, metadata)
+	}
+
 	const query = `
 mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
   attachmentCreate(input: $input) {
@@ -569,6 +579,41 @@ mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
 		return domain.ColinMetadata{}, ErrUnknownPayload
 	}
 	attachment, ok := nestedMap(resp, "data", "attachmentCreate", "attachment")
+	if !ok {
+		return domain.ColinMetadata{}, ErrUnknownPayload
+	}
+	return parseColinMetadataAttachment(attachment)
+}
+
+func (c *Client) updateIssueMetadata(ctx context.Context, attachmentID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	const query = `
+mutation UpdateIssueMetadata($id: String!, $input: AttachmentUpdateInput!) {
+  attachmentUpdate(id: $id, input: $input) {
+    success
+    attachment {
+      id
+      title
+      url
+      metadata
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"id": attachmentID,
+		"input": map[string]any{
+			"title":    colinMetadataAttachmentTitle,
+			"metadata": colinMetadataValue(metadata),
+		},
+	})
+	if err != nil {
+		return domain.ColinMetadata{}, err
+	}
+	success, _ := nestedBool(resp, "data", "attachmentUpdate", "success")
+	if !success {
+		return domain.ColinMetadata{}, ErrUnknownPayload
+	}
+	attachment, ok := nestedMap(resp, "data", "attachmentUpdate", "attachment")
 	if !ok {
 		return domain.ColinMetadata{}, ErrUnknownPayload
 	}
@@ -704,14 +749,16 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
           }
         }
       }
-      attachments(first: 50) {
-        nodes {
-          id
-          title
-          url
-          metadata
-        }
-      }
+	      attachments(first: 50) {
+	        nodes {
+	          id
+	          title
+	          url
+	          createdAt
+	          updatedAt
+	          metadata
+	        }
+	      }
       comments(first: 50) {
         nodes {
           id
@@ -1162,6 +1209,12 @@ type linearStateChange struct {
 	ToState   string
 }
 
+type colinMetadataAttachment struct {
+	metadata  domain.ColinMetadata
+	createdAt *time.Time
+	updatedAt *time.Time
+}
+
 func extractReviewFeedback(state string, node map[string]any) []domain.ReviewFeedback {
 	if !strings.EqualFold(strings.TrimSpace(state), "Todo") {
 		return nil
@@ -1327,14 +1380,19 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	if !ok {
 		return nil
 	}
+	metadataAttachments := make([]colinMetadataAttachment, 0, len(attachments))
 	for _, attachment := range attachments {
-		metadata, err := parseColinMetadataAttachment(attachment)
+		metadata, err := parseColinMetadataAttachmentNode(attachment)
 		if err != nil {
 			continue
 		}
-		return &metadata
+		metadataAttachments = append(metadataAttachments, metadata)
 	}
-	return nil
+	selected, ok := selectCanonicalMetadataAttachment(metadataAttachments)
+	if !ok {
+		return nil
+	}
+	return &selected.metadata
 }
 
 func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
@@ -1390,11 +1448,55 @@ query IssueExecPlans($id: String!) {
 	return plans, nil
 }
 
+func (c *Client) fetchIssueMetadataAttachments(ctx context.Context, issueID string) ([]colinMetadataAttachment, error) {
+	const query = `
+query IssueMetadataAttachments($id: String!) {
+  issue(id: $id) {
+    attachments(first: 50) {
+      nodes {
+        id
+        title
+        url
+        createdAt
+        updatedAt
+        metadata
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"id": issueID})
+	if err != nil {
+		return nil, err
+	}
+	attachments, ok := nestedSlice(resp, "data", "issue", "attachments", "nodes")
+	if !ok {
+		return nil, ErrUnknownPayload
+	}
+	metadataAttachments := make([]colinMetadataAttachment, 0, len(attachments))
+	for _, attachment := range attachments {
+		metadata, err := parseColinMetadataAttachmentNode(attachment)
+		if err != nil {
+			continue
+		}
+		metadataAttachments = append(metadataAttachments, metadata)
+	}
+	return metadataAttachments, nil
+}
+
 func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, error) {
+	attachment, err := parseColinMetadataAttachmentNode(node)
+	if err != nil {
+		return domain.ColinMetadata{}, err
+	}
+	return attachment.metadata, nil
+}
+
+func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachment, error) {
 	title, _ := stringValue(node["title"])
 	url, _ := stringValue(node["url"])
 	if strings.TrimSpace(title) != colinMetadataAttachmentTitle || !isColinMetadataURL(url) {
-		return domain.ColinMetadata{}, errors.New("not a Colin metadata attachment")
+		return colinMetadataAttachment{}, errors.New("not a Colin metadata attachment")
 	}
 
 	metadataMap, _ := node["metadata"].(map[string]any)
@@ -1470,7 +1572,11 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 		}
 		metadata.CodexOutput = output
 	}
-	return metadata, nil
+	return colinMetadataAttachment{
+		metadata:  metadata,
+		createdAt: parseAttachmentTimestamp(node["createdAt"]),
+		updatedAt: parseAttachmentTimestamp(node["updatedAt"]),
+	}, nil
 }
 
 func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) {
@@ -1536,6 +1642,58 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		value["codex_output"] = output
 	}
 	return value
+}
+
+func selectCanonicalMetadataAttachment(attachments []colinMetadataAttachment) (colinMetadataAttachment, bool) {
+	if len(attachments) == 0 {
+		return colinMetadataAttachment{}, false
+	}
+	best := attachments[0]
+	for _, candidate := range attachments[1:] {
+		if compareMetadataAttachment(candidate, best) > 0 {
+			best = candidate
+		}
+	}
+	return best, true
+}
+
+func compareMetadataAttachment(left, right colinMetadataAttachment) int {
+	if cmp := compareOptionalTime(left.updatedAt, right.updatedAt); cmp != 0 {
+		return cmp
+	}
+	if cmp := compareOptionalTime(left.createdAt, right.createdAt); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(strings.TrimSpace(left.metadata.AttachmentID), strings.TrimSpace(right.metadata.AttachmentID))
+}
+
+func compareOptionalTime(left, right *time.Time) int {
+	switch {
+	case left == nil && right == nil:
+		return 0
+	case left == nil:
+		return -1
+	case right == nil:
+		return 1
+	case left.Before(*right):
+		return -1
+	case left.After(*right):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func parseAttachmentTimestamp(value any) *time.Time {
+	raw, ok := stringValue(value)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 func colinExecPlanValue(plan domain.ExecPlan) map[string]any {
