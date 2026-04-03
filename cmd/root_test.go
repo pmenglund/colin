@@ -464,41 +464,20 @@ func TestSetupGitHubHelpListsSubcommands(t *testing.T) {
 	}
 }
 
-func TestRunPassesWorkflowFlagToSetupGitHubWebhook(t *testing.T) {
+func TestRunRejectsRemovedSetupGitHubWebhookAlias(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	var gotWorkflow string
 
-	deps := commandDeps{
-		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
-			t.Fatal("runRoot should not be called")
-			return 0
-		},
-		runConfig: func(cmd *cobra.Command, opts configOptions) int {
-			t.Fatal("runConfig should not be called")
-			return 0
-		},
-		runSetupGitHubWebhook: func(cmd *cobra.Command, workflowPath string) int {
-			gotWorkflow = workflowPath
-			return 0
-		},
-		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
-			t.Fatal("runSetupTailscale should not be called")
-			return 0
-		},
-		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
-			t.Fatal("runSetupLinearWebhook should not be called")
-			return 0
-		},
+	if code := run([]string{"setup", "github-webhook"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
+		t.Fatalf("run(setup github-webhook) exit code = %d, want 2", code)
 	}
-
-	if code := run([]string{"setup", "github-webhook", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
-		t.Fatalf("run(setup github-webhook --workflow) exit code = %d, want 0", code)
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if gotWorkflow != "/tmp/custom.md" {
-		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	if got := stderr.String(); !strings.Contains(got, "unknown command \"github-webhook\" for \"colin setup\"") {
+		t.Fatalf("stderr = %q, want removed command error", got)
 	}
 }
 
@@ -656,41 +635,20 @@ func TestRunPassesWorkflowFlagToSetupLinearWebhookSubcommand(t *testing.T) {
 	}
 }
 
-func TestRunPassesWorkflowFlagToSetupLinearApp(t *testing.T) {
+func TestRunRejectsRemovedSetupLinearAppAlias(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	var gotWorkflow string
 
-	deps := commandDeps{
-		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
-			t.Fatal("runRoot should not be called")
-			return 0
-		},
-		runConfig: func(cmd *cobra.Command, opts configOptions) int {
-			t.Fatal("runConfig should not be called")
-			return 0
-		},
-		runSetupLinearApp: func(cmd *cobra.Command, workflowPath string) int {
-			gotWorkflow = workflowPath
-			return 0
-		},
-		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
-			t.Fatal("runSetupTailscale should not be called")
-			return 0
-		},
-		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
-			t.Fatal("runSetupLinearWebhook should not be called")
-			return 0
-		},
+	if code := run([]string{"setup", "linear-app"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
+		t.Fatalf("run(setup linear-app) exit code = %d, want 2", code)
 	}
-
-	if code := run([]string{"setup", "linear-app", "--workflow", "/tmp/custom.md"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
-		t.Fatalf("run(setup linear-app --workflow) exit code = %d, want 0", code)
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if gotWorkflow != "/tmp/custom.md" {
-		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "/tmp/custom.md")
+	if got := stderr.String(); !strings.Contains(got, "unknown command \"linear-app\" for \"colin setup\"") {
+		t.Fatalf("stderr = %q, want removed command error", got)
 	}
 }
 

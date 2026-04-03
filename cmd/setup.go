@@ -27,10 +27,8 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.AddCommand(newSetupRepoCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupGitHubCmd(stdin, stdout, stderr, opts, deps))
-	cmd.AddCommand(newSetupGitHubWebhookCompatCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupLinearCmd(stdin, stdout, stderr, opts, deps))
-	cmd.AddCommand(newSetupLinearAppCompatCmd(stdin, stdout, stderr, opts, deps))
 
 	return cmd
 }
@@ -107,22 +105,6 @@ func newSetupGitHubWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *r
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.Example = "  colin setup github webhook\n  colin --workflow /path/to/WORKFLOW.md setup github webhook"
-	return cmd
-}
-
-func newSetupGitHubWebhookCompatCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "github-webhook",
-		Short:         "Print the GitHub webhook settings for this workflow",
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		Hidden:        true,
-		Args:          maximumArgs(0),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupGitHubWebhook(cmd, opts.workflowPath))
-		},
-	}
-	configureCommand(cmd, stdin, stdout, stderr)
 	return cmd
 }
 
@@ -208,21 +190,5 @@ func newSetupLinearAppCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootO
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.Example = "  colin setup linear app\n  colin --workflow /path/to/WORKFLOW.md setup linear app"
-	return cmd
-}
-
-func newSetupLinearAppCompatCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "linear-app",
-		Short:         "Print the self-hosted Linear app sketch for this workflow",
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		Hidden:        true,
-		Args:          maximumArgs(0),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupLinearApp(cmd, opts.workflowPath))
-		},
-	}
-	configureCommand(cmd, stdin, stdout, stderr)
 	return cmd
 }
