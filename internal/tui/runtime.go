@@ -72,11 +72,17 @@ type model struct {
 	setup             domain.FunnelSetupStatus
 	logOffset         int
 	selectedLog       int
+	viewedAlerts      logAlertState
 	lastRefresh       time.Time
 	refreshErr        error
 	fatalErr          error
 	shutdownRequested bool
 	forceStopIssued   bool
+}
+
+type logAlertState struct {
+	count     int
+	timestamp time.Time
 }
 
 func Run(ctx context.Context, in io.Reader, out io.Writer, source Source, serviceErrs <-chan error, requestShutdownDrain func() bool, forceStop func()) error {
@@ -152,6 +158,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot = msg.snapshot
 		m.logs = msg.logs
 		m.setup = msg.setup
+		if m.mode == modeLogs && msg.err == nil {
+			m.markLogAlertsViewed()
+		}
 		m.refreshErr = msg.err
 		m.lastRefresh = time.Now().UTC()
 		if m.mode == modeLogs {
@@ -213,6 +222,7 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if m.mode == modeOverview {
 			m.mode = modeLogs
+			m.markLogAlertsViewed()
 			if m.selectedLog < 0 || m.selectedLog >= len(m.logs.Entries) {
 				m.selectLastLog()
 			} else {
@@ -398,6 +408,42 @@ func (m *model) ensureSelectedLogVisible() {
 		m.logOffset = m.selectedLog - m.visibleLogLines() + 1
 	}
 	m.logOffset = clampInt(m.logOffset, 0, maxOffset)
+}
+
+func (m model) currentLogAlerts() logAlertState {
+	var state logAlertState
+	for _, entry := range m.logs.Entries {
+		if !isLogAlertLevel(entry.Level) {
+			continue
+		}
+		state.count++
+		state.timestamp = entry.Timestamp
+	}
+	return state
+}
+
+func (m *model) markLogAlertsViewed() {
+	m.viewedAlerts = m.currentLogAlerts()
+}
+
+func (m model) hasUnseenLogAlerts() bool {
+	current := m.currentLogAlerts()
+	if current.count == 0 {
+		return false
+	}
+	if current.count > m.viewedAlerts.count {
+		return true
+	}
+	return current.timestamp.After(m.viewedAlerts.timestamp)
+}
+
+func isLogAlertLevel(level string) bool {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "WARN", "ERROR":
+		return true
+	default:
+		return false
+	}
 }
 
 func clampInt(value int, low int, high int) int {
