@@ -147,6 +147,39 @@ func TestSyncIssueUpdatesExistingMessage(t *testing.T) {
 	}
 }
 
+func TestSyncIssueUsesConfiguredChannelForExistingMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		updateErr: slackapi.SlackErrorResponse{Err: "message_not_found"},
+	}
+	notifier := newWithClient("C12345678", client)
+
+	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
+		Identifier:  "COLIN-153",
+		Title:       "Slack support",
+		State:       "Merge",
+		NextAction:  "Colin is handling merge automation.",
+		Fingerprint: "fp-2",
+	}, notify.IssueNotificationState{
+		ChannelID:   "C87654321",
+		MessageTS:   "1743630000.123456",
+		Fingerprint: "fp-1",
+	})
+	if err != nil {
+		t.Fatalf("SyncIssue() error = %v", err)
+	}
+	if client.updateChannel != "C12345678" {
+		t.Fatalf("updateChannel = %q, want configured channel", client.updateChannel)
+	}
+	if client.postChannel != "C12345678" {
+		t.Fatalf("postChannel = %q, want configured channel", client.postChannel)
+	}
+	if state.ChannelID != "C12345678" {
+		t.Fatalf("state.ChannelID = %q, want configured channel", state.ChannelID)
+	}
+}
+
 func TestSyncIssueRepostsWhenMessageWasDeleted(t *testing.T) {
 	t.Parallel()
 
@@ -174,6 +207,60 @@ func TestSyncIssueRepostsWhenMessageWasDeleted(t *testing.T) {
 	}
 	if client.postCalls != 1 {
 		t.Fatalf("postCalls = %d, want 1", client.postCalls)
+	}
+}
+
+func TestSyncIssuePersistsReferenceWhenPermalinkLookupFails(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		permalinkErr: errors.New("missing_scope"),
+	}
+	notifier := newWithClient("C12345678", client)
+
+	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
+		Identifier:  "COLIN-153",
+		Title:       "Slack support",
+		State:       "Review",
+		NextAction:  "Review the PR.",
+		Fingerprint: "fp-5",
+	}, notify.IssueNotificationState{})
+	if err != nil {
+		t.Fatalf("SyncIssue() error = %v, want nil when permalink lookup fails", err)
+	}
+	if state.ChannelID != "C12345678" || state.MessageTS != "1743630000.123456" {
+		t.Fatalf("state = %#v, want persisted channel and timestamp", state)
+	}
+	if state.Permalink != "" {
+		t.Fatalf("state.Permalink = %q, want empty permalink on lookup failure", state.Permalink)
+	}
+}
+
+func TestSyncIssueKeepsExistingPermalinkWhenLookupFailsForSameMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		permalinkErr: errors.New("missing_scope"),
+	}
+	notifier := newWithClient("C12345678", client)
+
+	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
+		Identifier:  "COLIN-153",
+		Title:       "Slack support",
+		State:       "Merge",
+		NextAction:  "Colin is handling merge automation.",
+		Fingerprint: "fp-6",
+	}, notify.IssueNotificationState{
+		ChannelID:   "C12345678",
+		MessageTS:   "1743630000.123456",
+		Permalink:   "https://example.slack.com/archives/C12345678/p1743630000123456",
+		Fingerprint: "fp-5",
+	})
+	if err != nil {
+		t.Fatalf("SyncIssue() error = %v, want nil when permalink lookup fails", err)
+	}
+	if state.Permalink != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("state.Permalink = %q, want existing permalink preserved", state.Permalink)
 	}
 }
 

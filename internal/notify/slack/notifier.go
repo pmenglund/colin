@@ -47,14 +47,11 @@ func (n *Notifier) SyncIssue(ctx context.Context, summary notify.IssueSummary, e
 	}
 
 	options := n.messageOptions(summary)
-	channelID := strings.TrimSpace(existing.ChannelID)
-	if channelID == "" {
-		channelID = n.channelID
-	}
+	channelID := n.channelID
 	if messageTS := strings.TrimSpace(existing.MessageTS); messageTS != "" {
 		channel, timestamp, _, err := n.client.UpdateMessageContext(ctx, channelID, messageTS, options...)
 		if err == nil {
-			return n.notificationState(ctx, summary, channel, timestamp)
+			return n.notificationState(ctx, summary, existing, channel, timestamp), nil
 		}
 		if !isMessageNotFound(err) {
 			return notify.IssueNotificationState{}, err
@@ -65,25 +62,29 @@ func (n *Notifier) SyncIssue(ctx context.Context, summary notify.IssueSummary, e
 	if err != nil {
 		return notify.IssueNotificationState{}, err
 	}
-	return n.notificationState(ctx, summary, channel, timestamp)
+	return n.notificationState(ctx, summary, notify.IssueNotificationState{}, channel, timestamp), nil
 }
 
-func (n *Notifier) notificationState(ctx context.Context, summary notify.IssueSummary, channelID string, messageTS string) (notify.IssueNotificationState, error) {
+func (n *Notifier) notificationState(ctx context.Context, summary notify.IssueSummary, existing notify.IssueNotificationState, channelID string, messageTS string) notify.IssueNotificationState {
 	channelID = strings.TrimSpace(channelID)
 	messageTS = strings.TrimSpace(messageTS)
+	state := notify.IssueNotificationState{
+		ChannelID:   channelID,
+		MessageTS:   messageTS,
+		Fingerprint: strings.TrimSpace(summary.Fingerprint),
+	}
 	permalink, err := n.client.GetPermalinkContext(ctx, &slackapi.PermalinkParameters{
 		Channel: channelID,
 		Ts:      messageTS,
 	})
 	if err != nil {
-		return notify.IssueNotificationState{}, err
+		if sameMessage(channelID, messageTS, existing) {
+			state.Permalink = strings.TrimSpace(existing.Permalink)
+		}
+		return state
 	}
-	return notify.IssueNotificationState{
-		ChannelID:   channelID,
-		MessageTS:   messageTS,
-		Permalink:   strings.TrimSpace(permalink),
-		Fingerprint: strings.TrimSpace(summary.Fingerprint),
-	}, nil
+	state.Permalink = strings.TrimSpace(permalink)
+	return state
 }
 
 func (n *Notifier) messageOptions(summary notify.IssueSummary) []slackapi.MsgOption {
@@ -179,4 +180,9 @@ func safeBlockText(value string) string {
 func isMessageNotFound(err error) bool {
 	var response slackapi.SlackErrorResponse
 	return errors.As(err, &response) && strings.EqualFold(strings.TrimSpace(response.Err), "message_not_found")
+}
+
+func sameMessage(channelID string, messageTS string, existing notify.IssueNotificationState) bool {
+	return channelID == strings.TrimSpace(existing.ChannelID) &&
+		messageTS == strings.TrimSpace(existing.MessageTS)
 }
