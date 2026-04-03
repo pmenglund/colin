@@ -25,6 +25,8 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
     "/linear/issues/issue-demo-1/metadata",
   );
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
+  await expect(page.getByTestId("context-window-COLIN-7")).toHaveText("Context window: 70% left (78.4K used / 258K)");
+  await expect(page.getByTestId("context-window-bar-COLIN-7")).toHaveAttribute("aria-valuenow", "30");
 });
 
 test("worker card expands and refresh updates the fragment without reloading the shell", async ({ page }) => {

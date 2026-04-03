@@ -502,6 +502,31 @@ a {
   line-height: 1.45;
 }
 
+.context-window-usage {
+  margin-top: 0.8rem;
+}
+
+.context-window-label {
+  color: var(--text);
+}
+
+.context-window-bar {
+  position: relative;
+  overflow: hidden;
+  height: 0.7rem;
+  margin-top: 0.55rem;
+  border: 1px solid rgba(103, 214, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.context-window-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0.92), rgba(103, 214, 255, 0.88));
+  box-shadow: 0 0 18px rgba(103, 214, 255, 0.2);
+}
+
 .worker-output {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 1rem;

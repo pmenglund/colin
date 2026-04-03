@@ -149,16 +149,17 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 			c.lastTurnTextFromCompletedItem = true
 		}
 		c.emit(Event{
-			Event:      eventName,
-			Timestamp:  time.Now().UTC(),
-			SessionID:  c.sessionID,
-			ThreadID:   c.threadID,
-			TurnID:     turnID,
-			PID:        c.pid,
-			Message:    summary,
-			Usage:      extractUsage(msg),
-			RateLimits: extractRateLimits(msg),
-			Raw:        msg,
+			Event:         eventName,
+			Timestamp:     time.Now().UTC(),
+			SessionID:     c.sessionID,
+			ThreadID:      c.threadID,
+			TurnID:        turnID,
+			PID:           c.pid,
+			Message:       summary,
+			Usage:         extractUsage(msg),
+			ContextWindow: extractContextWindowUsage(msg),
+			RateLimits:    extractRateLimits(msg),
+			Raw:           msg,
 		})
 
 		switch note.Method {

@@ -61,19 +61,20 @@ func TestPageRendersDashboardShell(t *testing.T) {
 			},
 		},
 		Running: []domain.SnapshotRunning{{
-			Identifier:   "COLIN-93",
-			Title:        "Add live dashboard",
-			URL:          &issueURL,
-			State:        "In Progress",
-			SessionID:    "session-1",
-			TurnCount:    3,
-			LastEvent:    "turn_completed",
-			LastMessage:  "Still working",
-			StartedAt:    time.Date(2026, 3, 28, 11, 50, 0, 0, time.UTC),
-			LastEventAt:  ptr(time.Date(2026, 3, 28, 11, 59, 0, 0, time.UTC)),
-			InputTokens:  11,
-			OutputTokens: 22,
-			TotalTokens:  33,
+			Identifier:    "COLIN-93",
+			Title:         "Add live dashboard",
+			URL:           &issueURL,
+			State:         "In Progress",
+			SessionID:     "session-1",
+			TurnCount:     3,
+			LastEvent:     "turn_completed",
+			LastMessage:   "Still working",
+			StartedAt:     time.Date(2026, 3, 28, 11, 50, 0, 0, time.UTC),
+			LastEventAt:   ptr(time.Date(2026, 3, 28, 11, 59, 0, 0, time.UTC)),
+			InputTokens:   11,
+			OutputTokens:  22,
+			TotalTokens:   33,
+			ContextWindow: &domain.ContextWindowUsage{UsedTokens: 78400, LimitTokens: 258000},
 			OutputLog: []domain.OutputLog{
 				{Timestamp: time.Date(2026, 3, 28, 11, 58, 1, 0, time.UTC), Event: "session_started", Message: "session started"},
 				{Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC), Event: "turn_completed", Message: "Still working"},
@@ -109,6 +110,8 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`View the GitHub repository`,
 		`data-testid="linear-state-counts"`,
 		`data-testid="worker-card-COLIN-93"`,
+		`data-testid="context-window-COLIN-93"`,
+		`data-testid="context-window-bar-COLIN-93"`,
 		`data-testid="worker-output-COLIN-93"`,
 		`hx-get="/"`,
 		`/api/v1/state`,
@@ -149,6 +152,8 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-timestamp="2026-03-28T11:59:02Z"`,
 		`11:59:02 UTC`,
 		`turn_completed`,
+		`Context window: 70% left (78.4K used / 258K)`,
+		`aria-valuenow="30"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)
@@ -257,6 +262,21 @@ func TestWorkerOutputSkipsRedundantTurnCompletedMessageBody(t *testing.T) {
 	}
 	if !strings.Contains(html, `class="badge badge-turn-completed"`) {
 		t.Fatalf("turn_completed should use completed badge styling\n%s", html)
+	}
+}
+
+func TestRenderContextWindowUsageUnavailableFallback(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, renderContextWindowUsage(domain.SnapshotRunning{Identifier: "COLIN-93"}))
+	if !strings.Contains(html, `data-testid="context-window-COLIN-93"`) {
+		t.Fatalf("context window label missing test id\n%s", html)
+	}
+	if !strings.Contains(html, `Context window: unavailable`) {
+		t.Fatalf("context window fallback missing text\n%s", html)
+	}
+	if strings.Contains(html, `data-testid="context-window-bar-COLIN-93"`) {
+		t.Fatalf("context window fallback should not render progress bar\n%s", html)
 	}
 }
 

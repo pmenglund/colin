@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -841,9 +842,56 @@ func runningCard(entry domain.SnapshotRunning) g.Node {
 				h.Div(h.Class("metric-line"), g.Text("Input: "+formatInt(entry.InputTokens))),
 				h.Div(h.Class("metric-line"), g.Text("Output: "+formatInt(entry.OutputTokens))),
 				h.Div(h.Class("metric-line"), g.Text("Total: "+formatInt(entry.TotalTokens))),
+				renderContextWindowUsage(entry),
 			),
 		),
 		workerOutput(entry),
+	)
+}
+
+func renderContextWindowUsage(entry domain.SnapshotRunning) g.Node {
+	label := "Context window: unavailable"
+	if entry.ContextWindow == nil || entry.ContextWindow.LimitTokens <= 0 {
+		return h.Div(
+			h.Class("context-window-usage"),
+			h.Div(
+				h.Class("metric-line"),
+				h.Class("context-window-label"),
+				h.Data("testid", "context-window-"+entry.Identifier),
+				g.Text(label),
+			),
+		)
+	}
+
+	usedPercent := contextWindowUsedPercent(entry.ContextWindow)
+	leftPercent := 100 - usedPercent
+	label = fmt.Sprintf(
+		"Context window: %d%% left (%s used / %s)",
+		leftPercent,
+		formatCompactTokens(entry.ContextWindow.UsedTokens),
+		formatCompactTokens(entry.ContextWindow.LimitTokens),
+	)
+	return h.Div(
+		h.Class("context-window-usage"),
+		h.Div(
+			h.Class("metric-line"),
+			h.Class("context-window-label"),
+			h.Data("testid", "context-window-"+entry.Identifier),
+			g.Text(label),
+		),
+		h.Div(
+			h.Class("context-window-bar"),
+			h.Data("testid", "context-window-bar-"+entry.Identifier),
+			g.Attr("role", "progressbar"),
+			g.Attr("aria-label", "Context window used"),
+			g.Attr("aria-valuemin", "0"),
+			g.Attr("aria-valuemax", "100"),
+			g.Attr("aria-valuenow", strconv.Itoa(usedPercent)),
+			h.Div(
+				h.Class("context-window-bar-fill"),
+				g.Attr("style", fmt.Sprintf("width: %d%%;", usedPercent)),
+			),
+		),
 	)
 }
 
@@ -939,6 +987,49 @@ func stateBadgeClass(state string) string {
 
 func formatInt(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func formatCompactTokens(value int64) string {
+	type unit struct {
+		suffix string
+		size   float64
+	}
+	units := []unit{
+		{suffix: "T", size: 1_000_000_000_000},
+		{suffix: "B", size: 1_000_000_000},
+		{suffix: "M", size: 1_000_000},
+		{suffix: "K", size: 1_000},
+	}
+	absValue := math.Abs(float64(value))
+	for _, current := range units {
+		if absValue < current.size {
+			continue
+		}
+		scaled := float64(value) / current.size
+		rounded := math.Round(scaled*10) / 10
+		if math.Abs(rounded) >= 100 || rounded == math.Trunc(rounded) {
+			return fmt.Sprintf("%.0f%s", rounded, current.suffix)
+		}
+		return fmt.Sprintf("%.1f%s", rounded, current.suffix)
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func contextWindowUsedPercent(window *domain.ContextWindowUsage) int {
+	if window == nil || window.LimitTokens <= 0 {
+		return 0
+	}
+	used := float64(window.UsedTokens)
+	limit := float64(window.LimitTokens)
+	percent := int(math.Round((used / limit) * 100))
+	switch {
+	case percent < 0:
+		return 0
+	case percent > 100:
+		return 100
+	default:
+		return percent
+	}
 }
 
 func formatDuration(value time.Duration) string {

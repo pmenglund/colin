@@ -73,19 +73,20 @@ func TestObservabilityServerRoutes(t *testing.T) {
 				},
 			},
 			Running: []domain.SnapshotRunning{{
-				IssueID:      "issue-1",
-				Identifier:   "COLIN-93",
-				Title:        "Add dashboard",
-				State:        "In Progress",
-				SessionID:    "session-1",
-				TurnCount:    4,
-				LastEvent:    "turn_completed",
-				LastMessage:  "refresh complete",
-				StartedAt:    now.Add(-time.Minute),
-				LastEventAt:  ptr(now.Add(-2 * time.Second)),
-				InputTokens:  11,
-				OutputTokens: 12,
-				TotalTokens:  23,
+				IssueID:       "issue-1",
+				Identifier:    "COLIN-93",
+				Title:         "Add dashboard",
+				State:         "In Progress",
+				SessionID:     "session-1",
+				TurnCount:     4,
+				LastEvent:     "turn_completed",
+				LastMessage:   "refresh complete",
+				StartedAt:     now.Add(-time.Minute),
+				LastEventAt:   ptr(now.Add(-2 * time.Second)),
+				InputTokens:   11,
+				OutputTokens:  12,
+				TotalTokens:   23,
+				ContextWindow: &domain.ContextWindowUsage{UsedTokens: 78400, LimitTokens: 258000},
 				OutputLog: []domain.OutputLog{{
 					Timestamp: now.Add(-2 * time.Second),
 					Event:     "turn_completed",
@@ -184,6 +185,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="worker-card-COLIN-93"`) {
 			t.Fatalf("missing worker card: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="context-window-COLIN-93"`) {
+			t.Fatalf("missing context window usage: %s", text)
+		}
+		if !strings.Contains(text, `Context window: 70% left (78.4K used / 258K)`) {
+			t.Fatalf("missing context window copy: %s", text)
+		}
 		if !strings.Contains(text, `data-testid="state-issues-trigger-review"`) {
 			t.Fatalf("missing state issue trigger: %s", text)
 		}
@@ -258,6 +265,15 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if got := snapshot.PausedIssueStates["Review"].URL; got != "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22" {
 			t.Fatalf("review paused url = %q", got)
+		}
+		if snapshot.Running[0].ContextWindow == nil {
+			t.Fatal("context window = nil, want value")
+		}
+		if got := snapshot.Running[0].ContextWindow.UsedTokens; got != 78400 {
+			t.Fatalf("context window used = %d, want 78400", got)
+		}
+		if got := snapshot.Running[0].ContextWindow.LimitTokens; got != 258000 {
+			t.Fatalf("context window limit = %d, want 258000", got)
 		}
 	})
 

@@ -943,6 +943,40 @@ func TestHandleCodexEventRemovesStateIssueWhenTransitionLeavesDashboardStates(t 
 	}
 }
 
+func TestHandleCodexEventPersistsContextWindowUsage(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		running: map[string]*runningEntry{
+			"issue-1": {
+				issue: domain.Issue{
+					ID:         "issue-1",
+					Identifier: "COLIN-1",
+					Title:      "Watch context",
+					State:      "In Progress",
+				},
+			},
+		},
+	}
+
+	orch.handleCodexEvent(context.Background(), codex.Event{
+		Event:         codex.EventOtherMessage,
+		IssueID:       "issue-1",
+		Identifier:    "COLIN-1",
+		Timestamp:     time.Now().UTC(),
+		ContextWindow: &domain.ContextWindowUsage{UsedTokens: 78400, LimitTokens: 258000},
+	})
+
+	got := orch.running["issue-1"].session.ContextWindow
+	if got == nil {
+		t.Fatal("session ContextWindow = nil, want value")
+	}
+	if got.UsedTokens != 78400 || got.LimitTokens != 258000 {
+		t.Fatalf("session ContextWindow = %#v, want used=78400 limit=258000", got)
+	}
+}
+
 func TestSnapshotClonesPausedIssueStates(t *testing.T) {
 	t.Parallel()
 
@@ -1038,7 +1072,7 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 				},
 				identifier: "COLIN-2",
 				startedAt:  time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC),
-				session:    domain.LiveSession{},
+				session:    domain.LiveSession{ContextWindow: &domain.ContextWindowUsage{UsedTokens: 78400, LimitTokens: 258000}},
 				outputLog: []domain.OutputLog{{
 					Timestamp: time.Date(2026, 3, 30, 12, 0, 30, 0, time.UTC),
 					Event:     "other_message",
@@ -1064,6 +1098,8 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	first.Running[0].Identifier = "MUTATED"
 	*first.Running[0].URL = "https://example.invalid"
 	*first.Running[0].LastEventAt = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	first.Running[0].ContextWindow.UsedTokens = 999
+	first.Running[0].ContextWindow.LimitTokens = 1000
 	first.Running[0].OutputLog[0].Message = "changed"
 	first.IssueStates["Review"] = 99
 	first.StateIssues["Review"][0].Identifier = "MUTATED"
@@ -1080,6 +1116,11 @@ func TestSnapshotClonesCachedSnapshot(t *testing.T) {
 	}
 	if got := *second.Running[0].LastEventAt; !got.Equal(lastEventAt) {
 		t.Fatalf("cached LastEventAt = %v, want %v", got, lastEventAt)
+	}
+	if got := second.Running[0].ContextWindow; got == nil {
+		t.Fatal("cached ContextWindow = nil, want value")
+	} else if got.UsedTokens != 78400 || got.LimitTokens != 258000 {
+		t.Fatalf("cached ContextWindow = %#v, want used=78400 limit=258000", got)
 	}
 	if got := second.Running[0].OutputLog[0].Message; got != "hello" {
 		t.Fatalf("cached OutputLog message = %q, want hello", got)
