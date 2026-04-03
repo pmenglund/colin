@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 		reviewSync:        map[string]*reviewSyncState{},
 		completed:         map[string]string{},
 		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
 		pausedIssueStates: map[string]domain.PausedStateSummary{},
 	}
 	orch.publishSnapshot(time.Now().UTC())
@@ -251,8 +253,10 @@ func (o *Orchestrator) enterShutdownDrain() {
 
 func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Issue {
 	stateNames := trackedStateNames(o.runtime.Config)
+	dashboardStates := dashboardStateNames()
 	if len(stateNames) == 0 {
 		o.issueStates = map[string]int{}
+		o.stateIssues = map[string][]domain.StateIssueSummary{}
 		o.pausedIssueStates = map[string]domain.PausedStateSummary{}
 		return nil
 	}
@@ -264,9 +268,13 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 	}
 
 	counts := make(map[string]int, len(stateNames))
+	stateIssues := map[string][]domain.StateIssueSummary{}
 	paused := map[string]domain.PausedStateSummary{}
 	for _, issue := range issues {
 		counts[issue.State]++
+		if config.ContainsState(dashboardStates, issue.State) {
+			stateIssues[issue.State] = append(stateIssues[issue.State], stateIssueSummary(issue))
+		}
 		if !hasIssueLabel(issue, domain.PausedIssueLabel) {
 			continue
 		}
@@ -277,7 +285,20 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 		}
 		paused[issue.State] = summary
 	}
+	for state, items := range stateIssues {
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Identifier != items[j].Identifier {
+				return items[i].Identifier < items[j].Identifier
+			}
+			if items[i].Title != items[j].Title {
+				return items[i].Title < items[j].Title
+			}
+			return items[i].ID < items[j].ID
+		})
+		stateIssues[state] = items
+	}
 	o.issueStates = counts
+	o.stateIssues = stateIssues
 	o.pausedIssueStates = paused
 	return issues
 }
@@ -405,6 +426,10 @@ func trackedStateNames(cfg domain.ServiceConfig) []string {
 	return out
 }
 
+func dashboardStateNames() []string {
+	return domain.DashboardStateNames()
+}
+
 func buildPausedIssueSearchURL(issueURL string, state string) string {
 	parsed, err := url.Parse(strings.TrimSpace(issueURL))
 	if err != nil {
@@ -447,6 +472,7 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 	entry.session.LastCodexTimestamp = &event.Timestamp
 	if event.Event == codex.EventIssueStateRefreshed {
 		o.applyObservedIssueStateTransition(event.PrevState, event.State)
+		o.applyObservedStateIssueTransition(entry.issue, event.PrevState, event.State)
 	}
 	if event.State != "" {
 		entry.issue.State = event.State
@@ -532,6 +558,80 @@ func (o *Orchestrator) applyObservedIssueStateTransition(previousState string, c
 		return
 	}
 	o.issueStates[currentState]++
+}
+
+func (o *Orchestrator) applyObservedStateIssueTransition(issue domain.Issue, previousState string, currentState string) {
+	previousKey := config.StateKey(previousState)
+	currentKey := config.StateKey(currentState)
+	if previousKey == "" || currentKey == "" || previousKey == currentKey {
+		return
+	}
+
+	dashboardStates := dashboardStateNames()
+	if len(dashboardStates) == 0 {
+		return
+	}
+	if !config.ContainsState(dashboardStates, previousState) && !config.ContainsState(dashboardStates, currentState) {
+		return
+	}
+
+	summary := stateIssueSummary(issue)
+	if strings.TrimSpace(summary.Identifier) == "" {
+		return
+	}
+	if o.stateIssues == nil {
+		o.stateIssues = map[string][]domain.StateIssueSummary{}
+	}
+
+	for state, items := range o.stateIssues {
+		filtered := items[:0]
+		for _, item := range items {
+			if sameStateIssueSummary(item, summary) {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if len(filtered) == 0 {
+			delete(o.stateIssues, state)
+			continue
+		}
+		o.stateIssues[state] = append([]domain.StateIssueSummary(nil), filtered...)
+	}
+
+	if !config.ContainsState(dashboardStates, currentState) {
+		return
+	}
+	o.stateIssues[currentState] = append(o.stateIssues[currentState], summary)
+	sort.Slice(o.stateIssues[currentState], func(i, j int) bool {
+		left := o.stateIssues[currentState][i]
+		right := o.stateIssues[currentState][j]
+		if left.Identifier != right.Identifier {
+			return left.Identifier < right.Identifier
+		}
+		if left.Title != right.Title {
+			return left.Title < right.Title
+		}
+		return left.ID < right.ID
+	})
+}
+
+func stateIssueSummary(issue domain.Issue) domain.StateIssueSummary {
+	summary := domain.StateIssueSummary{
+		ID:         strings.TrimSpace(issue.ID),
+		Identifier: strings.TrimSpace(issue.Identifier),
+		Title:      strings.TrimSpace(issue.Title),
+	}
+	if issue.URL != nil {
+		summary.URL = strings.TrimSpace(*issue.URL)
+	}
+	return summary
+}
+
+func sameStateIssueSummary(left domain.StateIssueSummary, right domain.StateIssueSummary) bool {
+	if left.ID != "" && right.ID != "" {
+		return left.ID == right.ID
+	}
+	return left.Identifier != "" && left.Identifier == right.Identifier
 }
 
 func (o *Orchestrator) appendOutput(entry *runningEntry, event codex.Event) {

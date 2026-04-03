@@ -17,6 +17,24 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		GeneratedAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
 		Counts:      map[string]int{"running": 1, "retrying": 1},
 		IssueStates: map[string]int{"Backlog": 2, "Todo": 4, "In Progress": 1, "Refine": 0, "Review": 3, "Merge": 1, "Done": 2},
+		StateIssues: map[string][]domain.StateIssueSummary{
+			"In Progress": {
+				{
+					ID:         "issue-1",
+					Identifier: "COLIN-93",
+					Title:      "Add live dashboard",
+					URL:        issueURL,
+				},
+			},
+			"Review": {
+				{
+					ID:         "issue-2",
+					Identifier: "COLIN-94",
+					Title:      "Polish review labels",
+					URL:        "https://linear.app/example/issue/COLIN-94",
+				},
+			},
+		},
 		PausedIssueStates: map[string]domain.PausedStateSummary{
 			"Review": {
 				Count: 2,
@@ -98,6 +116,10 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Issue is ready for Colin to pick up.`,
 		`In Progress`,
 		`Issue is actively being worked.`,
+		`data-testid="state-issues-trigger-in-progress"`,
+		`data-testid="state-issues-in-progress"`,
+		`href="/linear/issues/issue-1/metadata"`,
+		`Web UI details`,
 		`Refine`,
 		`Issue needs human clarification before a PR can be reviewed.`,
 		`Review`,
@@ -138,7 +160,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
 	t.Parallel()
 
-	html := renderNode(t, stateCountCard("Review", 3, domain.PausedStateSummary{Count: 1}))
+	html := renderNode(t, stateCountCard("Review", 3, nil, domain.PausedStateSummary{Count: 1}))
 	if !strings.Contains(html, `data-testid="paused-issues-review"`) {
 		t.Fatalf("paused indicator missing test id\n%s", html)
 	}
@@ -147,6 +169,33 @@ func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
 	}
 	if strings.Contains(html, `<a `) {
 		t.Fatalf("paused indicator should not render a link without URL\n%s", html)
+	}
+}
+
+func TestStateIssuePopoverRendersLinks(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, stateCountCard("Review", 2, []domain.StateIssueSummary{
+		{
+			ID:         "issue-2",
+			Identifier: "COLIN-94",
+			Title:      "Polish review labels",
+			URL:        "https://linear.app/example/issue/COLIN-94",
+		},
+	}, domain.PausedStateSummary{}))
+
+	for _, want := range []string{
+		`data-testid="state-issues-trigger-review"`,
+		`View 1 issue`,
+		`data-testid="state-issues-review"`,
+		`data-testid="state-issue-review-COLIN-94"`,
+		`href="https://linear.app/example/issue/COLIN-94"`,
+		`href="/linear/issues/issue-2/metadata"`,
+		`Web UI details`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
 	}
 }
 

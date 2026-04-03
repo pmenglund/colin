@@ -465,17 +465,26 @@ type PausedStateSummary struct {
 	URL   string `json:"url,omitempty"`
 }
 
+// StateIssueSummary is the minimal issue metadata needed to render per-state issue lists in the UI.
+type StateIssueSummary struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	URL        string `json:"url,omitempty"`
+}
+
 // Snapshot is a read-only summary of orchestrator state for observability.
 type Snapshot struct {
-	GeneratedAt       time.Time                     `json:"generated_at"`
-	Running           []SnapshotRunning             `json:"running"`
-	Retrying          []RetryEntry                  `json:"retrying"`
-	CodexTotals       Totals                        `json:"codex_totals"`
-	RateLimits        RateLimitSnapshot             `json:"rate_limits"`
-	Counts            map[string]int                `json:"counts"`
-	IssueStates       map[string]int                `json:"issue_states"`
-	PausedIssueStates map[string]PausedStateSummary `json:"paused_issue_states,omitempty"`
-	Tracked           map[string]struct{}           `json:"-"`
+	GeneratedAt       time.Time                      `json:"generated_at"`
+	Running           []SnapshotRunning              `json:"running"`
+	Retrying          []RetryEntry                   `json:"retrying"`
+	CodexTotals       Totals                         `json:"codex_totals"`
+	RateLimits        RateLimitSnapshot              `json:"rate_limits"`
+	Counts            map[string]int                 `json:"counts"`
+	IssueStates       map[string]int                 `json:"issue_states"`
+	StateIssues       map[string][]StateIssueSummary `json:"state_issues,omitempty"`
+	PausedIssueStates map[string]PausedStateSummary  `json:"paused_issue_states,omitempty"`
+	Tracked           map[string]struct{}            `json:"-"`
 }
 
 // SnapshotRunning is the per-running-issue row included in a Snapshot.
