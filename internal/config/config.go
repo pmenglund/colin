@@ -23,6 +23,7 @@ var (
 	ErrInvalidWorkspaceGitConf = errors.New("invalid_workspace_git_config")
 	ErrInvalidRepoMergeMethod  = errors.New("invalid_repo_merge_method")
 	ErrUnsupportedRepoBackend  = errors.New("unsupported_repo_backend")
+	ErrMixedTargetConfig       = errors.New("mixed_target_config")
 )
 
 const defaultPRTemplate = `## Summary
@@ -110,6 +111,9 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 	if err := applyServerConfig(&cfg, def.Config.Server); err != nil {
 		return domain.ServiceConfig{}, err
 	}
+	if err := applyTargetsConfig(&cfg, def.Config); err != nil {
+		return domain.ServiceConfig{}, err
+	}
 	if err := applySlackConfig(&cfg, def.Config.Slack); err != nil {
 		return domain.ServiceConfig{}, err
 	}
@@ -123,11 +127,6 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 		cfg.Hooks.Timeout = 60 * time.Second
 	}
 
-	if cfg.Workspace.RepoURL != "" || cfg.Workspace.BaseRef != "" {
-		if cfg.Workspace.RepoURL == "" || cfg.Workspace.BaseRef == "" {
-			return domain.ServiceConfig{}, ErrInvalidWorkspaceGitConf
-		}
-	}
 	if !validMergeMethod(cfg.Repo.MergeMethod) {
 		return domain.ServiceConfig{}, ErrInvalidRepoMergeMethod
 	}
@@ -150,7 +149,7 @@ func ValidateDispatch(cfg domain.ServiceConfig) error {
 	if cfg.Tracker.APIKey == "" {
 		return ErrMissingTrackerAPIKey
 	}
-	if cfg.Tracker.ProjectSlug == "" {
+	if len(cfg.Targets) == 0 && cfg.Tracker.ProjectSlug == "" {
 		return ErrMissingTrackerProject
 	}
 	if strings.TrimSpace(cfg.Codex.Command) == "" {
@@ -160,6 +159,141 @@ func ValidateDispatch(cfg domain.ServiceConfig) error {
 		return ErrUnsupportedRepoBackend
 	}
 	return nil
+}
+
+func applyTargetsConfig(cfg *domain.ServiceConfig, raw domain.WorkflowConfig) error {
+	hasLegacyProject := stringValue(raw.Tracker.ProjectSlug) != ""
+	hasLegacyRepoURL := stringValue(raw.Workspace.RepoURL) != ""
+	hasLegacyBaseRef := stringValue(raw.Workspace.BaseRef) != ""
+	hasLegacy := hasLegacyProject || hasLegacyRepoURL || hasLegacyBaseRef
+	hasTargets := len(raw.Targets) > 0
+
+	if hasTargets && hasLegacy {
+		return fmt.Errorf("%w: %w: use either targets or tracker.project_slug/workspace.repo_url/workspace.base_ref, not both", ErrInvalidWorkflowConfig, ErrMixedTargetConfig)
+	}
+
+	targets := make([]domain.TargetConfig, 0, max(1, len(raw.Targets)))
+	if hasTargets {
+		for i, target := range raw.Targets {
+			normalized, err := normalizeTargetConfig(cfg, target, i)
+			if err != nil {
+				return err
+			}
+			targets = append(targets, normalized)
+		}
+	} else {
+		if cfg.Workspace.RepoURL != "" || cfg.Workspace.BaseRef != "" {
+			if cfg.Workspace.RepoURL == "" || cfg.Workspace.BaseRef == "" {
+				return ErrInvalidWorkspaceGitConf
+			}
+		}
+		if strings.TrimSpace(cfg.Tracker.ProjectSlug) != "" {
+			targets = append(targets, domain.TargetConfig{
+				Key:         deriveTargetKey(cfg.Tracker.ProjectSlug, cfg.Workspace.RepoURL),
+				Name:        cfg.Tracker.ProjectSlug,
+				ProjectSlug: cfg.Tracker.ProjectSlug,
+				RepoURL:     cfg.Workspace.RepoURL,
+				BaseRef:     cfg.Workspace.BaseRef,
+			})
+		}
+	}
+
+	if len(targets) == 0 {
+		cfg.Targets = nil
+		return nil
+	}
+	seenProjects := map[string]struct{}{}
+	seenKeys := map[string]struct{}{}
+	for _, target := range targets {
+		projectKey := strings.ToLower(strings.TrimSpace(target.ProjectSlug))
+		if projectKey == "" {
+			return fmt.Errorf("%w: target project_slug is required", ErrInvalidWorkflowConfig)
+		}
+		if _, ok := seenProjects[projectKey]; ok {
+			return fmt.Errorf("%w: duplicate target project_slug %q", ErrInvalidWorkflowConfig, target.ProjectSlug)
+		}
+		seenProjects[projectKey] = struct{}{}
+		key := strings.ToLower(strings.TrimSpace(target.Key))
+		if key == "" {
+			return fmt.Errorf("%w: target key is required", ErrInvalidWorkflowConfig)
+		}
+		if _, ok := seenKeys[key]; ok {
+			return fmt.Errorf("%w: duplicate target key %q", ErrInvalidWorkflowConfig, target.Key)
+		}
+		seenKeys[key] = struct{}{}
+	}
+
+	cfg.Targets = targets
+	cfg.Tracker.ProjectSlug = targets[0].ProjectSlug
+	cfg.Workspace.RepoURL = targets[0].RepoURL
+	cfg.Workspace.BaseRef = targets[0].BaseRef
+	return nil
+}
+
+func normalizeTargetConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTargetConfig, index int) (domain.TargetConfig, error) {
+	projectSlug := stringValue(raw.ProjectSlug)
+	repoURL := stringValue(raw.RepoURL)
+	baseRef := stringValue(raw.BaseRef)
+	if projectSlug == "" || repoURL == "" || baseRef == "" {
+		return domain.TargetConfig{}, fmt.Errorf("%w: target %d must set project_slug, repo_url, and base_ref", ErrInvalidWorkflowConfig, index+1)
+	}
+	name := stringValue(raw.Name)
+	if name == "" {
+		name = projectSlug
+	}
+	return domain.TargetConfig{
+		Key:         deriveTargetKey(projectSlug, repoURL),
+		Name:        name,
+		ProjectSlug: projectSlug,
+		RepoURL:     repoURL,
+		BaseRef:     baseRef,
+	}, nil
+}
+
+func deriveTargetKey(projectSlug string, repoURL string) string {
+	projectSlug = strings.ToLower(strings.TrimSpace(projectSlug))
+	repoName := strings.ToLower(strings.TrimSpace(repoURL))
+	if adapter, err := repohost.Lookup(string(repohost.HostKindGitHub)); err == nil {
+		if parsed, err := adapter.ParseRepositoryURL(repoURL); err == nil {
+			repoName = strings.ToLower(strings.TrimSpace(parsed.Name))
+		}
+	}
+	projectSlug = sanitizeTargetKeyPart(projectSlug)
+	repoName = sanitizeTargetKeyPart(repoName)
+	switch {
+	case projectSlug != "" && repoName != "":
+		return projectSlug + "-" + repoName
+	case projectSlug != "":
+		return projectSlug
+	case repoName != "":
+		return repoName
+	default:
+		return "target"
+	}
+}
+
+func sanitizeTargetKeyPart(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case !lastDash:
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // NormalizedStateSet converts state names into a lowercase lookup set.

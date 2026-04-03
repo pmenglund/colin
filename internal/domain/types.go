@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"strings"
+	"time"
+)
 
 type ReviewPublishDirective string
 type ExecPlanDecision string
@@ -50,6 +54,8 @@ type Issue struct {
 	Title                string
 	Description          *string
 	Priority             *int
+	ProjectID            string
+	ProjectSlug          string
 	State                string
 	BranchName           *string
 	URL                  *string
@@ -185,6 +191,7 @@ type WorkflowConfig struct {
 	Polling   WorkflowPollingConfig   `yaml:"polling"`
 	Workspace WorkflowWorkspaceConfig `yaml:"workspace"`
 	Repo      WorkflowRepoConfig      `yaml:"repo"`
+	Targets   []WorkflowTargetConfig  `yaml:"targets"`
 	Hooks     WorkflowHookConfig      `yaml:"hooks"`
 	Agent     WorkflowAgentConfig     `yaml:"agent"`
 	Codex     WorkflowCodexConfig     `yaml:"codex"`
@@ -210,6 +217,13 @@ type WorkflowWorkspaceConfig struct {
 	Root    *string `yaml:"root"`
 	RepoURL *string `yaml:"repo_url"`
 	BaseRef *string `yaml:"base_ref"`
+}
+
+type WorkflowTargetConfig struct {
+	Name        *string `yaml:"name"`
+	ProjectSlug *string `yaml:"project_slug"`
+	RepoURL     *string `yaml:"repo_url"`
+	BaseRef     *string `yaml:"base_ref"`
 }
 
 type WorkflowRepoConfig struct {
@@ -278,6 +292,7 @@ type ServiceConfig struct {
 	Polling      PollingConfig
 	Workspace    WorkspaceConfig
 	Repo         RepoConfig
+	Targets      []TargetConfig
 	Hooks        HookConfig
 	Agent        AgentConfig
 	Codex        CodexConfig
@@ -306,6 +321,15 @@ type WorkspaceConfig struct {
 	Root    string
 	RepoURL string
 	BaseRef string
+}
+
+// TargetConfig is one normalized mapping from a Linear project to a git repository and base branch.
+type TargetConfig struct {
+	Key         string
+	Name        string
+	ProjectSlug string
+	RepoURL     string
+	BaseRef     string
 }
 
 // RepoConfig configures repository-host publish and merge automation tied to tracker states.
@@ -378,6 +402,78 @@ type ServerConfig struct {
 	WebhookPublicURL string
 	UIURL            string
 	LogBufferLines   int
+}
+
+var ErrUnknownIssueTarget = errors.New("unknown_issue_target")
+
+// MultiTarget reports whether the runtime is supervising more than one target mapping.
+func (cfg ServiceConfig) MultiTarget() bool {
+	return len(cfg.Targets) > 1
+}
+
+// TargetByProjectSlug resolves the normalized target for a Linear project slug.
+func (cfg ServiceConfig) TargetByProjectSlug(projectSlug string) (TargetConfig, error) {
+	projectSlug = strings.TrimSpace(projectSlug)
+	for _, target := range cfg.Targets {
+		if strings.EqualFold(strings.TrimSpace(target.ProjectSlug), projectSlug) {
+			return target, nil
+		}
+	}
+	return TargetConfig{}, ErrUnknownIssueTarget
+}
+
+// ResolveTargetForIssue resolves the normalized target for the supplied issue.
+func ResolveTargetForIssue(cfg ServiceConfig, issue Issue) (TargetConfig, error) {
+	if len(cfg.Targets) == 0 {
+		if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(cfg.Workspace.RepoURL) == "" && strings.TrimSpace(cfg.Workspace.BaseRef) == "" {
+			return TargetConfig{}, nil
+		}
+		return TargetConfig{
+			Key:         strings.TrimSpace(cfg.Tracker.ProjectSlug),
+			Name:        strings.TrimSpace(cfg.Tracker.ProjectSlug),
+			ProjectSlug: strings.TrimSpace(cfg.Tracker.ProjectSlug),
+			RepoURL:     strings.TrimSpace(cfg.Workspace.RepoURL),
+			BaseRef:     strings.TrimSpace(cfg.Workspace.BaseRef),
+		}, nil
+	}
+	if len(cfg.Targets) == 1 && strings.TrimSpace(issue.ProjectSlug) == "" {
+		return cfg.Targets[0], nil
+	}
+	return cfg.TargetByProjectSlug(issue.ProjectSlug)
+}
+
+// WatchedProjectSlugs returns the configured Linear project slugs in stable order.
+func (cfg ServiceConfig) WatchedProjectSlugs() []string {
+	if len(cfg.Targets) == 0 {
+		if value := strings.TrimSpace(cfg.Tracker.ProjectSlug); value != "" {
+			return []string{value}
+		}
+		return nil
+	}
+	out := make([]string, 0, len(cfg.Targets))
+	for _, target := range cfg.Targets {
+		if value := strings.TrimSpace(target.ProjectSlug); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+// WatchedRepoURLs returns the configured repository URLs in stable order.
+func (cfg ServiceConfig) WatchedRepoURLs() []string {
+	if len(cfg.Targets) == 0 {
+		if value := strings.TrimSpace(cfg.Workspace.RepoURL); value != "" {
+			return []string{value}
+		}
+		return nil
+	}
+	out := make([]string, 0, len(cfg.Targets))
+	for _, target := range cfg.Targets {
+		if value := strings.TrimSpace(target.RepoURL); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // SlackConfig configures optional Slack issue-summary delivery.

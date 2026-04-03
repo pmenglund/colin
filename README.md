@@ -1,6 +1,6 @@
 # Colin
 
-Colin turns a Linear board into a managed delivery pipeline for coding work. Instead of manually driving one task at a time, you can keep many issues moving in parallel while Colin picks up ready work, hands implementation off to [Codex](https://platform.openai.com/docs/codex/overview), maintains a dedicated workspace for each issue, and pushes each task toward the next useful outcome.
+Colin turns a Linear board into a managed delivery pipeline for coding work. Instead of manually driving one task at a time, you can keep many issues moving in parallel while Colin picks up ready work, hands implementation off to [Codex](https://platform.openai.com/docs/codex/overview), maintains a dedicated workspace for each issue, and pushes each task toward the next useful outcome. One Colin process can now supervise multiple Linear projects and multiple Git repositories from a single `WORKFLOW.md` when they share the same Linear and repository-host credentials.
 
 The value is operational leverage: more tasks advancing at once, less branch and PR babysitting, and clearer handoffs for the moments where human judgment actually matters. Because Colin is driven through Linear state changes, you can manage the flow from the Linear app on your phone instead of being tied to a laptop session. Colin currently ships with a GitHub repository backend, and now routes repository-host setup and API access through a backend abstraction so GitLab or Gitea can be added later without rewriting all of setup and repo automation. Colin also works best with [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled on your GitHub repos so reviewable PRs get an additional automated pass before merge; OpenAI's setup instructions are [here](https://help.openai.com/en/articles/11369540/). When the optional `slack` workflow section is configured, Colin also mirrors each tracked issue into one Slack message that shows the current state and next action while linking out to the full details.
 
@@ -62,10 +62,11 @@ When Colin is running, it also starts a local [`gops`](https://github.com/google
 
 Colin runs as a long-lived orchestrator:
 
-1. It watches the configured Linear project for issues in active states.
+1. It watches the configured Linear project targets for issues in active states.
 2. It creates or reuses a per-issue workspace so work can continue cleanly across retries and follow-up turns.
-3. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
-4. It posts progress back to Linear and exposes a local dashboard for operators.
+3. It routes each issue to the repository and base branch configured for that issue's target.
+4. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
+5. It posts progress back to Linear and exposes a local dashboard for operators.
 
 When a coding run finishes and Colin hands work off, the Linear issue comment is meant to be reviewable on its own. Colin now asks Codex to describe the change in before/after terms, include verification details, and prefer Playwright screenshots for browser-visible work or terminal or TUI captures for terminal-visible work, with textual fallback because the issue comment itself is text-only.
 
@@ -124,9 +125,9 @@ If you enable the optional `slack` section in `WORKFLOW.md`, export `SLACK_BOT_T
 
 Run `colin config` when you need to create or refresh `WORKFLOW.md`. The wizard will guide you through:
 
-- the Linear project Colin should watch
-- the repository Colin should prepare branches and PRs for
-- the base branch Colin should branch and merge from
+- the default Linear project Colin should watch
+- the default repository Colin should prepare branches and PRs for
+- the default base branch Colin should branch and merge from
 - the workspace root Colin should use for per-issue worktrees
 - the local dashboard port
 - whether you want webhook follow-up guidance
@@ -139,6 +140,8 @@ At the review step Colin runs live checks when it has the required credentials:
 - repository backend API access
 
 Once the review passes, the wizard writes `WORKFLOW.md`.
+
+For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, and `base_ref`. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
 
 Once the workflow file and `LINEAR_API_KEY` are available, Colin validates that the configured Linear states exist and ensures its managed labels exist before startup completes.
 

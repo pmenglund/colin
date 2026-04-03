@@ -13,6 +13,7 @@ const LinearWebhookSigningSecretEnvVar = "LINEAR_WEBHOOK_SECRET"
 // LinearAppSetupResult is the operator-facing Linear app sketch for one workflow.
 type LinearAppSetupResult struct {
 	ProjectSlug               string
+	ProjectSlugs              []string
 	WebhookURL                string
 	ActorType                 string
 	AssignmentBehavior        string
@@ -29,10 +30,11 @@ func LoadLinearAppSetup(ctx context.Context, workflowPath string, optionFns ...O
 	if err != nil {
 		return LinearAppSetupResult{}, err
 	}
-	projectSlug := strings.TrimSpace(cfg.Tracker.ProjectSlug)
-	if projectSlug == "" {
+	projectSlugs := cfg.WatchedProjectSlugs()
+	if len(projectSlugs) == 0 {
 		return LinearAppSetupResult{}, config.ErrMissingTrackerProject
 	}
+	projectSlug := strings.TrimSpace(projectSlugs[0])
 
 	baseURL := resolveWebhookPublicBaseURL(ctx, nil, cfg.Server, "")
 	if baseURL == "" {
@@ -41,6 +43,7 @@ func LoadLinearAppSetup(ctx context.Context, workflowPath string, optionFns ...O
 
 	return LinearAppSetupResult{
 		ProjectSlug:               projectSlug,
+		ProjectSlugs:              projectSlugs,
 		WebhookURL:                strings.TrimRight(baseURL, "/") + "/webhooks/linear",
 		ActorType:                 "app",
 		AssignmentBehavior:        "assigning an issue to Colin should delegate the work while the human owner remains accountable",

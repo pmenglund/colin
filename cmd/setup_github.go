@@ -51,6 +51,9 @@ func renderRepoTokenSetup(cmd *cobra.Command, result service.RepoTokenSetupResul
 	renderer := newCommandRenderer(cmd)
 	renderer.Section("Overview")
 	renderer.Item(result.BackendDisplayName+" repository", result.RepositoryOwner+"/"+result.RepositoryName)
+	if len(result.RepositoryNames) > 1 {
+		renderer.Item("Watched repositories", strings.Join(result.RepositoryNames, ", "))
+	}
 	renderer.Item("Repository source", result.RepositorySource)
 	renderer.Item("Repository URL", result.RepositoryURL)
 	if result.RecommendedEnvVar != "" {

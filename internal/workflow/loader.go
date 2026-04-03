@@ -132,6 +132,8 @@ func issueToMap(issue domain.Issue) map[string]any {
 		"title":           issue.Title,
 		"description":     derefString(issue.Description),
 		"priority":        derefInt(issue.Priority),
+		"project_id":      issue.ProjectID,
+		"project_slug":    issue.ProjectSlug,
 		"state":           issue.State,
 		"branch_name":     derefString(issue.BranchName),
 		"url":             derefString(issue.URL),

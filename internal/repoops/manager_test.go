@@ -116,6 +116,42 @@ func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
 	}
 }
 
+func TestPublishUsesTargetBaseRefWhenConfigured(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	cfg := testConfig()
+	cfg.Workspace.BaseRef = "main"
+	cfg.Targets = []domain.TargetConfig{
+		{Key: "project-1-remote", ProjectSlug: "project-1", RepoURL: "git@github.com:acme/remote.git", BaseRef: "release"},
+		{Key: "project-2-remote", ProjectSlug: "project-2", RepoURL: "git@github.com:acme/remote.git", BaseRef: "symphony"},
+	}
+	cfg.Repo.PRTemplate = "base={{.base_ref}}"
+
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithGitHubClient(cfg, testLogger(), fakeGitHub)
+	if _, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier:  "COLIN-93",
+		Title:       "Use target base ref",
+		ProjectSlug: "project-2",
+	}, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	_, _, _, input := fakeGitHub.CreatePullRequestArgsForCall(0)
+	if input.Base != "symphony" {
+		t.Fatalf("CreatePullRequest base = %q, want %q", input.Base, "symphony")
+	}
+	if input.Body != "base=symphony" {
+		t.Fatalf("CreatePullRequest body = %q, want %q", input.Body, "base=symphony")
+	}
+}
+
 func TestMergeMergesExistingPR(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
