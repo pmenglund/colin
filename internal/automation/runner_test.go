@@ -613,6 +613,39 @@ func TestBuildReviewThreadReplyBodyKeepsReplyCompact(t *testing.T) {
 	}
 }
 
+func TestReviewableCodingArtifactPropagatesUnknownTarget(t *testing.T) {
+	t.Parallel()
+
+	runner := &Runner{
+		cfg: domain.ServiceConfig{
+			Targets: []domain.TargetConfig{
+				{
+					Key:         "project-1-api",
+					Name:        "project-1",
+					ProjectSlug: "project-1",
+					RepoURL:     "git@github.com:acme/api.git",
+					BaseRef:     "main",
+				},
+			},
+		},
+		repo:   repoops.NewManager(domain.ServiceConfig{}, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	reviewable, err := runner.reviewableCodingArtifact(context.Background(), t.TempDir(), domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-155",
+		Title:       "Support multiple repos",
+		ProjectSlug: "project-2",
+	})
+	if !errors.Is(err, domain.ErrUnknownIssueTarget) {
+		t.Fatalf("reviewableCodingArtifact() error = %v, want %v", err, domain.ErrUnknownIssueTarget)
+	}
+	if reviewable {
+		t.Fatal("reviewableCodingArtifact() reviewable = true, want false")
+	}
+}
+
 func TestCodingOutcomeUsesNeedsSpecDirective(t *testing.T) {
 	t.Parallel()
 

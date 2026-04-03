@@ -1459,7 +1459,7 @@ func (r *Runner) reviewableCodingArtifact(ctx context.Context, workspacePath str
 	}
 	target, err := domain.ResolveTargetForIssue(r.cfg, issue)
 	if err != nil {
-		return true, nil
+		return false, err
 	}
 	if strings.TrimSpace(target.RepoURL) == "" {
 		return true, nil
