@@ -74,10 +74,11 @@ server:
   # Optional when Colin metadata links should use a stable external UI origin.
   # ui_url: https://colin.example.com
 
-# Optional: enable Slack issue summaries for tracked issues.
+# Optional: enable Slack issue summaries plus the Slack App Home view for tracked issues.
 # slack:
 #   bot_token: $SLACK_BOT_TOKEN
 #   channel_id: C0123456789
+#   signing_secret: $SLACK_SIGNING_SECRET
 ---
 
 You are working on Linear issue {{"{{.issue.identifier}}"}}: {{"{{.issue.title}}"}}.

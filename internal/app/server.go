@@ -79,10 +79,22 @@ type GitHubWebhookTrigger func(context.Context, GitHubWebhookEvent) GitHubWebhoo
 // GitHubWebhookSecretProvider returns the configured GitHub webhook secret for request validation.
 type GitHubWebhookSecretProvider func(context.Context) string
 
+// SlackWebhookEvent captures the minimal App Home event context needed to publish a Slack Home tab.
+type SlackWebhookEvent struct {
+	Event  string
+	UserID string
+}
+
+// SlackWebhookPublisher publishes any follow-up Slack App Home view for a validated webhook delivery.
+type SlackWebhookPublisher func(context.Context, SlackWebhookEvent) error
+
+// SlackWebhookSecretProvider returns the configured Slack webhook secret for request validation.
+type SlackWebhookSecretProvider func(context.Context) string
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
-	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, source.Stream, nil, nil, nil, nil, nil)
+	return NewObservabilityServer(source.Snapshot, source.Issue, source.FunnelSetup, nil, source.Stream, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func normalizeServerProviders(provider SnapshotProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, streamProvider SnapshotStreamProvider) (SnapshotProvider, FunnelSetupProvider, LogProvider, SnapshotStreamProvider) {
@@ -136,6 +148,7 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 	mux.HandleFunc("/readyz", notFoundHandler)
 	mux.HandleFunc("/linear", notFoundHandler)
 	mux.HandleFunc("/github", notFoundHandler)
+	mux.HandleFunc("/slack", notFoundHandler)
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	mux.HandleFunc("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -356,7 +369,7 @@ func newReadyzHandler() http.HandlerFunc {
 }
 
 // NewWebhookHandler returns only the webhook and readiness routes.
-func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) http.Handler {
+func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, slackWebhookPublisher SlackWebhookPublisher, slackSecretProvider SlackWebhookSecretProvider, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -376,22 +389,25 @@ func NewWebhookHandler(linearWebhookTrigger LinearWebhookTrigger, linearSecretPr
 	mux.HandleFunc("/linear", linearWebhookHandler(linearWebhookTrigger, linearSecretProvider, logger))
 	mux.HandleFunc("/webhooks/github", githubWebhookHandler(githubWebhookTrigger, githubSecretProvider, logger))
 	mux.HandleFunc("/github", githubWebhookHandler(githubWebhookTrigger, githubSecretProvider, logger))
+	mux.HandleFunc("/webhooks/slack", slackWebhookHandler(slackWebhookPublisher, slackSecretProvider, logger))
+	mux.HandleFunc("/slack", slackWebhookHandler(slackWebhookPublisher, slackSecretProvider, logger))
 	return secureHeaders(mux)
 }
 
 // NewObservabilityServer returns the combined UI and webhook handler used in tests and previews.
-func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, streamProvider SnapshotStreamProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
+func NewObservabilityServer(provider SnapshotProvider, issueProvider IssueProvider, setupProvider FunnelSetupProvider, logProvider LogProvider, streamProvider SnapshotStreamProvider, linearWebhookTrigger LinearWebhookTrigger, linearSecretProvider LinearWebhookSecretProvider, githubWebhookTrigger GitHubWebhookTrigger, githubSecretProvider GitHubWebhookSecretProvider, slackWebhookPublisher SlackWebhookPublisher, slackSecretProvider SlackWebhookSecretProvider, logger *slog.Logger) (http.Handler, error) {
 	uiHandler, err := NewUIHandler(provider, issueProvider, setupProvider, logProvider, streamProvider)
 	if err != nil {
 		return nil, err
 	}
-	webhookHandler := NewWebhookHandler(linearWebhookTrigger, linearSecretProvider, githubWebhookTrigger, githubSecretProvider, logger)
+	webhookHandler := NewWebhookHandler(linearWebhookTrigger, linearSecretProvider, githubWebhookTrigger, githubSecretProvider, slackWebhookPublisher, slackSecretProvider, logger)
 	mux := http.NewServeMux()
 	mux.Handle("/", uiHandler)
 	mux.Handle("/webhooks/", webhookHandler)
 	mux.Handle("/readyz", webhookHandler)
 	mux.Handle("/linear", webhookHandler)
 	mux.Handle("/github", webhookHandler)
+	mux.Handle("/slack", webhookHandler)
 	return secureHeaders(mux), nil
 }
 

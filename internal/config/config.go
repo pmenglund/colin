@@ -532,6 +532,9 @@ func applySlackConfig(cfg *domain.ServiceConfig, raw domain.WorkflowSlackConfig)
 	if value := stringValue(raw.ChannelID); value != "" {
 		cfg.Slack.ChannelID = strings.TrimSpace(resolveEnvToken(value))
 	}
+	if value := stringValue(raw.SigningSecret); value != "" {
+		cfg.Slack.SigningSecret = strings.TrimSpace(resolveEnvToken(value))
+	}
 	if (cfg.Slack.BotToken == "") != (cfg.Slack.ChannelID == "") {
 		return fmt.Errorf("%w: slack.bot_token and slack.channel_id must both be set", ErrInvalidWorkflowConfig)
 	}

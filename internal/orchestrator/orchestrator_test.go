@@ -2491,6 +2491,14 @@ func TestRefreshDoesNotDispatchDuplicateWorkerForClaimedIssue(t *testing.T) {
 		t.Fatal("initial dispatch did not start")
 	}
 
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for !orch.RefreshReady() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !orch.RefreshReady() {
+		t.Fatal("orchestrator did not become refresh-ready")
+	}
+
 	queued, coalesced := orch.RequestRefresh("webhook update")
 	if !queued || coalesced {
 		t.Fatalf("RequestRefresh() = (%t, %t), want (true, false)", queued, coalesced)

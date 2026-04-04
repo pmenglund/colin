@@ -26,6 +26,7 @@ import (
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
+	"github.com/pmenglund/colin/internal/userworkflow"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/internal/workspace"
 )
@@ -40,9 +41,20 @@ type watchedProjectIDsProvider interface {
 	WatchedProjectIDs() []string
 }
 
+type slackHomePublisherClient interface {
+	PublishHome(context.Context, string, userworkflow.SlackHomeView) error
+}
+
 const githubStartupValidationTimeout = 10 * time.Second
 
 var errDuplicateListenerPorts = errors.New("server.port and server.webhook_port must be different when both are enabled")
+
+var newSlackHomeNotifier = func(cfg domain.ServiceConfig) slackHomePublisherClient {
+	if strings.TrimSpace(cfg.Slack.BotToken) == "" || strings.TrimSpace(cfg.Slack.ChannelID) == "" {
+		return nil
+	}
+	return slacknotify.New(cfg.Slack.BotToken, cfg.Slack.ChannelID)
+}
 
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
 type Service struct {
@@ -319,7 +331,7 @@ func (s *Service) startWebhookServer(ctx context.Context) error {
 		return nil
 	}
 
-	handler := app.NewWebhookHandler(s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.logger)
+	handler := app.NewWebhookHandler(s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.slackWebhookPublisher(), s.slackWebhookSecretProvider(), s.logger)
 
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*s.webhookPort)))
 	if err != nil {
@@ -418,7 +430,7 @@ func (s *Service) newDashboardHandler() (http.Handler, error) {
 		return s.orch.LatestSnapshotUpdate(), s.orch.SubscribeSnapshotUpdates(ctx), nil
 	}
 	if !hasEnabledPort(s.webhookPort) {
-		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, streamProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.logger)
+		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, streamProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.slackWebhookPublisher(), s.slackWebhookSecretProvider(), s.logger)
 	}
 	return app.NewUIHandler(provider, issueProvider, setupProvider, logProvider, streamProvider)
 }
@@ -453,6 +465,30 @@ func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
 func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider {
 	return func(context.Context) string {
 		return s.currentRuntime().Config.Tracker.WebhookSigningSecret
+	}
+}
+
+func (s *Service) slackWebhookPublisher() app.SlackWebhookPublisher {
+	return func(ctx context.Context, event app.SlackWebhookEvent) error {
+		runtime := s.currentRuntime()
+		if runtime.Tracker == nil {
+			return errors.New("tracker unavailable")
+		}
+		notifier := newSlackHomeNotifier(runtime.Config)
+		if notifier == nil {
+			return nil
+		}
+		issues, err := runtime.Tracker.FetchIssuesByStates(ctx, userworkflow.SlackHomeStateNames(runtime.Config))
+		if err != nil {
+			return err
+		}
+		return notifier.PublishHome(ctx, event.UserID, userworkflow.SlackHomeIssueView(runtime.Config, issues))
+	}
+}
+
+func (s *Service) slackWebhookSecretProvider() app.SlackWebhookSecretProvider {
+	return func(context.Context) string {
+		return s.currentRuntime().Config.Slack.SigningSecret
 	}
 }
 

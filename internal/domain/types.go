@@ -283,8 +283,9 @@ type WorkflowServerConfig struct {
 }
 
 type WorkflowSlackConfig struct {
-	BotToken  *string `yaml:"bot_token"`
-	ChannelID *string `yaml:"channel_id"`
+	BotToken      *string `yaml:"bot_token"`
+	ChannelID     *string `yaml:"channel_id"`
+	SigningSecret *string `yaml:"signing_secret"`
 }
 
 // ServiceConfig is the typed runtime view built from workflow front matter and defaults.
@@ -480,8 +481,9 @@ func (cfg ServiceConfig) WatchedRepoURLs() []string {
 
 // SlackConfig configures optional Slack issue-summary delivery.
 type SlackConfig struct {
-	BotToken  string
-	ChannelID string
+	BotToken      string
+	ChannelID     string
+	SigningSecret string
 }
 
 // SetupCheck is one operator-facing readiness check.

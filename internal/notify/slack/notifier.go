@@ -14,6 +14,7 @@ type client interface {
 	PostMessageContext(ctx context.Context, channelID string, options ...slackapi.MsgOption) (string, string, error)
 	UpdateMessageContext(ctx context.Context, channelID, timestamp string, options ...slackapi.MsgOption) (string, string, string, error)
 	GetPermalinkContext(ctx context.Context, params *slackapi.PermalinkParameters) (string, error)
+	PublishViewContext(ctx context.Context, req slackapi.PublishViewContextRequest) (*slackapi.ViewResponse, error)
 }
 
 // Notifier keeps one Slack message per issue summary up to date.
