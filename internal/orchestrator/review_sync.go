@@ -77,7 +77,7 @@ func (o *Orchestrator) cleanupReviewSync(active []domain.Issue) {
 	}
 	for issueID := range o.reviewSync {
 		issue, ok := activeByID[issueID]
-		if !ok || !needsReviewSync(issue) {
+		if !ok || !strings.EqualFold(strings.TrimSpace(issue.State), "todo") {
 			delete(o.reviewSync, issueID)
 		}
 	}

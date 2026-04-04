@@ -2359,12 +2359,16 @@ type stubTracker struct {
 	resolveMergeStateOK bool
 }
 
-func (s *stubTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+func (s *stubTracker) FetchCandidateIssueSnapshots(context.Context) ([]domain.Issue, error) {
 	return nil, nil
 }
 
-func (s *stubTracker) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+func (s *stubTracker) FetchIssueSnapshotsByStates(context.Context, []string) ([]domain.Issue, error) {
 	return nil, nil
+}
+
+func (s *stubTracker) FetchIssueSchedulingMetadataByIDs(context.Context, []string) (map[string]domain.ColinMetadata, error) {
+	return map[string]domain.ColinMetadata{}, nil
 }
 
 func (s *stubTracker) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {

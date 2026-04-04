@@ -234,17 +234,68 @@ func (c *Client) WatchedProjectIDs() []string {
 	return slices.Clone(c.watchedProjectIDs)
 }
 
-// FetchCandidateIssues returns the current active issues for the configured Linear project.
-func (c *Client) FetchCandidateIssues(ctx context.Context) ([]domain.Issue, error) {
-	return c.fetchIssues(ctx, c.active)
+// FetchCandidateIssueSnapshots returns lightweight scheduling snapshots for active issues.
+func (c *Client) FetchCandidateIssueSnapshots(ctx context.Context) ([]domain.Issue, error) {
+	return c.fetchIssueSnapshots(ctx, c.active)
 }
 
-// FetchIssuesByStates returns issues whose current Linear state is in the provided list.
-func (c *Client) FetchIssuesByStates(ctx context.Context, stateNames []string) ([]domain.Issue, error) {
+// FetchIssueSnapshotsByStates returns lightweight issue snapshots for the provided states.
+func (c *Client) FetchIssueSnapshotsByStates(ctx context.Context, stateNames []string) ([]domain.Issue, error) {
 	if len(stateNames) == 0 {
 		return nil, nil
 	}
-	return c.fetchIssues(ctx, stateNames)
+	return c.fetchIssueSnapshots(ctx, stateNames)
+}
+
+// FetchIssueSchedulingMetadataByIDs returns persisted Colin metadata for the supplied issues.
+func (c *Client) FetchIssueSchedulingMetadataByIDs(ctx context.Context, issueIDs []string) (map[string]domain.ColinMetadata, error) {
+	if len(issueIDs) == 0 {
+		return map[string]domain.ColinMetadata{}, nil
+	}
+	const query = `
+query IssueSchedulingMetadata($ids: [ID!]!) {
+  issues(filter: { id: { in: $ids } }, first: 250) {
+    nodes {
+      id
+      attachments(first: 50) {
+        nodes {
+          id
+          title
+          url
+          createdAt
+          updatedAt
+          metadata
+        }
+      }
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"ids": issueIDs})
+	if err != nil {
+		return nil, err
+	}
+	nodes, ok := nestedSlice(resp, "data", "issues", "nodes")
+	if !ok {
+		return nil, ErrUnknownPayload
+	}
+	metadataByIssueID := make(map[string]domain.ColinMetadata, len(nodes))
+	for _, node := range nodes {
+		issueID, _ := stringValue(node["id"])
+		if strings.TrimSpace(issueID) == "" {
+			continue
+		}
+		attachments, ok := nestedSlice(node, "attachments", "nodes")
+		if !ok {
+			continue
+		}
+		metadata, ok := extractColinMetadataFromAttachments(attachments)
+		if !ok {
+			continue
+		}
+		metadataByIssueID[issueID] = metadata
+	}
+	return metadataByIssueID, nil
 }
 
 // FetchIssueStatesByIDs refreshes the minimal state snapshot for the supplied Linear issue IDs.
@@ -279,7 +330,7 @@ query IssueStates($ids: [ID!]!) {
 	}
 	issues := make([]domain.Issue, 0, len(nodes))
 	for _, node := range nodes {
-		issue, err := normalizeIssue(node)
+		issue, err := normalizeIssueSnapshot(node)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +413,7 @@ query IssueByID($id: String!) {
 	if !ok {
 		return domain.Issue{}, ErrUnknownPayload
 	}
-	return normalizeIssue(node)
+	return normalizeIssueDetail(node)
 }
 
 // FindIssueByCodexThreadID returns the watched issue whose Colin metadata stores the supplied Codex thread id.
@@ -464,7 +515,7 @@ query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
 			return domain.Issue{}, ErrUnknownPayload
 		}
 		for _, node := range nodes {
-			issue, err := normalizeIssue(node)
+			issue, err := normalizeIssueDetail(node)
 			if err != nil {
 				return domain.Issue{}, err
 			}
@@ -931,9 +982,9 @@ func (c *Client) CurrentRateLimits() domain.RateLimitSnapshot {
 	return cloneRateLimits(c.rateInfo)
 }
 
-func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
+func (c *Client) fetchIssueSnapshots(ctx context.Context, states []string) ([]domain.Issue, error) {
 	const query = `
-query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
+query CandidateIssueSnapshots($projectIDs: [ID!], $states: [String!], $after: String) {
   issues(
     first: 50
     after: $after
@@ -947,7 +998,6 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
       id
       identifier
       title
-      description
       priority
       project {
         id
@@ -967,41 +1017,8 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
             identifier
             state { name }
           }
-        }
       }
-	      attachments(first: 50) {
-	        nodes {
-	          id
-	          title
-	          url
-	          createdAt
-	          updatedAt
-	          metadata
-	        }
-	      }
-      comments(first: 50) {
-        nodes {
-          id
-          body
-          createdAt
-          parentId
-          children(first: 50) {
-            nodes {
-              id
-              body
-              createdAt
-              parentId
-            }
-          }
-        }
-      }
-      history(first: 100) {
-        nodes {
-          createdAt
-          fromState { name }
-          toState { name }
-        }
-      }
+    }
     }
   }
 }
@@ -1023,7 +1040,7 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
 			return nil, ErrUnknownPayload
 		}
 		for _, node := range nodes {
-			issue, err := normalizeIssue(node)
+			issue, err := normalizeIssueSnapshot(node)
 			if err != nil {
 				return nil, err
 			}
@@ -1330,7 +1347,7 @@ func nextAllowedAt(observedAt, resetAt time.Time, remaining int64) time.Time {
 	return observedAt.Add(step)
 }
 
-func normalizeIssue(node map[string]any) (domain.Issue, error) {
+func normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
 	id, _ := stringValue(node["id"])
 	identifier, _ := stringValue(node["identifier"])
 	title, _ := stringValue(node["title"])
@@ -1343,9 +1360,6 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 		ProjectID:   strings.TrimSpace(projectID(node)),
 		ProjectSlug: strings.TrimSpace(projectSlug(node)),
 		State:       state,
-	}
-	if value, ok := stringValue(node["description"]); ok {
-		issue.Description = &value
 	}
 	if value, ok := intValue(node["priority"]); ok {
 		issue.Priority = &value
@@ -1373,9 +1387,6 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 			}
 		}
 	}
-	issue.ColinMetadata = extractColinMetadata(node)
-	issue.ExecPlan, issue.ExecPlanCount = extractExecPlan(node)
-	issue.AttachedPullRequests = extractAttachedPullRequests(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -1399,6 +1410,20 @@ func normalizeIssue(node map[string]any) (domain.Issue, error) {
 			issue.BlockedBy = append(issue.BlockedBy, blocker)
 		}
 	}
+	return issue, nil
+}
+
+func normalizeIssueDetail(node map[string]any) (domain.Issue, error) {
+	issue, err := normalizeIssueSnapshot(node)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if value, ok := stringValue(node["description"]); ok {
+		issue.Description = &value
+	}
+	issue.ColinMetadata = extractColinMetadata(node)
+	issue.ExecPlan, issue.ExecPlanCount = extractExecPlan(node)
+	issue.AttachedPullRequests = extractAttachedPullRequests(node)
 	if start, end, ok := latestReviewCycleWindow(node); ok && strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
 		issue.ReviewCycle = &domain.ReviewCycle{
 			EnteredReviewAt:  start,
@@ -1623,6 +1648,14 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	if !ok {
 		return nil
 	}
+	metadata, ok := extractColinMetadataFromAttachments(attachments)
+	if !ok {
+		return nil
+	}
+	return &metadata
+}
+
+func extractColinMetadataFromAttachments(attachments []map[string]any) (domain.ColinMetadata, bool) {
 	metadataAttachments := make([]colinMetadataAttachment, 0, len(attachments))
 	for _, attachment := range attachments {
 		metadata, err := parseColinMetadataAttachmentNode(attachment)
@@ -1633,11 +1666,11 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	}
 	selected, ok := selectCanonicalMetadataAttachment(metadataAttachments)
 	if !ok {
-		return nil
+		return domain.ColinMetadata{}, false
 	}
 	merged := selected.metadata
 	mergeSlackMetadataFields(&merged, metadataAttachments)
-	return &merged
+	return merged, true
 }
 
 func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
@@ -1645,6 +1678,10 @@ func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
 	if !ok {
 		return nil, 0
 	}
+	return extractExecPlanFromAttachments(attachments)
+}
+
+func extractExecPlanFromAttachments(attachments []map[string]any) (*domain.ExecPlan, int) {
 	var plans []domain.ExecPlan
 	for _, attachment := range attachments {
 		plan, err := parseColinExecPlanAttachment(attachment)
@@ -2023,7 +2060,10 @@ func extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
 	if !ok {
 		return nil
 	}
+	return extractAttachedPullRequestsFromAttachments(attachments)
+}
 
+func extractAttachedPullRequestsFromAttachments(attachments []map[string]any) []domain.PullRequestRef {
 	seen := make(map[int]struct{}, len(attachments))
 	prs := make([]domain.PullRequestRef, 0, len(attachments))
 	for _, attachment := range attachments {

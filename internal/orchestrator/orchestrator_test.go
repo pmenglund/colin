@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"reflect"
 	"strings"
@@ -23,29 +24,33 @@ func init() {
 }
 
 type trackerStub struct {
-	candidateIssues     []domain.Issue
-	candidateCalls      int
-	candidateInvoked    chan struct{}
-	candidateCallCh     chan int
-	candidateHook       func(*trackerStub)
-	issuesByState       []domain.Issue
-	issuesByStateCalls  int
-	issuesByStateHook   func(*trackerStub)
-	issuesByID          []domain.Issue
-	issuesByIDCalls     int
-	rateLimits          domain.RateLimitSnapshot
-	issueComments       []string
-	commentReplies      []string
-	metadata            domain.ColinMetadata
-	ensuredLabels       []string
-	addedLabels         []string
-	removedLabels       []string
-	ensureLabelErr      error
-	addIssueLabelErr    error
-	removeIssueLabelErr error
+	candidateIssues         []domain.Issue
+	candidateCalls          int
+	candidateInvoked        chan struct{}
+	candidateCallCh         chan int
+	candidateHook           func(*trackerStub)
+	issuesByState           []domain.Issue
+	issuesByStateCalls      int
+	issuesByStateHook       func(*trackerStub)
+	schedulingMetadata      map[string]domain.ColinMetadata
+	schedulingMetadataCalls int
+	schedulingMetadataHook  func(*trackerStub)
+	issuesByID              []domain.Issue
+	issuesByIDCalls         int
+	fetchIssueByIDCalls     int
+	rateLimits              domain.RateLimitSnapshot
+	issueComments           []string
+	commentReplies          []string
+	metadata                domain.ColinMetadata
+	ensuredLabels           []string
+	addedLabels             []string
+	removedLabels           []string
+	ensureLabelErr          error
+	addIssueLabelErr        error
+	removeIssueLabelErr     error
 }
 
-func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+func (s *trackerStub) FetchCandidateIssueSnapshots(context.Context) ([]domain.Issue, error) {
 	s.candidateCalls++
 	if s.candidateHook != nil {
 		s.candidateHook(s)
@@ -66,12 +71,23 @@ func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, err
 	return s.candidateIssues, nil
 }
 
-func (s *trackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+func (s *trackerStub) FetchIssueSnapshotsByStates(context.Context, []string) ([]domain.Issue, error) {
 	s.issuesByStateCalls++
 	if s.issuesByStateHook != nil {
 		s.issuesByStateHook(s)
 	}
 	return s.issuesByState, nil
+}
+
+func (s *trackerStub) FetchIssueSchedulingMetadataByIDs(context.Context, []string) (map[string]domain.ColinMetadata, error) {
+	s.schedulingMetadataCalls++
+	if s.schedulingMetadataHook != nil {
+		s.schedulingMetadataHook(s)
+	}
+	if s.schedulingMetadata == nil {
+		return map[string]domain.ColinMetadata{}, nil
+	}
+	return maps.Clone(s.schedulingMetadata), nil
 }
 
 func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
@@ -80,7 +96,18 @@ func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain
 }
 
 func (s *trackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
+	s.fetchIssueByIDCalls++
 	for _, issue := range s.issuesByID {
+		if issue.ID == issueID {
+			return issue, nil
+		}
+	}
+	for _, issue := range s.candidateIssues {
+		if issue.ID == issueID {
+			return issue, nil
+		}
+	}
+	for _, issue := range s.issuesByState {
 		if issue.ID == issueID {
 			return issue, nil
 		}
@@ -2301,7 +2328,10 @@ func TestHandleTickAllowsCandidateFetchAboveSoftReserveDespiteNextAllowedAt(t *t
 	orch.handleTick(context.Background())
 
 	if tracker.candidateCalls != 1 {
-		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+		t.Fatalf("FetchCandidateIssueSnapshots() calls = %d, want 1", tracker.candidateCalls)
+	}
+	if tracker.fetchIssueByIDCalls != 1 {
+		t.Fatalf("FetchIssueByID() calls = %d, want 1", tracker.fetchIssueByIDCalls)
 	}
 	select {
 	case <-runner.invoked:
@@ -2357,10 +2387,16 @@ func TestHandleTickRefreshesStateCountsAfterCandidateFetchUsesBudget(t *testing.
 	orch.handleTick(context.Background())
 
 	if tracker.candidateCalls != 1 {
-		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+		t.Fatalf("FetchCandidateIssueSnapshots() calls = %d, want 1", tracker.candidateCalls)
 	}
 	if tracker.issuesByStateCalls != 1 {
-		t.Fatalf("FetchIssuesByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+		t.Fatalf("FetchIssueSnapshotsByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+	}
+	if tracker.schedulingMetadataCalls != 1 {
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() calls = %d, want 1", tracker.schedulingMetadataCalls)
+	}
+	if tracker.fetchIssueByIDCalls != 0 {
+		t.Fatalf("FetchIssueByID() calls = %d, want 0", tracker.fetchIssueByIDCalls)
 	}
 	if got := orch.issueStates["Todo"]; got != 1 {
 		t.Fatalf("issueStates[Todo] = %d, want 1", got)

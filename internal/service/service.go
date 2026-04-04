@@ -596,7 +596,7 @@ func (s *Service) slackWebhookPublisher() app.SlackWebhookPublisher {
 		if notifier == nil {
 			return nil
 		}
-		issues, err := runtime.Tracker.FetchIssuesByStates(ctx, userworkflow.SlackHomeStateNames(runtime.Config))
+		issues, err := runtime.Tracker.FetchIssueSnapshotsByStates(ctx, userworkflow.SlackHomeStateNames(runtime.Config))
 		if err != nil {
 			return err
 		}
