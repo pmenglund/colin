@@ -116,6 +116,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-testid="worker-output-COLIN-93"`,
 		`hx-get="/"`,
 		`/api/v1/state`,
+		`/api/v1/logs`,
 		`/setup/funnel`,
 		`COLIN-93`,
 		`Add live dashboard`,
