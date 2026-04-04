@@ -42,6 +42,21 @@ const (
 	refineStateName              = "Refine"
 )
 
+type graphQLErrorResponse struct {
+	raw []map[string]any
+}
+
+func (e *graphQLErrorResponse) Error() string {
+	if e == nil {
+		return ErrGraphQLErrors.Error()
+	}
+	return fmt.Sprintf("%s: %v", ErrGraphQLErrors, e.raw)
+}
+
+func (e *graphQLErrorResponse) Unwrap() error {
+	return ErrGraphQLErrors
+}
+
 // ProjectSummary is the minimal project metadata used in setup selectors.
 type ProjectSummary struct {
 	Name      string
@@ -450,9 +465,58 @@ func isMissingIssueLabelRemovalError(err error) bool {
 	if err == nil || !errors.Is(err, ErrGraphQLErrors) {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "label not on issue") ||
-		(strings.Contains(message, "is not on issue") && strings.Contains(message, "cannot be removed"))
+	var response *graphQLErrorResponse
+	if !errors.As(err, &response) || len(response.raw) == 0 {
+		return false
+	}
+	for _, item := range response.raw {
+		if !isMissingIssueLabelRemovalEntry(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func isMissingIssueLabelRemovalEntry(item map[string]any) bool {
+	message, _ := stringValue(item["message"])
+	if !strings.EqualFold(strings.TrimSpace(message), "Label not on issue") {
+		return false
+	}
+
+	extensions, _ := item["extensions"].(map[string]any)
+	userMessage, _ := stringValue(extensions["userPresentableMessage"])
+	userMessage = strings.ToLower(strings.TrimSpace(userMessage))
+	if !strings.Contains(userMessage, "is not on issue") || !strings.Contains(userMessage, "cannot be removed") {
+		return false
+	}
+
+	path, ok := item["path"].([]any)
+	if !ok {
+		return true
+	}
+	for _, part := range path {
+		value, _ := stringValue(part)
+		if value == "issueRemoveLabel" {
+			return true
+		}
+	}
+	return false
+}
+
+func parseGraphQLErrorResponse(errorsField any) (*graphQLErrorResponse, bool) {
+	items, ok := errorsField.([]any)
+	if !ok {
+		return nil, false
+	}
+	response := &graphQLErrorResponse{raw: make([]map[string]any, 0, len(items))}
+	for _, item := range items {
+		raw, ok := item.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		response.raw = append(response.raw, raw)
+	}
+	return response, true
 }
 
 // ResolveGitAutomationState returns the team-configured Linear git automation state for the supplied event.
@@ -1064,6 +1128,9 @@ func (c *Client) doQuery(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("%w: %v", ErrUnknownPayload, err)
 	}
 	if errorsField, ok := decoded["errors"]; ok && errorsField != nil {
+		if response, ok := parseGraphQLErrorResponse(errorsField); ok {
+			return nil, response
+		}
 		return nil, fmt.Errorf("%w: %v", ErrGraphQLErrors, errorsField)
 	}
 	return decoded, nil
