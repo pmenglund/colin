@@ -124,7 +124,7 @@ a {
 }
 
 .table-card:has(.state-issues-popup[open]) {
-  z-index: 20;
+  z-index: 30;
 }
 
 .dashboard-toolbar {
@@ -390,6 +390,10 @@ a {
   margin-top: 0.1rem;
 }
 
+.state-issues-popup[open] {
+  z-index: 1;
+}
+
 .state-issues-trigger {
   display: inline-flex;
   align-items: baseline;
@@ -420,7 +424,7 @@ a {
 .state-issues-panel {
   position: absolute;
   left: 0;
-  z-index: 10;
+  z-index: 2;
   width: min(28rem, calc(100vw - 2rem));
   max-height: 20rem;
   overflow-y: auto;

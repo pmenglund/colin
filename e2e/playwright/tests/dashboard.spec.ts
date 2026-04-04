@@ -20,7 +20,48 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("COLIN-7");
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("Issue ID");
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("Title");
-  await expect.poll(async () => page.getByTestId("linear-state-counts").evaluate((element) => getComputedStyle(element).zIndex)).toBe("20");
+  await page.evaluate(() => {
+    const popup = document.querySelector("[data-testid='state-issues-in-progress']");
+    const runningPanel = document.querySelector("[data-testid='running-panel']");
+    if (!(popup instanceof HTMLElement) || !(runningPanel instanceof HTMLElement)) {
+      return;
+    }
+
+    const popupRect = popup.getBoundingClientRect();
+    const runningRect = runningPanel.getBoundingClientRect();
+    const desiredTop = popupRect.top + 24;
+    const shift = runningRect.top - desiredTop;
+    runningPanel.style.position = "relative";
+    runningPanel.style.top = `${Math.max(shift, 0) * -1}px`;
+  });
+  await expect.poll(async () =>
+    page.evaluate(() => {
+      const popup = document.querySelector("[data-testid='state-issues-in-progress']");
+      const runningPanel = document.querySelector("[data-testid='running-panel']");
+      if (!(popup instanceof HTMLElement) || !(runningPanel instanceof HTMLElement)) {
+        return "missing";
+      }
+
+      const popupRect = popup.getBoundingClientRect();
+      const runningRect = runningPanel.getBoundingClientRect();
+      const left = Math.max(popupRect.left, runningRect.left, 0);
+      const top = Math.max(popupRect.top, runningRect.top, 0);
+      const right = Math.min(popupRect.right, runningRect.right, window.innerWidth);
+      const bottom = Math.min(popupRect.bottom, runningRect.bottom, window.innerHeight);
+      if (left >= right || top >= bottom) {
+        return "no-overlap";
+      }
+
+      const probeX = left + Math.min(16, (right - left) / 2);
+      const probeY = top + Math.min(16, (bottom - top) / 2);
+      const topElement = document.elementFromPoint(probeX, probeY);
+      if (!(topElement instanceof HTMLElement)) {
+        return "no-top-element";
+      }
+
+      return popup.contains(topElement) ? "popup-on-top" : "running-panel-on-top";
+    }),
+  ).toBe("popup-on-top");
   await expect(page.getByTestId("state-issue-in-progress-COLIN-7").locator(".state-issue-id-link")).toHaveAttribute(
     "href",
     "https://linear.app/example/issue/COLIN-7",
