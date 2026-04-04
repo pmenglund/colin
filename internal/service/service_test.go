@@ -1094,8 +1094,9 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 		{
 			name: "create in watched project",
 			event: app.LinearWebhookEvent{
-				Action:    "create",
-				ProjectID: "project-1",
+				ResourceType: "Issue",
+				Action:       "create",
+				ProjectID:    "project-1",
 			},
 			projectID: "project-1",
 			want:      true,
@@ -1103,6 +1104,7 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 		{
 			name: "update with relevant field in watched project",
 			event: app.LinearWebhookEvent{
+				ResourceType:  "Issue",
 				Action:        "update",
 				ProjectID:     "project-1",
 				ChangedFields: []string{"stateid", "updatedat"},
@@ -1113,6 +1115,7 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 		{
 			name: "update with irrelevant field in watched project",
 			event: app.LinearWebhookEvent{
+				ResourceType:  "Issue",
 				Action:        "update",
 				ProjectID:     "project-1",
 				ChangedFields: []string{"updatedat"},
@@ -1123,6 +1126,7 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 		{
 			name: "update in different project",
 			event: app.LinearWebhookEvent{
+				ResourceType:  "Issue",
 				Action:        "update",
 				ProjectID:     "project-2",
 				ChangedFields: []string{"stateid"},
@@ -1133,11 +1137,42 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 		{
 			name: "missing watched project id",
 			event: app.LinearWebhookEvent{
+				ResourceType:  "Issue",
 				Action:        "update",
 				ProjectID:     "project-1",
 				ChangedFields: []string{"stateid"},
 			},
 			projectID: "",
+			want:      false,
+		},
+		{
+			name: "issue label removal with issue id",
+			event: app.LinearWebhookEvent{
+				ResourceType: "IssueLabel",
+				Action:       "remove",
+				IssueID:      "issue-1",
+			},
+			projectID: "project-1",
+			want:      true,
+		},
+		{
+			name: "issue label change in different project",
+			event: app.LinearWebhookEvent{
+				ResourceType: "IssueLabel",
+				Action:       "remove",
+				IssueID:      "issue-1",
+				ProjectID:    "project-2",
+			},
+			projectID: "project-1",
+			want:      false,
+		},
+		{
+			name: "issue label removal missing issue id",
+			event: app.LinearWebhookEvent{
+				ResourceType: "IssueLabel",
+				Action:       "remove",
+			},
+			projectID: "project-1",
 			want:      false,
 		},
 	}

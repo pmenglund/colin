@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const linearWebhookResourceTypeIssue = "Issue"
+const (
+	linearWebhookResourceTypeIssue      = "Issue"
+	linearWebhookResourceTypeIssueLabel = "IssueLabel"
+)
 
 // WebhookSetupResult describes the final managed webhook state after setup.
 type WebhookSetupResult struct {
@@ -26,15 +29,16 @@ type projectTeam struct {
 }
 
 type organizationWebhook struct {
-	ID       string
-	Label    string
-	URL      string
-	Enabled  bool
-	TeamID   string
-	TeamName string
+	ID            string
+	Label         string
+	URL           string
+	Enabled       bool
+	ResourceTypes []string
+	TeamID        string
+	TeamName      string
 }
 
-// EnsureProjectIssueWebhook ensures the watched project has exactly one managed Issue webhook.
+// EnsureProjectIssueWebhook ensures the watched project has exactly one managed Issue and IssueLabel webhook.
 func (c *Client) EnsureProjectIssueWebhook(ctx context.Context, webhookURL string, label string) (WebhookSetupResult, error) {
 	webhookURL = strings.TrimSpace(webhookURL)
 	if webhookURL == "" {
@@ -55,7 +59,7 @@ func (c *Client) EnsureProjectIssueWebhook(ctx context.Context, webhookURL strin
 	}
 
 	managed := managedTeamWebhooks(webhooks, team.ID, webhookURL, label)
-	if len(managed) == 1 && webhookURLsEqual(managed[0].URL, webhookURL) && managed[0].Enabled && strings.EqualFold(strings.TrimSpace(managed[0].Label), label) {
+	if len(managed) == 1 && webhookURLsEqual(managed[0].URL, webhookURL) && managed[0].Enabled && strings.EqualFold(strings.TrimSpace(managed[0].Label), label) && hasLinearWebhookResourceTypes(managed[0].ResourceTypes) {
 		return WebhookSetupResult{
 			Action:    "unchanged",
 			WebhookID: managed[0].ID,
@@ -76,7 +80,7 @@ func (c *Client) EnsureProjectIssueWebhook(ctx context.Context, webhookURL strin
 		}
 	}
 
-	webhookID, err := c.createWebhook(ctx, team.ID, webhookURL, label, []string{linearWebhookResourceTypeIssue})
+	webhookID, err := c.createWebhook(ctx, team.ID, webhookURL, label, []string{linearWebhookResourceTypeIssue, linearWebhookResourceTypeIssueLabel})
 	if err != nil {
 		return WebhookSetupResult{}, err
 	}
@@ -135,12 +139,13 @@ query ProjectTeamInfo($slug: String!) {
 func (c *Client) listOrganizationWebhooks(ctx context.Context) ([]organizationWebhook, error) {
 	const query = `
 	query OrganizationWebhooks {
-  webhooks(first: 250) {
+	webhooks(first: 250) {
     nodes {
       id
       label
       url
       enabled
+      resourceTypes
       team {
         id
         name
@@ -168,6 +173,17 @@ func (c *Client) listOrganizationWebhooks(ctx context.Context) ([]organizationWe
 			Label:   strings.TrimSpace(nestedStringValue(node, "label")),
 			URL:     strings.TrimSpace(nestedStringValue(node, "url")),
 			Enabled: nestedBoolValue(node, "enabled"),
+		}
+		if values, ok := node["resourceTypes"].([]any); ok {
+			webhook.ResourceTypes = make([]string, 0, len(values))
+			for _, value := range values {
+				resourceType, _ := stringValue(value)
+				resourceType = strings.TrimSpace(resourceType)
+				if resourceType == "" {
+					continue
+				}
+				webhook.ResourceTypes = append(webhook.ResourceTypes, resourceType)
+			}
 		}
 		if teamNode, ok := nestedMap(node, "team"); ok {
 			webhook.TeamID, _ = stringValue(teamNode["id"])
@@ -256,6 +272,20 @@ func isManagedLinearWebhookURL(candidate string, target string) bool {
 		return false
 	}
 	return candidatePath == targetPath
+}
+
+func hasLinearWebhookResourceTypes(resourceTypes []string) bool {
+	hasIssue := false
+	hasIssueLabel := false
+	for _, resourceType := range resourceTypes {
+		switch strings.ToLower(strings.TrimSpace(resourceType)) {
+		case strings.ToLower(linearWebhookResourceTypeIssue):
+			hasIssue = true
+		case strings.ToLower(linearWebhookResourceTypeIssueLabel):
+			hasIssueLabel = true
+		}
+	}
+	return hasIssue && hasIssueLabel
 }
 
 func webhookURLsEqual(left string, right string) bool {

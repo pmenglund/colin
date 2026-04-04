@@ -73,7 +73,7 @@ When a coding run finishes and Colin hands work off, the Linear issue comment is
 
 Those handoff comments also explain what Colin is doing next and what human action is required. That includes returned-review cases where GitHub review feedback has not synced yet, cases where review feedback still keeps the issue in `Todo`, and merge-conflict cases where Colin either repairs the branch automatically or sends the issue back to `Review` with concrete follow-up instructions.
 
-Watched-project Linear `Issue` `create` webhooks, plus watched-project `Issue` `update` webhooks that change scheduling-relevant fields such as `stateId`, can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react.
+Watched-project Linear `Issue` `create` webhooks, watched-project `Issue` `update` webhooks that change scheduling-relevant fields such as `stateId`, and watched-team Linear `IssueLabel` create or remove webhooks can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react, including when a human removes the `paused` label.
 
 ## Getting Started
 
@@ -200,7 +200,7 @@ colin setup linear app
 colin setup github webhook
 ```
 
-Once those webhooks are configured, Colin acknowledges `POST` requests to `/webhooks/linear` and `/webhooks/github`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and uses relevant watched-project Linear issue deliveries plus relevant watched-repository GitHub pull-request review deliveries to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
+Once those webhooks are configured, Colin acknowledges `POST` requests to `/webhooks/linear` and `/webhooks/github`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and uses relevant watched-project Linear issue deliveries, watched-team Linear issue-label deliveries, plus relevant watched-repository GitHub pull-request review deliveries to queue best-effort immediate reconciliation. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
 
 `colin setup linear app` prints the current self-hosted Linear app sketch for this workflow: use an assignable app user, point the app at the same `/webhooks/linear` endpoint, subscribe the app to `AgentSessionEvent`, and keep the existing issue-webhook wake-up path enabled. The answer to "should it disable the webhook?" is no. App-triggered sessions should be additive to Colin's current poll-plus-webhook scheduling, not a replacement for it.
 

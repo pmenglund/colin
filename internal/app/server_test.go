@@ -655,21 +655,30 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 		name          string
 		body          string
 		action        string
+		resourceType  string
 		projectID     string
 		changedFields []string
 	}{
 		{
-			name:      "create",
-			body:      `{"action":"create","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"}}`,
-			action:    "create",
-			projectID: "project-1",
+			name:         "issue create",
+			body:         `{"action":"create","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"}}`,
+			action:       "create",
+			resourceType: "Issue",
+			projectID:    "project-1",
 		},
 		{
-			name:          "update",
+			name:          "issue update",
 			body:          `{"action":"update","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"},"updatedFrom":{"stateId":"old-state","updatedAt":"2026-03-31T00:00:00.000Z"}}`,
 			action:        "update",
+			resourceType:  "Issue",
 			projectID:     "project-1",
 			changedFields: []string{"stateid", "updatedat"},
+		},
+		{
+			name:         "issue label remove",
+			body:         `{"action":"remove","type":"IssueLabel","webhookTimestamp":1735689600000,"data":{"id":"issue-label-1","issueId":"issue-1"}}`,
+			action:       "remove",
+			resourceType: "IssueLabel",
 		},
 	}
 
@@ -712,8 +721,8 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			if events[0].Action != tc.action {
 				t.Fatalf("Action = %q, want %q", events[0].Action, tc.action)
 			}
-			if events[0].ResourceType != "Issue" {
-				t.Fatalf("ResourceType = %q, want %q", events[0].ResourceType, "Issue")
+			if events[0].ResourceType != tc.resourceType {
+				t.Fatalf("ResourceType = %q, want %q", events[0].ResourceType, tc.resourceType)
 			}
 			if events[0].IssueID != "issue-1" {
 				t.Fatalf("IssueID = %q, want %q", events[0].IssueID, "issue-1")
