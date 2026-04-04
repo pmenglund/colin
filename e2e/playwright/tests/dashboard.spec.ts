@@ -32,6 +32,10 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("context-window-COLIN-7")).toHaveText("Context window: 70% left (78.4K used / 258K)");
   await expect(page.getByTestId("context-window-bar-COLIN-7")).toHaveAttribute("aria-valuenow", "30");
   await expect(page.getByTestId("shell-instance")).toHaveCount(0);
+
+  await page.getByTestId("state-issue-in-progress-COLIN-7").locator(".state-issue-title-link").click();
+  await expect(page).toHaveURL(/\/linear\/issues\/issue-demo-1\/metadata$/);
+  await expect(page.getByTestId("issue-metadata-panel")).toBeVisible();
 });
 
 test("dashboard refreshes from SSE and pause or resume preserves expanded state", async ({ page }) => {
