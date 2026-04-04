@@ -87,33 +87,25 @@ func completedItemText(msg map[string]any) (string, bool) {
 }
 
 func itemTextValue(item any) (string, bool) {
-	asMap, ok := item.(map[string]any)
-	if !ok {
-		return "", false
-	}
-	if text, ok := stringValue(asMap["text"]); ok {
-		text = strings.TrimSpace(text)
-		if text != "" {
-			return text, true
+	switch v := item.(type) {
+	case map[string]any:
+		if text, ok := stringValue(v["text"]); ok {
+			text = strings.TrimSpace(text)
+			if text != "" {
+				return text, true
+			}
 		}
-	}
-	if len(asMap) != 1 {
-		return "", false
-	}
-	for _, inner := range asMap {
-		nested, ok := inner.(map[string]any)
-		if !ok {
-			return "", false
+		for _, inner := range v {
+			if text, ok := itemTextValue(inner); ok {
+				return text, true
+			}
 		}
-		text, ok := stringValue(nested["text"])
-		if !ok {
-			return "", false
+	case []any:
+		for _, inner := range v {
+			if text, ok := itemTextValue(inner); ok {
+				return text, true
+			}
 		}
-		text = strings.TrimSpace(text)
-		if text == "" {
-			return "", false
-		}
-		return text, true
 	}
 	return "", false
 }

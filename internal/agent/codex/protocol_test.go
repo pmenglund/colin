@@ -6,6 +6,31 @@ import (
 	"github.com/pmenglund/colin/internal/domain"
 )
 
+func TestCompletedItemTextSupportsWrappedItemTextWithMetadata(t *testing.T) {
+	t.Parallel()
+
+	msg := map[string]any{
+		"method": "item/completed",
+		"params": map[string]any{
+			"item": map[string]any{
+				"id": "item-2",
+				"assistant": map[string]any{
+					"text": domain.ExecPlanDecisionOneShotLine + "\n\nSafe to implement directly.",
+				},
+			},
+		},
+	}
+
+	got, ok := completedItemText(msg)
+	if !ok {
+		t.Fatal("completedItemText() = not found, want wrapped item text with metadata")
+	}
+	want := domain.ExecPlanDecisionOneShotLine + "\n\nSafe to implement directly."
+	if got != want {
+		t.Fatalf("completedItemText() = %q, want %q", got, want)
+	}
+}
+
 func TestExtractUsagePrefersTotalTokenUsageOverLastTokenUsage(t *testing.T) {
 	t.Parallel()
 
