@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -82,13 +83,9 @@ func slackWebhookHandler(publisher SlackWebhookPublisher, secretProvider SlackWe
 			event, ok := parseSlackAppHomeOpenedEvent(envelope.Event)
 			if ok {
 				if publisher != nil {
-					if err := publisher(r.Context(), event); err != nil {
-						logSlackWebhookRequest(logger, slog.LevelWarn, "failed to publish slack home view from webhook", r, len(secret) > 0, []any{"status", http.StatusInternalServerError, "event_type", event.Event, "user_id", event.UserID, "error", err})
-						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-						return
-					}
+					go publishSlackHomeView(logger, publisher, event)
 				}
-				logSlackWebhookRequest(logger, slog.LevelInfo, "published slack home view from webhook", r, len(secret) > 0, []any{"event_type", event.Event, "user_id", event.UserID})
+				logSlackWebhookRequest(logger, slog.LevelInfo, "queued slack home view publish from webhook", r, len(secret) > 0, []any{"event_type", event.Event, "user_id", event.UserID})
 			} else {
 				logSlackWebhookRequest(logger, slog.LevelDebug, "ignored slack webhook delivery that does not affect app home", r, len(secret) > 0, nil)
 			}
@@ -179,4 +176,21 @@ func parseSlackAppHomeOpenedEvent(raw json.RawMessage) (SlackWebhookEvent, bool)
 		Event:  strings.TrimSpace(event.Type),
 		UserID: strings.TrimSpace(event.User),
 	}, true
+}
+
+func publishSlackHomeView(logger *slog.Logger, publisher SlackWebhookPublisher, event SlackWebhookEvent) {
+	if publisher == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := publisher(ctx, event); err != nil {
+		if logger != nil {
+			logger.Warn("failed to publish slack home view from webhook", "event_type", event.Event, "user_id", event.UserID, "error", err)
+		}
+		return
+	}
+	if logger != nil {
+		logger.Debug("published slack home view from webhook", "event_type", event.Event, "user_id", event.UserID)
+	}
 }

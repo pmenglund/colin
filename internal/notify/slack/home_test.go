@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	slackapi "github.com/slack-go/slack"
 
@@ -114,5 +115,44 @@ func TestPublishHomeAddsOverflowNotice(t *testing.T) {
 	}
 	if got := len(client.publishReq.View.Blocks.BlockSet); got > maxHomeBlocks {
 		t.Fatalf("block count = %d, want <= %d", got, maxHomeBlocks)
+	}
+}
+
+func TestPublishHomeTruncatesOverlongFirstIssueLine(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{}
+	notifier := newWithClient("C12345678", client)
+	longTitle := strings.Repeat("very long title ", 300)
+
+	if err := notifier.PublishHome(context.Background(), "U12345678", userworkflow.SlackHomeView{
+		TotalIssues: 1,
+		Groups: []userworkflow.SlackHomeStateGroup{
+			{
+				State: "Todo",
+				Issues: []userworkflow.SlackHomeIssue{
+					{Identifier: "COLIN-1", Title: longTitle},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("PublishHome() error = %v", err)
+	}
+
+	for _, block := range client.publishReq.View.Blocks.BlockSet {
+		section, ok := block.(*slackapi.SectionBlock)
+		if !ok || section.Text == nil {
+			continue
+		}
+		if got := utf8.RuneCountInString(section.Text.Text); got > maxHomeSectionText {
+			t.Fatalf("section text length = %d, want <= %d", got, maxHomeSectionText)
+		}
+	}
+	body, err := json.Marshal(client.publishReq.View)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(body), "...") {
+		t.Fatalf("view json = %s, want truncated marker", string(body))
 	}
 }

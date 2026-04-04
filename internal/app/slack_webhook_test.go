@@ -100,9 +100,9 @@ func TestObservabilityServerSlackWebhookPublishesHomeViewForAppHomeOpened(t *tes
 
 	const secret = "secret"
 	payload := `{"type":"event_callback","event":{"type":"app_home_opened","user":"U12345678"}}`
-	var events []SlackWebhookEvent
+	events := make(chan SlackWebhookEvent, 1)
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event SlackWebhookEvent) error {
-		events = append(events, event)
+		events <- event
 		return nil
 	}, func(context.Context) string {
 		return secret
@@ -130,14 +130,16 @@ func TestObservabilityServerSlackWebhookPublishesHomeViewForAppHomeOpened(t *tes
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if len(events) != 1 {
-		t.Fatalf("publisher calls = %d, want 1", len(events))
-	}
-	if events[0].UserID != "U12345678" {
-		t.Fatalf("UserID = %q, want %q", events[0].UserID, "U12345678")
-	}
-	if events[0].Event != "app_home_opened" {
-		t.Fatalf("Event = %q, want %q", events[0].Event, "app_home_opened")
+	select {
+	case event := <-events:
+		if event.UserID != "U12345678" {
+			t.Fatalf("UserID = %q, want %q", event.UserID, "U12345678")
+		}
+		if event.Event != "app_home_opened" {
+			t.Fatalf("Event = %q, want %q", event.Event, "app_home_opened")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("publisher was not invoked")
 	}
 }
 
@@ -179,6 +181,55 @@ func TestObservabilityServerSlackWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("publisher calls = %d, want 0", calls)
 	}
+}
+
+func TestObservabilityServerSlackWebhookAcknowledgesBeforePublisherFinishes(t *testing.T) {
+	t.Parallel()
+
+	const secret = "secret"
+	payload := `{"type":"event_callback","event":{"type":"app_home_opened","user":"U12345678"}}`
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event SlackWebhookEvent) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	}, func(context.Context) string {
+		return secret
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/slack", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	ts := strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	req.Header.Set("X-Slack-Request-Timestamp", ts)
+	req.Header.Set("X-Slack-Signature", slackTestSignature(secret, ts, payload))
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/slack error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("ack elapsed = %s, want fast ack before publisher release", elapsed)
+	}
+	select {
+	case <-started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("publisher did not start")
+	}
+	close(release)
 }
 
 func slackTestSignature(secret string, timestamp string, payload string) string {

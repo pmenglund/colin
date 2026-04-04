@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	slackapi "github.com/slack-go/slack"
 
@@ -105,9 +106,9 @@ func homeGroupChunks(group userworkflow.SlackHomeStateGroup) []homeChunk {
 	currentCount := 0
 	var chunks []homeChunk
 	for _, issue := range group.Issues {
-		line := "• " + homeIssueLine(issue)
+		line := "• " + truncateHomeIssueLine(homeIssueLine(issue), maxHomeSectionText-runeCount(prefix)-runeCount("• "))
 		candidate := current + line + "\n"
-		if current != prefix && len(candidate) > maxHomeSectionText {
+		if current != prefix && runeCount(candidate) > maxHomeSectionText {
 			chunks = append(chunks, homeChunk{text: strings.TrimSpace(current), issueCount: currentCount})
 			current = prefix + line + "\n"
 			currentCount = 1
@@ -138,4 +139,22 @@ func homeIssueLine(issue userworkflow.SlackHomeIssue) string {
 	default:
 		return strings.TrimSpace(issue.ID)
 	}
+}
+
+func truncateHomeIssueLine(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 {
+		return ""
+	}
+	if runeCount(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string([]rune(value)[:limit])
+	}
+	return string([]rune(value)[:limit-3]) + "..."
+}
+
+func runeCount(value string) int {
+	return utf8.RuneCountInString(value)
 }
