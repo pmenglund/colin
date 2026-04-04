@@ -531,6 +531,47 @@ func TestViewingLogsClearsIndicatorUntilNewWarnOrErrorArrives(t *testing.T) {
 	}
 }
 
+func TestFilteredLogsDoNotMarkHiddenWarningsAsViewed(t *testing.T) {
+	t.Parallel()
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
+	m.logs = domain.BufferedLogSnapshot{
+		Entries: []domain.BufferedLogEntry{
+			{Timestamp: time.Unix(0, 0).UTC(), Level: "ERROR", Message: "first error"},
+		},
+		Count:    1,
+		Capacity: 2,
+	}
+	m.logFilter = logLevelFilterError
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	m = next.(model)
+	if strings.Contains(stripANSI(m.View().Content), "warn/err in logs") {
+		t.Fatal("indicator should clear after viewing the visible error log")
+	}
+
+	next, _ = m.Update(refreshMsg{
+		logs: domain.BufferedLogSnapshot{
+			Entries: []domain.BufferedLogEntry{
+				{Timestamp: time.Unix(0, 0).UTC(), Level: "ERROR", Message: "first error"},
+				{Timestamp: time.Unix(1, 0).UTC(), Level: "WARN", Message: "hidden warning"},
+			},
+			Count:    2,
+			Capacity: 3,
+		},
+	})
+	m = next.(model)
+	if !m.hasUnseenLogAlerts() {
+		t.Fatal("hidden warning should remain unseen while filtered out in logs mode")
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	m = next.(model)
+	if !strings.Contains(stripANSI(m.View().Content), "warn/err in logs") {
+		t.Fatal("indicator should reappear in overview because the filtered-out warning was not viewed")
+	}
+}
+
 func TestFailedRefreshDoesNotReopenViewedWarnOrErrorIndicator(t *testing.T) {
 	t.Parallel()
 

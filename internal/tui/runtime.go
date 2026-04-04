@@ -170,7 +170,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs = msg.logs
 		m.setup = msg.setup
 		if m.mode == modeLogs && msg.err == nil {
-			m.markLogAlertsViewed()
+			m.markVisibleLogAlertsViewed()
 		}
 		m.refreshErr = msg.err
 		m.lastRefresh = time.Now().UTC()
@@ -233,7 +233,7 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if m.mode == modeOverview {
 			m.mode = modeLogs
-			m.markLogAlertsViewed()
+			m.markVisibleLogAlertsViewed()
 			if m.selectedLog < 0 || m.selectedLog >= m.filteredLogCount() {
 				m.selectLastLog()
 			} else {
@@ -438,8 +438,16 @@ func (m *model) ensureSelectedLogVisible() {
 }
 
 func (m model) currentLogAlerts() logAlertState {
+	return currentLogAlertsFor(m.logs.Entries)
+}
+
+func (m model) currentVisibleLogAlerts() logAlertState {
+	return currentLogAlertsFor(m.filteredLogEntries())
+}
+
+func currentLogAlertsFor(entries []domain.BufferedLogEntry) logAlertState {
 	var state logAlertState
-	for _, entry := range m.logs.Entries {
+	for _, entry := range entries {
 		if !isLogAlertLevel(entry.Level) {
 			continue
 		}
@@ -449,8 +457,8 @@ func (m model) currentLogAlerts() logAlertState {
 	return state
 }
 
-func (m *model) markLogAlertsViewed() {
-	m.viewedAlerts = m.currentLogAlerts()
+func (m *model) markVisibleLogAlertsViewed() {
+	m.viewedAlerts = m.currentVisibleLogAlerts()
 }
 
 func (m model) hasUnseenLogAlerts() bool {
