@@ -135,6 +135,84 @@ func TestModelLogSelectionAutoScrollsIntoView(t *testing.T) {
 	}
 }
 
+func TestModelCyclesLogFilterAndUpdatesRenderedLogs(t *testing.T) {
+	t.Parallel()
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
+	m.mode = modeLogs
+	m.width = 80
+	m.height = 16
+	m.logs = logsWithLevels(
+		"DEBUG",
+		"INFO",
+		"WARN",
+		"ERROR",
+	)
+	m.selectLastLog()
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "f"}))
+	m = next.(model)
+
+	if m.logFilter != logLevelFilterInfo {
+		t.Fatalf("logFilter = %v, want %v", m.logFilter, logLevelFilterInfo)
+	}
+	if got := len(m.filteredLogEntries()); got != 3 {
+		t.Fatalf("filtered log count = %d, want 3", got)
+	}
+	view := stripANSI(m.View().Content)
+	if strings.Contains(view, "debug message") {
+		t.Fatalf("view = %q, want debug entries filtered out", view)
+	}
+	for _, want := range []string{"info message", "warn message", "error message", "Filter info+", "f info+"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want %q", view, want)
+		}
+	}
+	if m.selectedLog != 2 {
+		t.Fatalf("selectedLog = %d, want last filtered entry", m.selectedLog)
+	}
+}
+
+func TestModelLogFilterClampsSelectionWhenFilteredSetShrinks(t *testing.T) {
+	t.Parallel()
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
+	m.mode = modeLogs
+	m.height = 12
+	m.logs = logsWithLevels(
+		"DEBUG",
+		"INFO",
+		"WARN",
+		"ERROR",
+	)
+	m.selectedLog = 2
+
+	for range 3 {
+		next, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "f"}))
+		m = next.(model)
+	}
+
+	if m.logFilter != logLevelFilterError {
+		t.Fatalf("logFilter = %v, want %v", m.logFilter, logLevelFilterError)
+	}
+	if got := len(m.filteredLogEntries()); got != 1 {
+		t.Fatalf("filtered log count = %d, want 1", got)
+	}
+	if m.selectedLog != 0 {
+		t.Fatalf("selectedLog = %d, want 0", m.selectedLog)
+	}
+	if m.logOffset != 0 {
+		t.Fatalf("logOffset = %d, want 0", m.logOffset)
+	}
+	view := stripANSI(m.View().Content)
+	if strings.Contains(view, "warn message") || strings.Contains(view, "info message") || strings.Contains(view, "debug message") {
+		t.Fatalf("view = %q, want only error logs visible", view)
+	}
+	if !strings.Contains(view, "error message") {
+		t.Fatalf("view = %q, want error log visible", view)
+	}
+}
+
 func TestModelEscStopsAndWaitsForServiceExit(t *testing.T) {
 	t.Parallel()
 
@@ -453,6 +531,47 @@ func TestViewingLogsClearsIndicatorUntilNewWarnOrErrorArrives(t *testing.T) {
 	}
 }
 
+func TestFilteredLogsDoNotMarkHiddenWarningsAsViewed(t *testing.T) {
+	t.Parallel()
+
+	m := newModel(context.Background(), fakeSource{}, nil, nil, nil)
+	m.logs = domain.BufferedLogSnapshot{
+		Entries: []domain.BufferedLogEntry{
+			{Timestamp: time.Unix(0, 0).UTC(), Level: "ERROR", Message: "first error"},
+		},
+		Count:    1,
+		Capacity: 2,
+	}
+	m.logFilter = logLevelFilterError
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	m = next.(model)
+	if strings.Contains(stripANSI(m.View().Content), "warn/err in logs") {
+		t.Fatal("indicator should clear after viewing the visible error log")
+	}
+
+	next, _ = m.Update(refreshMsg{
+		logs: domain.BufferedLogSnapshot{
+			Entries: []domain.BufferedLogEntry{
+				{Timestamp: time.Unix(0, 0).UTC(), Level: "ERROR", Message: "first error"},
+				{Timestamp: time.Unix(1, 0).UTC(), Level: "WARN", Message: "hidden warning"},
+			},
+			Count:    2,
+			Capacity: 3,
+		},
+	})
+	m = next.(model)
+	if !m.hasUnseenLogAlerts() {
+		t.Fatal("hidden warning should remain unseen while filtered out in logs mode")
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "l"}))
+	m = next.(model)
+	if !strings.Contains(stripANSI(m.View().Content), "warn/err in logs") {
+		t.Fatal("indicator should reappear in overview because the filtered-out warning was not viewed")
+	}
+}
+
 func TestFailedRefreshDoesNotReopenViewedWarnOrErrorIndicator(t *testing.T) {
 	t.Parallel()
 
@@ -517,4 +636,16 @@ func sampleLogs(count int) domain.BufferedLogSnapshot {
 		})
 	}
 	return domain.BufferedLogSnapshot{Entries: entries, Count: len(entries), Capacity: maxInt(count, 1)}
+}
+
+func logsWithLevels(levels ...string) domain.BufferedLogSnapshot {
+	entries := make([]domain.BufferedLogEntry, 0, len(levels))
+	for i, level := range levels {
+		entries = append(entries, domain.BufferedLogEntry{
+			Timestamp: time.Unix(int64(i), 0).UTC(),
+			Level:     level,
+			Message:   strings.ToLower(level) + " message",
+		})
+	}
+	return domain.BufferedLogSnapshot{Entries: entries, Count: len(entries), Capacity: maxInt(len(entries), 1)}
 }

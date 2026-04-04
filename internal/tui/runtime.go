@@ -40,6 +40,15 @@ const (
 	modeLogs
 )
 
+type logLevelFilter int
+
+const (
+	logLevelFilterDebug logLevelFilter = iota
+	logLevelFilterInfo
+	logLevelFilterWarn
+	logLevelFilterError
+)
+
 type refreshMsg struct {
 	dashboardURL string
 	setupURL     string
@@ -72,6 +81,7 @@ type model struct {
 	setup             domain.FunnelSetupStatus
 	logOffset         int
 	selectedLog       int
+	logFilter         logLevelFilter
 	viewedAlerts      logAlertState
 	lastRefresh       time.Time
 	refreshErr        error
@@ -123,6 +133,7 @@ func newModel(ctx context.Context, source Source, serviceErrs <-chan error, requ
 		width:                defaultWidth,
 		height:               defaultHeight,
 		selectedLog:          -1,
+		logFilter:            logLevelFilterDebug,
 	}
 }
 
@@ -159,7 +170,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs = msg.logs
 		m.setup = msg.setup
 		if m.mode == modeLogs && msg.err == nil {
-			m.markLogAlertsViewed()
+			m.markVisibleLogAlertsViewed()
 		}
 		m.refreshErr = msg.err
 		m.lastRefresh = time.Now().UTC()
@@ -222,14 +233,27 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if m.mode == modeOverview {
 			m.mode = modeLogs
-			m.markLogAlertsViewed()
-			if m.selectedLog < 0 || m.selectedLog >= len(m.logs.Entries) {
+			m.markVisibleLogAlertsViewed()
+			if m.selectedLog < 0 || m.selectedLog >= m.filteredLogCount() {
 				m.selectLastLog()
 			} else {
 				m.ensureSelectedLogVisible()
 			}
 		} else {
 			m.mode = modeOverview
+		}
+		return m, nil
+	case "f":
+		if m.mode != modeLogs {
+			return m, nil
+		}
+		followLatest := m.isFollowingLatestLog()
+		m.logFilter = m.logFilter.next()
+		if followLatest {
+			m.selectLastLog()
+		} else {
+			m.clampSelectedLog()
+			m.ensureSelectedLogVisible()
 		}
 		return m, nil
 	}
@@ -365,38 +389,41 @@ func (m model) logDetailRows() int {
 }
 
 func (m *model) selectLastLog() {
-	if len(m.logs.Entries) == 0 {
+	count := m.filteredLogCount()
+	if count == 0 {
 		m.selectedLog = -1
 		m.logOffset = 0
 		return
 	}
-	m.selectedLog = len(m.logs.Entries) - 1
+	m.selectedLog = count - 1
 	m.ensureSelectedLogVisible()
 }
 
 func (m model) isLogPinnedToBottom() bool {
-	return m.logOffset >= maxInt(len(m.logs.Entries)-m.visibleLogLines(), 0)
+	return m.logOffset >= maxInt(m.filteredLogCount()-m.visibleLogLines(), 0)
 }
 
 func (m model) isFollowingLatestLog() bool {
-	if len(m.logs.Entries) == 0 {
+	count := m.filteredLogCount()
+	if count == 0 {
 		return true
 	}
-	return m.selectedLog >= len(m.logs.Entries)-1 && m.isLogPinnedToBottom()
+	return m.selectedLog >= count-1 && m.isLogPinnedToBottom()
 }
 
 func (m *model) clampSelectedLog() {
-	if len(m.logs.Entries) == 0 {
+	count := m.filteredLogCount()
+	if count == 0 {
 		m.selectedLog = -1
 		m.logOffset = 0
 		return
 	}
-	m.selectedLog = clampInt(m.selectedLog, 0, len(m.logs.Entries)-1)
+	m.selectedLog = clampInt(m.selectedLog, 0, count-1)
 }
 
 func (m *model) ensureSelectedLogVisible() {
 	m.clampSelectedLog()
-	maxOffset := maxInt(len(m.logs.Entries)-m.visibleLogLines(), 0)
+	maxOffset := maxInt(m.filteredLogCount()-m.visibleLogLines(), 0)
 	if m.selectedLog < 0 {
 		m.logOffset = 0
 		return
@@ -411,8 +438,16 @@ func (m *model) ensureSelectedLogVisible() {
 }
 
 func (m model) currentLogAlerts() logAlertState {
+	return currentLogAlertsFor(m.logs.Entries)
+}
+
+func (m model) currentVisibleLogAlerts() logAlertState {
+	return currentLogAlertsFor(m.filteredLogEntries())
+}
+
+func currentLogAlertsFor(entries []domain.BufferedLogEntry) logAlertState {
 	var state logAlertState
-	for _, entry := range m.logs.Entries {
+	for _, entry := range entries {
 		if !isLogAlertLevel(entry.Level) {
 			continue
 		}
@@ -422,8 +457,8 @@ func (m model) currentLogAlerts() logAlertState {
 	return state
 }
 
-func (m *model) markLogAlertsViewed() {
-	m.viewedAlerts = m.currentLogAlerts()
+func (m *model) markVisibleLogAlertsViewed() {
+	m.viewedAlerts = m.currentVisibleLogAlerts()
 }
 
 func (m model) hasUnseenLogAlerts() bool {
@@ -435,6 +470,64 @@ func (m model) hasUnseenLogAlerts() bool {
 		return true
 	}
 	return current.timestamp.After(m.viewedAlerts.timestamp)
+}
+
+func (m model) filteredLogEntries() []domain.BufferedLogEntry {
+	if m.logFilter == logLevelFilterDebug {
+		return m.logs.Entries
+	}
+
+	entries := make([]domain.BufferedLogEntry, 0, len(m.logs.Entries))
+	for _, entry := range m.logs.Entries {
+		if bufferedLogLevel(entry.Level) < m.logFilter.minLevel() {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func (m model) filteredLogCount() int {
+	return len(m.filteredLogEntries())
+}
+
+func (f logLevelFilter) next() logLevelFilter {
+	switch f {
+	case logLevelFilterInfo:
+		return logLevelFilterWarn
+	case logLevelFilterWarn:
+		return logLevelFilterError
+	case logLevelFilterError:
+		return logLevelFilterDebug
+	default:
+		return logLevelFilterInfo
+	}
+}
+
+func (f logLevelFilter) minLevel() slog.Level {
+	switch f {
+	case logLevelFilterInfo:
+		return slog.LevelInfo
+	case logLevelFilterWarn:
+		return slog.LevelWarn
+	case logLevelFilterError:
+		return slog.LevelError
+	default:
+		return slog.LevelDebug
+	}
+}
+
+func (f logLevelFilter) label() string {
+	switch f {
+	case logLevelFilterInfo:
+		return "info+"
+	case logLevelFilterWarn:
+		return "warn+"
+	case logLevelFilterError:
+		return "error"
+	default:
+		return "debug+"
+	}
 }
 
 func isLogAlertLevel(level string) bool {
@@ -461,4 +554,12 @@ func maxInt(a int, b int) int {
 		return a
 	}
 	return b
+}
+
+func bufferedLogLevel(raw string) slog.Level {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(strings.TrimSpace(raw))); err == nil {
+		return level
+	}
+	return slog.LevelInfo
 }
