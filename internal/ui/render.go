@@ -49,6 +49,8 @@ func Page(snapshot domain.Snapshot, _ time.Time) g.Node {
 					g.Text("JSON API: "),
 					h.A(h.Href("/api/v1/state"), g.Text("/api/v1/state")),
 					g.Text(" | "),
+					h.A(h.Href("/api/v1/logs"), g.Text("/api/v1/logs")),
+					g.Text(" | "),
 					h.A(h.Href("/setup/funnel"), g.Text("Tailscale webhook setup")),
 				),
 			),
