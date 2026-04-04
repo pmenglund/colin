@@ -1451,6 +1451,68 @@ func TestRemoveIssueLabelNoopWhenLabelMissing(t *testing.T) {
 	}
 }
 
+func TestRemoveIssueLabelNoopWhenIssueAlreadyLacksLabel(t *testing.T) {
+	t.Parallel()
+
+	var mutationCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":   "label-1",
+								"name": "paused",
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation RemoveIssueLabel"):
+			mutationCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"errors": []map[string]any{
+					{
+						"message": "Label not on issue",
+						"extensions": map[string]any{
+							"code":                   "INPUT_ERROR",
+							"userPresentableMessage": "Label label-1 is not on issue issue-1 and cannot be removed.",
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
+	}
+
+	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
+		t.Fatalf("RemoveIssueLabel() error = %v, want nil", err)
+	}
+	if mutationCount != 1 {
+		t.Fatalf("mutation count = %d, want 1", mutationCount)
+	}
+}
+
 func TestUpsertIssueExecPlan(t *testing.T) {
 	t.Parallel()
 

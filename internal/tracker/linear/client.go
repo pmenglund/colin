@@ -434,6 +434,9 @@ mutation RemoveIssueLabel($id: String!, $labelId: String!) {
 		"labelId": labelID,
 	})
 	if err != nil {
+		if isMissingIssueLabelRemovalError(err) {
+			return nil
+		}
 		return err
 	}
 	success, _ := nestedBool(resp, "data", "issueRemoveLabel", "success")
@@ -441,6 +444,15 @@ mutation RemoveIssueLabel($id: String!, $labelId: String!) {
 		return ErrUnknownPayload
 	}
 	return nil
+}
+
+func isMissingIssueLabelRemovalError(err error) bool {
+	if err == nil || !errors.Is(err, ErrGraphQLErrors) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "label not on issue") ||
+		(strings.Contains(message, "is not on issue") && strings.Contains(message, "cannot be removed"))
 }
 
 // ResolveGitAutomationState returns the team-configured Linear git automation state for the supplied event.
