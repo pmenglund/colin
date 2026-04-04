@@ -56,8 +56,8 @@ type slackSocketModeRunner interface {
 	Run(context.Context) error
 }
 
-var newSlackSocketModeRunner = func(cfg domain.SlackConfig, logger *slog.Logger) slackSocketModeRunner {
-	return slacknotify.NewSocketMode(cfg.AppToken, cfg.BotToken, logger)
+var newSlackSocketModeRunner = func(cfg domain.SlackConfig, logger *slog.Logger, observer slacknotify.SocketModeStatusObserver) slackSocketModeRunner {
+	return slacknotify.NewSocketMode(cfg.AppToken, cfg.BotToken, logger, observer)
 }
 
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
@@ -74,6 +74,10 @@ type Service struct {
 	webhookURL   string
 	runtimeMu    sync.RWMutex
 	runtime      orchestrator.Runtime
+	slackMu      sync.RWMutex
+	slackStatus  domain.SlackSocketModeStatus
+	webhookMu    sync.RWMutex
+	webhooks     map[string]domain.WebhookStatus
 	orch         *orchestrator.Orchestrator
 	inspector    tailscaleInspector
 }
@@ -100,6 +104,8 @@ func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Servic
 		serverPort:   clonePort(runtime.Config.Server.Port),
 		webhookPort:  clonePort(runtime.Config.Server.WebhookPort),
 		runtime:      runtime,
+		slackStatus:  slackSocketModeStatusForConfig(runtime.Config.Slack),
+		webhooks:     map[string]domain.WebhookStatus{},
 		orch:         orch,
 		inspector:    tsdiag.NewInspector(),
 	}, nil
@@ -163,7 +169,13 @@ func (s *Service) webhookBaseURL() string {
 
 // Snapshot returns the current in-memory orchestrator snapshot.
 func (s *Service) Snapshot(ctx context.Context) (domain.Snapshot, error) {
-	return s.orch.Snapshot(ctx)
+	snapshot, err := s.orch.Snapshot(ctx)
+	if err != nil {
+		return domain.Snapshot{}, err
+	}
+	snapshot.SlackSocketMode = s.currentSlackSocketModeStatus()
+	snapshot.Webhooks = s.currentWebhookStatuses()
+	return snapshot, nil
 }
 
 // BufferedLogs returns the current in-memory structured log buffer.
@@ -374,10 +386,17 @@ func (s *Service) startWebhookServer(ctx context.Context) error {
 func (s *Service) startSlackSocketMode(ctx context.Context) {
 	runtime := s.currentRuntime()
 	if strings.TrimSpace(runtime.Config.Slack.AppToken) == "" {
+		s.setSlackSocketModeStatus(slackSocketModeStatusForConfig(runtime.Config.Slack))
 		return
 	}
 
-	runner := newSlackSocketModeRunner(runtime.Config.Slack, s.logger)
+	s.setSlackSocketModeStatus(domain.SlackSocketModeStatus{
+		Enabled:     true,
+		State:       "connecting",
+		LastEvent:   "starting",
+		LastEventAt: time.Now().UTC(),
+	})
+	runner := newSlackSocketModeRunner(runtime.Config.Slack, s.logger, s.setSlackSocketModeStatus)
 	if runner == nil {
 		return
 	}
@@ -385,9 +404,82 @@ func (s *Service) startSlackSocketMode(ctx context.Context) {
 	s.logger.Info("slack socket mode enabled")
 	go func() {
 		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			s.setSlackSocketModeStatus(domain.SlackSocketModeStatus{
+				Enabled:     true,
+				State:       "error",
+				LastEvent:   "run_error",
+				LastEventAt: time.Now().UTC(),
+				LastError:   err.Error(),
+			})
 			s.logger.Warn("slack socket mode exited", "error", err)
 		}
 	}()
+}
+
+func slackSocketModeStatusForConfig(cfg domain.SlackConfig) domain.SlackSocketModeStatus {
+	if strings.TrimSpace(cfg.AppToken) == "" {
+		return domain.SlackSocketModeStatus{State: "disabled"}
+	}
+	return domain.SlackSocketModeStatus{
+		Enabled: true,
+		State:   "configured",
+	}
+}
+
+func (s *Service) setSlackSocketModeStatus(status domain.SlackSocketModeStatus) {
+	if s == nil {
+		return
+	}
+	s.slackMu.Lock()
+	defer s.slackMu.Unlock()
+	s.slackStatus = cloneSlackSocketModeStatus(status)
+}
+
+func (s *Service) currentSlackSocketModeStatus() domain.SlackSocketModeStatus {
+	if s == nil {
+		return domain.SlackSocketModeStatus{}
+	}
+	s.slackMu.RLock()
+	defer s.slackMu.RUnlock()
+	return cloneSlackSocketModeStatus(s.slackStatus)
+}
+
+func cloneSlackSocketModeStatus(input domain.SlackSocketModeStatus) domain.SlackSocketModeStatus {
+	out := input
+	out.Sockets = append([]domain.SlackWebSocketStatus(nil), input.Sockets...)
+	return out
+}
+
+func (s *Service) markWebhookMessage(name string) {
+	if s == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	s.webhookMu.Lock()
+	defer s.webhookMu.Unlock()
+	if s.webhooks == nil {
+		s.webhooks = map[string]domain.WebhookStatus{}
+	}
+	s.webhooks[name] = domain.WebhookStatus{LastMessageAt: time.Now().UTC()}
+}
+
+func (s *Service) currentWebhookStatuses() map[string]domain.WebhookStatus {
+	if s == nil {
+		return nil
+	}
+	s.webhookMu.RLock()
+	defer s.webhookMu.RUnlock()
+	if len(s.webhooks) == 0 {
+		return map[string]domain.WebhookStatus{}
+	}
+	out := make(map[string]domain.WebhookStatus, len(s.webhooks))
+	for key, value := range s.webhooks {
+		out[key] = value
+	}
+	return out
 }
 
 func clonePort(value *int) *int {
@@ -461,6 +553,7 @@ func (s *Service) newDashboardHandler() (http.Handler, error) {
 
 func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
 	return func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
+		s.markWebhookMessage("linear")
 		runtime := s.currentRuntime()
 		if !shouldQueueImmediateLinearRefresh(event, watchedProjectIDs(runtime.Tracker)) {
 			return app.LinearWebhookTriggerResult{}
@@ -494,6 +587,7 @@ func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider 
 
 func (s *Service) slackWebhookPublisher() app.SlackWebhookPublisher {
 	return func(ctx context.Context, event app.SlackWebhookEvent) error {
+		s.markWebhookMessage("slack")
 		runtime := s.currentRuntime()
 		if runtime.Tracker == nil {
 			return errors.New("tracker unavailable")

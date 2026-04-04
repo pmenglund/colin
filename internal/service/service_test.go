@@ -24,6 +24,7 @@ import (
 	"github.com/pmenglund/colin/internal/app"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	slacknotify "github.com/pmenglund/colin/internal/notify/slack"
 	"github.com/pmenglund/colin/internal/orchestrator"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/repoops"
@@ -506,8 +507,11 @@ func TestStartSlackSocketModeStartsWhenAppTokenConfigured(t *testing.T) {
 	}()
 
 	started := make(chan struct{})
-	newSlackSocketModeRunner = func(domain.SlackConfig, *slog.Logger) slackSocketModeRunner {
-		return &slackSocketModeRunnerStub{started: started}
+	newSlackSocketModeRunner = func(_ domain.SlackConfig, _ *slog.Logger, observer slacknotify.SocketModeStatusObserver) slackSocketModeRunner {
+		return &slackSocketModeRunnerStub{
+			started:  started,
+			observer: observer,
+		}
 	}
 
 	svc := &Service{
@@ -533,6 +537,9 @@ func TestStartSlackSocketModeStartsWhenAppTokenConfigured(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("startSlackSocketMode() did not start the Slack runner")
 	}
+	if got := svc.currentSlackSocketModeStatus(); !got.Connected || got.State != "connected" {
+		t.Fatalf("slack status = %#v, want connected", got)
+	}
 }
 
 func TestStartSlackSocketModeSkipsWhenAppTokenMissing(t *testing.T) {
@@ -541,7 +548,7 @@ func TestStartSlackSocketModeSkipsWhenAppTokenMissing(t *testing.T) {
 		newSlackSocketModeRunner = previousFactory
 	}()
 
-	newSlackSocketModeRunner = func(domain.SlackConfig, *slog.Logger) slackSocketModeRunner {
+	newSlackSocketModeRunner = func(domain.SlackConfig, *slog.Logger, slacknotify.SocketModeStatusObserver) slackSocketModeRunner {
 		t.Fatal("newSlackSocketModeRunner() should not be called without an app token")
 		return nil
 	}
@@ -559,6 +566,37 @@ func TestStartSlackSocketModeSkipsWhenAppTokenMissing(t *testing.T) {
 	}
 
 	svc.startSlackSocketMode(context.Background())
+	if got := svc.currentSlackSocketModeStatus(); got.Enabled || got.State != "disabled" {
+		t.Fatalf("slack status = %#v, want disabled", got)
+	}
+}
+
+func TestSnapshotIncludesSlackSocketModeStatus(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		orch: orchestrator.New(orchestrator.Runtime{
+			Tracker: &serviceTrackerStub{},
+		}, slog.New(slog.NewTextHandler(io.Discard, nil))),
+	}
+	svc.setSlackSocketModeStatus(domain.SlackSocketModeStatus{
+		Enabled:   true,
+		Connected: true,
+		State:     "connected",
+	})
+	svc.markWebhookMessage("slack")
+
+	snapshot, err := svc.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if !snapshot.SlackSocketMode.Connected {
+		t.Fatalf("Snapshot().SlackSocketMode = %#v, want connected status", snapshot.SlackSocketMode)
+	}
+	if snapshot.Webhooks["slack"].LastMessageAt.IsZero() {
+		t.Fatalf("Snapshot().Webhooks = %#v, want slack webhook timestamp", snapshot.Webhooks)
+	}
 }
 
 func TestSetupLinearWebhookCreatesManagedWebhook(t *testing.T) {
@@ -1581,7 +1619,8 @@ type serviceSlackHomeNotifier struct {
 }
 
 type slackSocketModeRunnerStub struct {
-	started chan struct{}
+	started  chan struct{}
+	observer slacknotify.SocketModeStatusObserver
 }
 
 type serviceGitHubStub struct {
@@ -1589,6 +1628,13 @@ type serviceGitHubStub struct {
 }
 
 func (s *slackSocketModeRunnerStub) Run(ctx context.Context) error {
+	if s.observer != nil {
+		s.observer(domain.SlackSocketModeStatus{
+			Enabled:   true,
+			Connected: true,
+			State:     "connected",
+		})
+	}
 	close(s.started)
 	<-ctx.Done()
 	return nil

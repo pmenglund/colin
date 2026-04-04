@@ -342,6 +342,16 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		dashboardURL: "http://127.0.0.1:7777",
 		setupURL:     "http://127.0.0.1:7777/setup/funnel",
 		snapshot: domain.Snapshot{
+			SlackSocketMode: domain.SlackSocketModeStatus{
+				Enabled:     true,
+				Connected:   true,
+				State:       "connected",
+				LastEventAt: now.Add(-10 * time.Second),
+			},
+			Webhooks: map[string]domain.WebhookStatus{
+				"slack":  {},
+				"linear": {},
+			},
 			Running: []domain.SnapshotRunning{{
 				Identifier:  "COLIN-147",
 				State:       "In Progress",
@@ -381,6 +391,10 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		"https://colin.example.test/webhooks/linear",
 		"github hook https://colin.example.test/webhooks/github",
 		"https://colin.example.test/webhooks/github",
+		"  Integrations",
+		"  slack ws        connected 10s ago",
+		"  slack webhook   no messages yet",
+		"  linear webhook  no messages yet",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q", view, want)

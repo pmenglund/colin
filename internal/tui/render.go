@@ -38,7 +38,11 @@ func renderOverviewView(m model) string {
 		renderURLLine("dashboard", dashboardDisplayURL(m)),
 		renderURLLine("linear hook", m.setup.LinearWebhookURL),
 		renderURLLine("github hook", m.setup.GitHubWebhookURL),
+		"",
+		labelStyle.Render("Integrations"),
+		renderSlackSocketModeLine(m.snapshot.SlackSocketMode),
 	}
+	lines = append(lines, renderWebhookStatusLines(m.snapshot.Webhooks)...)
 
 	if m.refreshErr != nil {
 		lines = append(lines, errorStyle.Render("refresh error: "+m.refreshErr.Error()))
@@ -147,6 +151,52 @@ func renderURLLine(label string, value string) string {
 		return name + " " + subtleStyle.Render("not available")
 	}
 	return name + " " + healthyURLStyle.Render(value)
+}
+
+func renderSlackSocketModeLine(status domain.SlackSocketModeStatus) string {
+	name := subtleStyle.Render(padRight("slack ws", 15))
+	switch {
+	case status.Connected:
+		line := successStyle.Render("connected")
+		if !status.LastEventAt.IsZero() {
+			line += subtleStyle.Render(" " + humanizeAge(status.LastEventAt))
+		}
+		return name + " " + line
+	case !status.Enabled:
+		return name + " " + subtleStyle.Render("disabled")
+	case strings.TrimSpace(status.LastError) != "":
+		return name + " " + errorStyle.Render(status.State+": "+status.LastError)
+	default:
+		state := strings.TrimSpace(status.State)
+		if state == "" {
+			state = "connecting"
+		}
+		line := warnStyle.Render(state)
+		if !status.LastEventAt.IsZero() {
+			line += subtleStyle.Render(" " + humanizeAge(status.LastEventAt))
+		}
+		return name + " " + line
+	}
+}
+
+func renderSlackSocketModeDetails(status domain.SlackSocketModeStatus) []string {
+	_ = status
+	return nil
+}
+
+func renderWebhookStatusLines(webhooks map[string]domain.WebhookStatus) []string {
+	return []string{
+		renderWebhookStatusLine("slack webhook", webhooks["slack"]),
+		renderWebhookStatusLine("linear webhook", webhooks["linear"]),
+	}
+}
+
+func renderWebhookStatusLine(label string, status domain.WebhookStatus) string {
+	name := subtleStyle.Render(padRight(label, 15))
+	if status.LastMessageAt.IsZero() {
+		return name + " " + subtleStyle.Render("no messages yet")
+	}
+	return name + " " + subtleStyle.Render("last msg "+humanizeAge(status.LastMessageAt))
 }
 
 func renderWorkerLine(worker domain.SnapshotRunning, width int) string {

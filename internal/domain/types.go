@@ -488,6 +488,29 @@ type SlackConfig struct {
 	SigningSecret string
 }
 
+// SlackSocketModeStatus describes the current Slack Socket Mode connection state.
+type SlackSocketModeStatus struct {
+	Enabled     bool                   `json:"enabled"`
+	Connected   bool                   `json:"connected"`
+	State       string                 `json:"state,omitempty"`
+	LastEvent   string                 `json:"last_event,omitempty"`
+	LastEventAt time.Time              `json:"last_event_at,omitempty"`
+	LastError   string                 `json:"last_error,omitempty"`
+	Sockets     []SlackWebSocketStatus `json:"sockets,omitempty"`
+}
+
+// SlackWebSocketStatus describes one observed Slack Socket Mode websocket.
+type SlackWebSocketStatus struct {
+	Host          string    `json:"host"`
+	Current       bool      `json:"current"`
+	LastMessageAt time.Time `json:"last_message_at,omitempty"`
+}
+
+// WebhookStatus describes recent activity for one inbound webhook.
+type WebhookStatus struct {
+	LastMessageAt time.Time `json:"last_message_at,omitempty"`
+}
+
 // SetupCheck is one operator-facing readiness check.
 type SetupCheck struct {
 	ID          string    `json:"id"`
@@ -586,6 +609,8 @@ type StateIssueSummary struct {
 type Snapshot struct {
 	GeneratedAt       time.Time                      `json:"generated_at"`
 	ShutdownRequested bool                           `json:"shutdown_requested"`
+	SlackSocketMode   SlackSocketModeStatus          `json:"slack_socket_mode"`
+	Webhooks          map[string]WebhookStatus       `json:"webhooks,omitempty"`
 	Running           []SnapshotRunning              `json:"running"`
 	Retrying          []RetryEntry                   `json:"retrying"`
 	CodexTotals       Totals                         `json:"codex_totals"`
