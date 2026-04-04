@@ -118,19 +118,9 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 	}
 	defer stream.Close()
 
-	var turnText []string
-	appendTurnText := func(summary string) {
-		summary = strings.TrimSpace(summary)
-		if summary == "" {
-			return
-		}
-		if len(turnText) > 0 && turnText[len(turnText)-1] == summary {
-			return
-		}
-		turnText = append(turnText, summary)
-	}
+	var lastCompletedItemText string
 	finishTurn := func() {
-		c.lastTurnText = strings.TrimSpace(strings.Join(turnText, "\n\n"))
+		c.lastTurnText = strings.TrimSpace(lastCompletedItemText)
 	}
 
 	for {
@@ -163,7 +153,7 @@ func (c *appServerClient) runTurn(parent context.Context, cwd string, issue doma
 			c.lastSummary = summary
 		}
 		if output, ok := completedItemText(msg); ok {
-			appendTurnText(output)
+			lastCompletedItemText = output
 			c.lastTurnTextFromCompletedItem = true
 		}
 		c.emit(Event{
