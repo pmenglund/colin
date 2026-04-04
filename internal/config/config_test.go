@@ -90,6 +90,7 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 
 func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+	t.Setenv("SLACK_SIGNING_SECRET", "slack-signing-secret")
 
 	def := workflowDefinition(t, map[string]any{
 		"tracker": map[string]any{
@@ -98,8 +99,9 @@ func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
 			"api_key":      "token",
 		},
 		"slack": map[string]any{
-			"bot_token":  "$SLACK_BOT_TOKEN",
-			"channel_id": "C12345678",
+			"bot_token":      "$SLACK_BOT_TOKEN",
+			"channel_id":     "C12345678",
+			"signing_secret": "$SLACK_SIGNING_SECRET",
 		},
 	})
 
@@ -112,6 +114,9 @@ func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
 	}
 	if got := cfg.Slack.ChannelID; got != "C12345678" {
 		t.Fatalf("cfg.Slack.ChannelID = %q, want %q", got, "C12345678")
+	}
+	if got := cfg.Slack.SigningSecret; got != "slack-signing-secret" {
+		t.Fatalf("cfg.Slack.SigningSecret = %q, want %q", got, "slack-signing-secret")
 	}
 }
 

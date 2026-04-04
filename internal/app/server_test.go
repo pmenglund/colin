@@ -164,7 +164,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Sequence:    7,
 			GeneratedAt: time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC),
 		}, streamUpdates, nil
-	}, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -549,7 +549,7 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUIHandler() error = %v", err)
 	}
-	webhookHandler := NewWebhookHandler(nil, nil, nil, nil, nil)
+	webhookHandler := NewWebhookHandler(nil, nil, nil, nil, nil, nil, nil)
 
 	uiServer := httptest.NewServer(uiHandler)
 	defer uiServer.Close()
@@ -602,7 +602,7 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -630,7 +630,7 @@ func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *test
 
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(context.Context) string {
 		return "secret"
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -679,7 +679,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 				events = append(events, event)
 				return LinearWebhookTriggerResult{Relevant: true, Queued: true}
-			}, nil, nil, nil, nil)
+			}, nil, nil, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("NewObservabilityServer() error = %v", err)
 			}
@@ -735,7 +735,7 @@ func TestObservabilityServerLinearWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		triggerCalls++
 		return LinearWebhookTriggerResult{Relevant: true, Queued: true}
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -761,7 +761,7 @@ func TestObservabilityServerLinearWebhookAcknowledgesCoalescedRefresh(t *testing
 
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		return LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -788,7 +788,7 @@ func TestObservabilityServerLinearWebhookLogsRequests(t *testing.T) {
 
 	var output strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, logger)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -831,7 +831,7 @@ func TestObservabilityServerGitHubWebhookVerifiesSignatureWhenConfigured(t *test
 
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
 		return "secret"
-	}, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -891,7 +891,7 @@ func TestObservabilityServerGitHubWebhookTriggersRefreshForRelevantEvents(t *tes
 			handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
 				events = append(events, event)
 				return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
-			}, nil, nil)
+			}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("NewObservabilityServer() error = %v", err)
 			}
@@ -947,7 +947,7 @@ func TestObservabilityServerGitHubWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
 		triggerCalls++
 		return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
-	}, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -979,7 +979,7 @@ func TestObservabilityServerGitHubWebhookAcknowledgesCoalescedRefresh(t *testing
 
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
 		return GitHubWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
-	}, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -1006,7 +1006,7 @@ func TestObservabilityServerGitHubWebhookLogsRequests(t *testing.T) {
 
 	var output strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, logger)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -1048,7 +1048,7 @@ func TestObservabilityServerGitHubWebhookAcceptsValidSignature(t *testing.T) {
 	payload := `{"action":"submitted","repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`
 	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
 		return secret
-	}, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}

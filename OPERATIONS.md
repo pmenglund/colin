@@ -220,7 +220,7 @@ Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen c
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/`, JSON state at `/api/v1/state`, and buffered internal logs at `/api/v1/logs`.
 
-## Optional Slack Summaries
+## Optional Slack Integration
 
 When `WORKFLOW.md` contains:
 
@@ -228,9 +228,14 @@ When `WORKFLOW.md` contains:
 slack:
   bot_token: $SLACK_BOT_TOKEN
   channel_id: C0123456789
+  signing_secret: $SLACK_SIGNING_SECRET
 ```
 
-Colin keeps one Slack message per tracked issue in the configured channel. That message updates in place as the issue moves through active, handoff, and terminal states. The Slack view is intentionally high-level: it shows the current state and next action directly, and links out to the Linear issue, PR, Colin metadata page, and stored ExecPlan when those links are available.
+Colin uses Slack in two read-only operator surfaces. First, it keeps one Slack message per tracked issue in the configured channel. That message updates in place as the issue moves through active, handoff, and terminal states. Second, the Slack app Home tab shows the watched issues that are outside `Backlog` and outside Colin's terminal states, grouped by state in Colin's normal workflow order.
+
+The Slack view is intentionally high-level: it shows the current state and next action directly, and links out to the Linear issue, PR, Colin metadata page, and stored ExecPlan when those links are available. The App Home tab is also read-only. It does not move Linear issues, approve PRs, or replace the existing Slack summary messages.
+
+To enable the App Home tab, configure the Slack app with Home tabs enabled, subscribe the app to the `app_home_opened` event, and point Slack's event request URL at Colin's `/webhooks/slack` endpoint. The bot token should be exported as `SLACK_BOT_TOKEN`, and the Slack event signing secret should be exported as `SLACK_SIGNING_SECRET` and referenced from `WORKFLOW.md` as `slack.signing_secret: $SLACK_SIGNING_SECRET`.
 
 Slack is an operator-facing status surface, not a control plane. Colin does not add Slack commands, Slack-originated workflow transitions, or interactive approvals in this change. Slack delivery failures are logged, but they do not stop Colin's core Linear, Codex, publish, or merge workflow.
 

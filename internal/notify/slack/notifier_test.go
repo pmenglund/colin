@@ -15,14 +15,17 @@ type fakeClient struct {
 	postCalls      int
 	updateCalls    int
 	permalinkCalls int
+	publishCalls   int
 	postChannel    string
 	updateChannel  string
 	updateTS       string
 	postOptions    []slackapi.MsgOption
 	updateOptions  []slackapi.MsgOption
+	publishReq     slackapi.PublishViewContextRequest
 	postErr        error
 	updateErr      error
 	permalinkErr   error
+	publishErr     error
 	permalink      string
 }
 
@@ -56,6 +59,15 @@ func (f *fakeClient) GetPermalinkContext(_ context.Context, params *slackapi.Per
 		return f.permalink, nil
 	}
 	return "https://example.slack.com/archives/" + params.Channel + "/p1743630000123456", nil
+}
+
+func (f *fakeClient) PublishViewContext(_ context.Context, req slackapi.PublishViewContextRequest) (*slackapi.ViewResponse, error) {
+	f.publishCalls++
+	f.publishReq = req
+	if f.publishErr != nil {
+		return nil, f.publishErr
+	}
+	return &slackapi.ViewResponse{}, nil
 }
 
 func TestSyncIssuePostsNewMessage(t *testing.T) {

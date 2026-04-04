@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
+	"github.com/pmenglund/colin/internal/userworkflow"
 )
 
 func TestNewLoggerSuppressesInfoWhenNotVerbose(t *testing.T) {
@@ -1259,6 +1261,87 @@ func TestWatchedProjectIDUsesProviderWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestSlackWebhookSecretProviderReadsCurrentRuntime(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Slack: domain.SlackConfig{SigningSecret: "slack-secret"},
+			},
+		},
+	}
+
+	if got := svc.slackWebhookSecretProvider()(context.Background()); got != "slack-secret" {
+		t.Fatalf("slackWebhookSecretProvider() = %q, want %q", got, "slack-secret")
+	}
+}
+
+func TestSlackWebhookPublisherBuildsHomeViewFromWatchedIssues(t *testing.T) {
+	t.Parallel()
+
+	oldFactory := newSlackHomeNotifier
+	defer func() { newSlackHomeNotifier = oldFactory }()
+
+	tracker := &serviceTrackerStub{
+		issuesByState: []domain.Issue{
+			{ID: "1", Identifier: "COLIN-1", Title: "First", State: "Todo"},
+			{ID: "2", Identifier: "COLIN-2", Title: "Second", State: "Refine"},
+			{ID: "3", Identifier: "COLIN-3", Title: "Done", State: "Done"},
+		},
+	}
+	fake := &serviceSlackHomeNotifier{}
+	newSlackHomeNotifier = func(cfg domain.ServiceConfig) slackHomePublisherClient {
+		return fake
+	}
+
+	svc := &Service{
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					ActiveStates:   []string{"Todo", "In Progress"},
+					TerminalStates: []string{"Done", "Closed"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+				Slack: domain.SlackConfig{
+					BotToken:      "xoxb-test",
+					ChannelID:     "C12345678",
+					SigningSecret: "slack-secret",
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	err := svc.slackWebhookPublisher()(context.Background(), app.SlackWebhookEvent{
+		Event:  "app_home_opened",
+		UserID: "U12345678",
+	})
+	if err != nil {
+		t.Fatalf("slackWebhookPublisher() error = %v", err)
+	}
+
+	wantStates := []string{"Todo", "In Progress", "Refine", "Review", "Merge"}
+	if !reflect.DeepEqual(tracker.stateNames, wantStates) {
+		t.Fatalf("FetchIssuesByStates() states = %#v, want %#v", tracker.stateNames, wantStates)
+	}
+	if fake.userID != "U12345678" {
+		t.Fatalf("PublishHome() userID = %q, want %q", fake.userID, "U12345678")
+	}
+	if fake.view.TotalIssues != 2 {
+		t.Fatalf("PublishHome() TotalIssues = %d, want 2", fake.view.TotalIssues)
+	}
+	if len(fake.view.Groups) != 2 {
+		t.Fatalf("PublishHome() len(Groups) = %d, want 2", len(fake.view.Groups))
+	}
+	if fake.view.Groups[0].State != "Todo" || fake.view.Groups[1].State != "Refine" {
+		t.Fatalf("PublishHome() groups = %#v, want Todo then Refine", fake.view.Groups)
+	}
+}
+
 type serviceInspectorStub struct {
 	status    domain.FunnelSetupStatus
 	uiBaseURL string
@@ -1284,6 +1367,13 @@ func (s serviceInspectorStub) ResolveUIBaseURL(context.Context, *int) string {
 
 type serviceTrackerStub struct {
 	ensuredLabels []string
+	issuesByState []domain.Issue
+	stateNames    []string
+}
+
+type serviceSlackHomeNotifier struct {
+	userID string
+	view   userworkflow.SlackHomeView
 }
 
 type serviceGitHubStub struct {
@@ -1438,8 +1528,9 @@ func (s *serviceTrackerStub) FetchCandidateIssues(context.Context) ([]domain.Iss
 	return nil, nil
 }
 
-func (s *serviceTrackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
-	return nil, nil
+func (s *serviceTrackerStub) FetchIssuesByStates(_ context.Context, stateNames []string) ([]domain.Issue, error) {
+	s.stateNames = append([]string(nil), stateNames...)
+	return append([]domain.Issue(nil), s.issuesByState...), nil
 }
 
 func (s *serviceTrackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
@@ -1488,5 +1579,11 @@ func (s *serviceTrackerStub) UpsertIssueExecPlan(context.Context, string, domain
 }
 
 func (s *serviceTrackerStub) CurrentRateLimits() domain.RateLimitSnapshot {
+	return nil
+}
+
+func (s *serviceSlackHomeNotifier) PublishHome(_ context.Context, userID string, view userworkflow.SlackHomeView) error {
+	s.userID = userID
+	s.view = view
 	return nil
 }
