@@ -67,6 +67,7 @@ func renderOverviewView(m model) string {
 }
 
 func renderLogsView(m model) string {
+	filteredEntries := m.filteredLogEntries()
 	lines := []string{
 		titleStyle.Render("Colin logs"),
 		renderHeaderStatus(m),
@@ -74,17 +75,17 @@ func renderLogsView(m model) string {
 	}
 
 	visible := m.visibleLogLines()
-	start := clampInt(m.logOffset, 0, maxInt(len(m.logs.Entries)-visible, 0))
+	start := clampInt(m.logOffset, 0, maxInt(len(filteredEntries)-visible, 0))
 	end := start + visible
-	if end > len(m.logs.Entries) {
-		end = len(m.logs.Entries)
+	if end > len(filteredEntries) {
+		end = len(filteredEntries)
 	}
-	if len(m.logs.Entries) == 0 {
-		lines = append(lines, subtleStyle.Render("No buffered logs yet."))
+	if len(filteredEntries) == 0 {
+		lines = append(lines, subtleStyle.Render("No logs match the current filter."))
 	} else {
 		contentWidth := maxInt(m.width-4, 20)
 		for idx := start; idx < end; idx++ {
-			line := truncateRunes(renderLogLine(m.logs.Entries[idx]), contentWidth)
+			line := truncateRunes(renderLogLine(filteredEntries[idx]), contentWidth)
 			if idx == m.selectedLog {
 				line = selectedLogStyle.Render(line)
 			}
@@ -93,7 +94,7 @@ func renderLogsView(m model) string {
 	}
 
 	lines = append(lines, "", renderSelectedLogDetails(m))
-	lines = append(lines, "", subtleStyle.Render(fmt.Sprintf("Showing %d-%d of %d  |  selected %s  |  ↑/↓ select  PgUp/PgDn page  Home/End jump", minInt(start+1, len(m.logs.Entries)), end, len(m.logs.Entries), renderSelectedLogPosition(m))))
+	lines = append(lines, "", subtleStyle.Render(fmt.Sprintf("Filter %s  |  Showing %d-%d of %d  |  selected %s  |  f cycle filter  |  ↑/↓ select  PgUp/PgDn page  Home/End jump", m.logFilter.label(), minInt(start+1, len(filteredEntries)), end, len(filteredEntries), renderSelectedLogPosition(m))))
 	if notice := renderShutdownNotice(m); notice != "" {
 		lines = append(lines, "", notice)
 	}
@@ -104,6 +105,9 @@ func renderHeaderStatus(m model) string {
 	parts := []string{
 		subtleStyle.Render("l logs"),
 		subtleStyle.Render("q/esc quit"),
+	}
+	if m.mode == modeLogs {
+		parts = append(parts, subtleStyle.Render("f "+m.logFilter.label()))
 	}
 	if m.hasUnseenLogAlerts() {
 		parts = append(parts, warnStyle.Render("warn/err in logs"))
@@ -204,21 +208,23 @@ func renderLogLine(entry domain.BufferedLogEntry) string {
 }
 
 func renderSelectedLogDetails(m model) string {
-	if len(m.logs.Entries) == 0 || m.selectedLog < 0 || m.selectedLog >= len(m.logs.Entries) {
+	filteredEntries := m.filteredLogEntries()
+	if len(filteredEntries) == 0 || m.selectedLog < 0 || m.selectedLog >= len(filteredEntries) {
 		return subtleStyle.Render("Selected entry: none")
 	}
 
 	contentWidth := maxInt(m.width-4, 20)
-	label := labelStyle.Render(fmt.Sprintf("Selected log %d/%d", m.selectedLog+1, len(m.logs.Entries)))
-	detail := lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth).Render(renderLogLine(m.logs.Entries[m.selectedLog]))
+	label := labelStyle.Render(fmt.Sprintf("Selected log %d/%d", m.selectedLog+1, len(filteredEntries)))
+	detail := lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth).Render(renderLogLine(filteredEntries[m.selectedLog]))
 	return label + "\n" + detail
 }
 
 func renderSelectedLogPosition(m model) string {
-	if len(m.logs.Entries) == 0 || m.selectedLog < 0 {
+	filteredEntries := m.filteredLogEntries()
+	if len(filteredEntries) == 0 || m.selectedLog < 0 {
 		return "none"
 	}
-	return fmt.Sprintf("%d/%d", m.selectedLog+1, len(m.logs.Entries))
+	return fmt.Sprintf("%d/%d", m.selectedLog+1, len(filteredEntries))
 }
 
 func renderState(state string) string {
