@@ -16,12 +16,12 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
     "href",
     "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
   );
-  await page.getByTestId("state-issues-trigger-in-progress").click();
-  await expect(page.getByTestId("state-issues-in-progress")).toContainText("COLIN-7");
-  await expect(page.getByTestId("state-issues-in-progress")).toContainText("Issue ID");
-  await expect(page.getByTestId("state-issues-in-progress")).toContainText("Title");
+  await page.getByTestId("state-issues-trigger-review").click();
+  await expect(page.getByTestId("state-issues-review")).toContainText("COLIN-24");
+  await expect(page.getByTestId("state-issues-review")).toContainText("Issue ID");
+  await expect(page.getByTestId("state-issues-review")).toContainText("Title");
   await page.evaluate(() => {
-    const popup = document.querySelector("[data-testid='state-issues-in-progress']");
+    const popup = document.querySelector("[data-testid='state-issues-review']");
     const runningPanel = document.querySelector("[data-testid='running-panel']");
     if (!(popup instanceof HTMLElement) || !(runningPanel instanceof HTMLElement)) {
       return;
@@ -36,7 +36,7 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   });
   await expect.poll(async () =>
     page.evaluate(() => {
-      const popup = document.querySelector("[data-testid='state-issues-in-progress']");
+      const popup = document.querySelector("[data-testid='state-issues-review']");
       const runningPanel = document.querySelector("[data-testid='running-panel']");
       if (!(popup instanceof HTMLElement) || !(runningPanel instanceof HTMLElement)) {
         return "missing";
@@ -62,21 +62,21 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
       return popup.contains(topElement) ? "popup-on-top" : "running-panel-on-top";
     }),
   ).toBe("popup-on-top");
-  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").locator(".state-issue-id-link")).toHaveAttribute(
+  await expect(page.getByTestId("state-issue-review-COLIN-24").locator(".state-issue-id-link")).toHaveAttribute(
     "href",
-    "https://linear.app/example/issue/COLIN-7",
+    "https://linear.app/example/issue/COLIN-24",
   );
-  await expect(page.getByTestId("state-issue-in-progress-COLIN-7").locator(".state-issue-title-link")).toHaveAttribute(
+  await expect(page.getByTestId("state-issue-review-COLIN-24").locator(".state-issue-title-link")).toHaveAttribute(
     "href",
-    "/linear/issues/issue-demo-1/metadata",
+    "/linear/issues/issue-demo-5/metadata",
   );
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
   await expect(page.getByTestId("context-window-COLIN-7")).toHaveText("Context window: 70% left (78.4K used / 258K)");
   await expect(page.getByTestId("context-window-bar-COLIN-7")).toHaveAttribute("aria-valuenow", "30");
   await expect(page.getByTestId("shell-instance")).toHaveCount(0);
 
-  await page.getByTestId("state-issue-in-progress-COLIN-7").locator(".state-issue-title-link").click();
-  await expect(page).toHaveURL(/\/linear\/issues\/issue-demo-1\/metadata$/);
+  await page.getByTestId("state-issue-review-COLIN-24").locator(".state-issue-title-link").click();
+  await expect(page).toHaveURL(/\/linear\/issues\/issue-demo-5\/metadata$/);
   await expect(page.getByTestId("issue-metadata-panel")).toBeVisible();
 });
 
