@@ -169,6 +169,7 @@ func gitHubWebhookEventFromRequest(r *http.Request, envelope gitHubWebhookEnvelo
 	if envelope.Comment != nil && strings.TrimSpace(envelope.Comment.PullRequestURL) != "" {
 		event.HasPullRequest = true
 	}
+	event.Relevant = shouldTriggerGitHubWebhook(event)
 	return event
 }
 

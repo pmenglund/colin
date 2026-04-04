@@ -25,7 +25,7 @@ import (
 	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
-	"github.com/pmenglund/colin/internal/tracker/linear"
+	"github.com/pmenglund/colin/internal/tracker"
 	"github.com/pmenglund/colin/internal/userworkflow"
 	"github.com/pmenglund/colin/internal/workflow"
 	"github.com/pmenglund/colin/internal/workspace"
@@ -35,10 +35,6 @@ type tailscaleInspector interface {
 	Check(context.Context, tsdiag.Options) domain.FunnelSetupStatus
 	Resolve(context.Context, tsdiag.Options) domain.FunnelSetupStatus
 	ResolveUIBaseURL(context.Context, *int) string
-}
-
-type watchedProjectIDsProvider interface {
-	WatchedProjectIDs() []string
 }
 
 type slackHomePublisherClient interface {
@@ -616,20 +612,11 @@ func webhookPublicURL(cfg domain.ServerConfig) string {
 	return strings.TrimSpace(cfg.PublicURL)
 }
 
-func watchedProjectIDs(client any) []string {
-	provider, ok := client.(watchedProjectIDsProvider)
-	if !ok || provider == nil {
+func watchedProjectIDs(client tracker.RuntimeMetadata) []string {
+	if client == nil {
 		return nil
 	}
-	return provider.WatchedProjectIDs()
-}
-
-func watchedProjectID(client any) string {
-	ids := watchedProjectIDs(client)
-	if len(ids) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(ids[0])
+	return client.WatchedProjectIDs()
 }
 
 func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProjectIDs []string) bool {
@@ -704,7 +691,7 @@ func watchedRepositoryFullName(cfg domain.ServiceConfig) string {
 }
 
 func shouldQueueImmediateGitHubRefresh(event app.GitHubWebhookEvent, watchedRepos []string) bool {
-	if len(watchedRepos) == 0 {
+	if !event.Relevant || len(watchedRepos) == 0 {
 		return false
 	}
 	repoName := normalizeRepositoryFullName(event.RepositoryFullName)
@@ -718,34 +705,11 @@ func shouldQueueImmediateGitHubRefresh(event app.GitHubWebhookEvent, watchedRepo
 	if !matched {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(event.Event)) {
-	case "pull_request":
-		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "opened", "reopened", "ready_for_review", "synchronize", "edited", "closed")
-	case "pull_request_review":
-		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "submitted", "edited", "dismissed")
-	case "pull_request_review_comment":
-		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "created", "edited", "deleted")
-	case "pull_request_review_thread":
-		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "resolved", "unresolved")
-	case "reaction":
-		return event.HasPullRequest && hasRelevantGitHubAction(event.Action, "created", "deleted")
-	default:
-		return false
-	}
+	return true
 }
 
 func normalizeRepositoryFullName(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
-}
-
-func hasRelevantGitHubAction(action string, want ...string) bool {
-	action = strings.ToLower(strings.TrimSpace(action))
-	for _, candidate := range want {
-		if action == candidate {
-			return true
-		}
-	}
-	return false
 }
 
 func hasRelevantIssueChange(changedFields []string) bool {
@@ -772,8 +736,8 @@ func matchesWatchedProject(projectID string, watchedProjectIDs []string) bool {
 }
 
 func (s *Service) applyUIBaseURLResolver(runtime orchestrator.Runtime) {
-	client, ok := runtime.Tracker.(*linear.Client)
-	if !ok || client == nil {
+	client := runtime.Tracker
+	if client == nil {
 		return
 	}
 	client.SetUIBaseURLResolver(func(ctx context.Context) string {

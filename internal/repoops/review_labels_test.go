@@ -5,7 +5,12 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 )
+
+func init() {
+	builtin.Register()
+}
 
 func TestCodexReviewStateFromContext(t *testing.T) {
 	t.Parallel()
@@ -32,7 +37,7 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 				PullRequest:            domain.PullRequestRef{State: "CLOSED"},
 				CodexReviewRequestedAt: &requestedAt,
 				CodexReviewApprovedAt:  &approvedAt,
-				CodexReviewThreads:     []domain.GitHubReviewThread{{ID: "thread-1"}},
+				CodexReviewThreads:     []domain.ReviewThread{{ID: "thread-1"}},
 			},
 			want: CodexReviewStateNone,
 		},
@@ -101,7 +106,7 @@ func TestCodexReviewStateFromContext(t *testing.T) {
 				PullRequest:            domain.PullRequestRef{State: "OPEN"},
 				CodexReviewRequestedAt: &requestedAt,
 				CodexReviewApprovedAt:  &approvedAt,
-				CodexReviewThreads:     []domain.GitHubReviewThread{{ID: "thread-1"}},
+				CodexReviewThreads:     []domain.ReviewThread{{ID: "thread-1"}},
 			},
 			want: CodexReviewStateUnresolvedFeedback,
 		},

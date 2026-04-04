@@ -10,6 +10,8 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/githubauth"
+	"github.com/pmenglund/colin/internal/repohost"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -89,7 +91,12 @@ func validateRepoURL(value string) string {
 	if trimmed == "" {
 		return "Repository URL is required."
 	}
-	if _, err := githubauth.ParseRepositoryURL(trimmed); err != nil {
+	builtin.Register()
+	adapter, err := repohost.Lookup(string(repohost.HostKindGitHub))
+	if err != nil {
+		return "Repository backend is not available."
+	}
+	if _, err := adapter.ParseRepositoryURL(trimmed); err != nil {
 		return "Repository URL must be a supported github.com SSH or HTTPS remote."
 	}
 	return ""

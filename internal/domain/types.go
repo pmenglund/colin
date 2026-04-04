@@ -98,6 +98,7 @@ type ColinMetadata struct {
 	URL                     string
 	CodexThreadID           string
 	ProgressRootCommentID   string
+	ColinCommentIDs         []string
 	ActualBranchName        string
 	ExecPlanDecision        ExecPlanDecision
 	ReviewPublishDirective  ReviewPublishDirective
@@ -176,9 +177,6 @@ type ReviewThread struct {
 	CanReply   bool
 	CanResolve bool
 }
-
-// GitHubReviewThread is kept as a compatibility alias while the codebase migrates to backend-neutral naming.
-type GitHubReviewThread = ReviewThread
 
 // WorkflowDefinition is the parsed WORKFLOW.md content used for config and prompt rendering.
 type WorkflowDefinition struct {

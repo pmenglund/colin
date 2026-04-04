@@ -12,8 +12,13 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/tracker"
 )
+
+func init() {
+	builtin.Register()
+}
 
 func TestNewValidatesWorkflowStates(t *testing.T) {
 	t.Parallel()
@@ -745,10 +750,10 @@ func TestEnsureProjectIssueWebhookCreatesMissingWebhook(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
@@ -834,10 +839,10 @@ func TestEnsureProjectIssueWebhookLeavesMatchingWebhookUnchanged(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
@@ -1030,10 +1035,10 @@ func TestEnsureProjectIssueWebhookReplacesManagedWebhookAtOldURL(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
@@ -1120,6 +1125,7 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
 		CodexThreadID:           "thread-1",
 		ProgressRootCommentID:   "comment-root-1",
+		ColinCommentIDs:         []string{"comment-root-1", "reply-1"},
 		ActualBranchName:        "colin-94",
 		ExecPlanDecision:        domain.ExecPlanDecisionOneShot,
 		ReviewPublishDirective:  domain.ReviewPublishDirectiveSkip,
@@ -1169,6 +1175,9 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if gotMetadata["progress_root_comment_id"] != "comment-root-1" {
 		t.Fatalf("progress_root_comment_id = %v, want comment-root-1", gotMetadata["progress_root_comment_id"])
+	}
+	if got, ok := gotMetadata["colin_comment_ids"].([]any); !ok || len(got) != 2 || got[0] != "comment-root-1" || got[1] != "reply-1" {
+		t.Fatalf("colin_comment_ids = %#v, want root/reply ids", gotMetadata["colin_comment_ids"])
 	}
 	if gotMetadata["exec_plan_decision"] != string(domain.ExecPlanDecisionOneShot) {
 		t.Fatalf("exec_plan_decision = %v, want %q", gotMetadata["exec_plan_decision"], domain.ExecPlanDecisionOneShot)
@@ -2282,11 +2291,11 @@ func TestCurrentRateLimitsCapturesRequestHeaders(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"Todo"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Todo"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	if _, err := client.FetchCandidateIssues(context.Background()); err != nil {
@@ -2399,6 +2408,18 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 							"inverseRelations": map[string]any{
 								"nodes": []map[string]any{},
 							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":    "attachment-1",
+										"title": "Colin metadata",
+										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
+										"metadata": map[string]any{
+											"colin_comment_ids": []any{"comment-colin"},
+										},
+									},
+								},
+							},
 							"comments": map[string]any{
 								"nodes": []map[string]any{
 									{
@@ -2424,7 +2445,7 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 									},
 									{
 										"id":        "comment-colin",
-										"body":      "[colin] Colin started work on this issue.",
+										"body":      "Colin started work on this issue.",
 										"createdAt": base.Add(72 * time.Minute).Format(time.RFC3339),
 										"children":  map[string]any{"nodes": []map[string]any{}},
 									},
@@ -2469,11 +2490,11 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"Todo"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Todo"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -2568,11 +2589,11 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"Todo"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Todo"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -2624,6 +2645,7 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 										"metadata": map[string]any{
 											"codex_thread_id":           "thread-1",
 											"progress_root_comment_id":  "comment-root-1",
+											"colin_comment_ids":         []any{"comment-root-1", "reply-1"},
 											"actual_branch_name":        "colin-94",
 											"exec_plan_decision":        "one_shot",
 											"review_publish_directive":  "skip",
@@ -2680,11 +2702,11 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"Review"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Review"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -2696,6 +2718,9 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	}
 	if issues[0].ColinMetadata == nil {
 		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
+	}
+	if got := issues[0].ColinMetadata.ColinCommentIDs; len(got) != 2 || got[0] != "comment-root-1" || got[1] != "reply-1" {
+		t.Fatalf("ColinCommentIDs = %#v, want root/reply ids", got)
 	}
 	if issues[0].ColinMetadata.URL != "https://colin.example.test/linear/issues/issue-1/metadata" {
 		t.Fatalf("URL = %q, want metadata attachment URL", issues[0].ColinMetadata.URL)
@@ -2793,11 +2818,11 @@ func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) 
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"In Progress"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"In Progress"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -2882,11 +2907,11 @@ func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttach
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"In Progress"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"In Progress"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -2960,11 +2985,11 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"Review"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Review"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -3033,11 +3058,11 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"In Progress"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"In Progress"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())
@@ -3115,11 +3140,11 @@ func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		active:   []string{"Todo"},
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Todo"},
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	issues, err := client.FetchCandidateIssues(context.Background())

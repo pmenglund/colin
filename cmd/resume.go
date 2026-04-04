@@ -3,10 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 
+	"github.com/anmitsu/go-shlex"
 	"github.com/pmenglund/colin/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -47,7 +49,12 @@ func runResume(cmd *cobra.Command, opts resumeOptions) int {
 	}
 
 	cmd.Printf("Resuming %s in %s\n", session.Issue.Identifier, session.WorkspacePath)
-	if err := execResumeCommand(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), buildResumeShellCommand(session.CLICommand, opts.threadID, session.WorkspacePath)); err != nil {
+	args, err := buildResumeArgs(session.CLICommand, opts.threadID, session.WorkspacePath)
+	if err != nil {
+		cmd.PrintErrln(err)
+		return 1
+	}
+	if err := execResumeCommand(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), args); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode()
@@ -58,25 +65,29 @@ func runResume(cmd *cobra.Command, opts resumeOptions) int {
 	return 0
 }
 
-func runResumeCommand(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command string) error {
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+func runResumeCommand(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("resume command is empty")
+	}
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
 }
 
-func buildResumeShellCommand(cliCommand string, threadID string, workspacePath string) string {
+func buildResumeArgs(cliCommand string, threadID string, workspacePath string) ([]string, error) {
 	cliCommand = strings.TrimSpace(cliCommand)
 	if cliCommand == "" {
 		cliCommand = "codex"
 	}
-	return cliCommand + " resume " + shellQuote(threadID) + " -C " + shellQuote(workspacePath)
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
+	args, err := shlex.Split(cliCommand, true)
+	if err != nil {
+		return nil, fmt.Errorf("parse codex cli command: %w", err)
 	}
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+	if len(args) == 0 {
+		return nil, fmt.Errorf("codex cli command is empty")
+	}
+	args = append(args, "resume", threadID, "-C", workspacePath)
+	return args, nil
 }

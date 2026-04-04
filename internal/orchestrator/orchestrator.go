@@ -12,6 +12,7 @@ import (
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repoops"
 )
 
@@ -179,7 +180,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.logger.Debug("poll tick completed", args...)
 		return
 	}
-	if err := config.ValidateDispatch(o.runtime.Config); err != nil {
+	if err := config.ValidateDispatch(o.dispatchConfig()); err != nil {
 		o.logger.Error("dispatch validation failed", "error", err)
 		return
 	}
@@ -239,6 +240,28 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		args = append(args, "retry_issues", summaries)
 	}
 	o.logger.Debug("poll tick completed", args...)
+}
+
+func (o *Orchestrator) dispatchConfig() domain.ServiceConfig {
+	cfg := o.runtime.Config
+	if o.runtime.Tracker != nil {
+		if strings.TrimSpace(cfg.Tracker.Kind) == "" {
+			cfg.Tracker.Kind = "linear"
+		}
+		if strings.TrimSpace(cfg.Tracker.APIKey) == "" {
+			cfg.Tracker.APIKey = "runtime"
+		}
+		if len(cfg.Targets) == 0 && strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
+			cfg.Tracker.ProjectSlug = "runtime"
+		}
+	}
+	if o.runtime.Runner != nil && strings.TrimSpace(cfg.Codex.Command) == "" {
+		cfg.Codex.Command = "codex"
+	}
+	if o.runtime.Repo != nil && strings.TrimSpace(cfg.Repo.Backend) == "" {
+		cfg.Repo.Backend = string(repohost.HostKindGitHub)
+	}
+	return cfg
 }
 
 func (o *Orchestrator) enterShutdownDrain() {

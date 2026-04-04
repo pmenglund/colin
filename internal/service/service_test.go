@@ -25,11 +25,16 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/orchestrator"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/userworkflow"
 )
+
+func init() {
+	builtin.Register()
+}
 
 func TestNewLoggerSuppressesInfoWhenNotVerbose(t *testing.T) {
 	t.Parallel()
@@ -143,7 +148,7 @@ func TestValidateGitHubAccessReturnsManagerError(t *testing.T) {
 	t.Parallel()
 
 	cfg := domain.ServiceConfig{Repo: domain.RepoConfig{APIToken: "test-token"}}
-	manager := repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
+	manager := repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
 
 	err := validateGitHubAccess(cfg, manager)
 	if err == nil {
@@ -195,7 +200,7 @@ func TestPreflightTrackerConfigReturnsGitHubValidationError(t *testing.T) {
 
 	oldNewPreflightRepoManager := newPreflightRepoManager
 	newPreflightRepoManager = func(cfg domain.ServiceConfig) *repoops.Manager {
-		return repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
+		return repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
 	}
 	defer func() {
 		newPreflightRepoManager = oldNewPreflightRepoManager
@@ -1353,6 +1358,7 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 				Action:             "submitted",
 				RepositoryFullName: "acme/widgets",
 				HasPullRequest:     true,
+				Relevant:           true,
 			},
 			watchedRepo: "acme/widgets",
 			want:        true,
@@ -1364,6 +1370,7 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 				Action:             "synchronize",
 				RepositoryFullName: "Acme/Widgets",
 				HasPullRequest:     true,
+				Relevant:           true,
 			},
 			watchedRepo: "acme/widgets",
 			want:        true,
@@ -1375,6 +1382,7 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 				Action:             "assigned",
 				RepositoryFullName: "acme/widgets",
 				HasPullRequest:     true,
+				Relevant:           false,
 			},
 			watchedRepo: "acme/widgets",
 			want:        false,
@@ -1386,6 +1394,7 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 				Action:             "created",
 				RepositoryFullName: "acme/other",
 				HasPullRequest:     true,
+				Relevant:           true,
 			},
 			watchedRepo: "acme/widgets",
 			want:        false,
@@ -1397,6 +1406,7 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 				Action:             "submitted",
 				RepositoryFullName: "acme/widgets",
 				HasPullRequest:     true,
+				Relevant:           true,
 			},
 			watchedRepo: "",
 			want:        false,
@@ -1439,11 +1449,11 @@ func TestWatchedRepositoryFullNameUsesConfiguredRepoURL(t *testing.T) {
 	}
 }
 
-func TestWatchedProjectIDUsesProviderWhenAvailable(t *testing.T) {
+func TestWatchedProjectIDsUsesProviderWhenAvailable(t *testing.T) {
 	t.Parallel()
 
-	if got := watchedProjectID(providerStub{}); got != "project-1" {
-		t.Fatalf("watchedProjectID() = %q, want %q", got, "project-1")
+	if got := watchedProjectIDs(providerStub{}); !reflect.DeepEqual(got, []string{"project-1"}) {
+		t.Fatalf("watchedProjectIDs() = %#v, want %#v", got, []string{"project-1"})
 	}
 }
 
@@ -1539,6 +1549,8 @@ func (providerStub) WatchedProjectIDs() []string {
 	return []string{"project-1"}
 }
 
+func (providerStub) SetUIBaseURLResolver(func(context.Context) string) {}
+
 func (s serviceInspectorStub) Check(context.Context, tsdiag.Options) domain.FunnelSetupStatus {
 	return s.status
 }
@@ -1556,6 +1568,12 @@ type serviceTrackerStub struct {
 	issuesByState []domain.Issue
 	stateNames    []string
 }
+
+func (s *serviceTrackerStub) WatchedProjectIDs() []string {
+	return []string{"project-1"}
+}
+
+func (s *serviceTrackerStub) SetUIBaseURLResolver(func(context.Context) string) {}
 
 type serviceSlackHomeNotifier struct {
 	userID string

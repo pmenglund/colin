@@ -19,7 +19,7 @@ import (
 type Runtime struct {
 	Workflow  domain.WorkflowDefinition
 	Config    domain.ServiceConfig
-	Tracker   tracker.Client
+	Tracker   tracker.RuntimeClient
 	Repo      *repoops.Manager
 	Workspace *workspace.Manager
 	Runner    Runner

@@ -184,7 +184,7 @@ func reviewCycleToMap(value *domain.ReviewCycle) any {
 	}
 }
 
-func reviewThreadsToMaps(items []domain.GitHubReviewThread) []map[string]any {
+func reviewThreadsToMaps(items []domain.ReviewThread) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		out = append(out, map[string]any{

@@ -6,11 +6,13 @@ import (
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
 func loadConfig(workflowPath string, opts options) (string, domain.ServiceConfig, error) {
+	builtin.Register()
 	loader := workflow.Loader{}
 	path := loader.ResolvePath(workflowPath)
 	def, err := loader.Load(path)

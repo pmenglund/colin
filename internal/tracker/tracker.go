@@ -26,3 +26,15 @@ type Client interface {
 	UpsertIssueExecPlan(ctx context.Context, issueID string, plan domain.ExecPlan) (domain.ExecPlan, error)
 	CurrentRateLimits() domain.RateLimitSnapshot
 }
+
+// RuntimeMetadata exposes tracker runtime behavior needed by service wiring.
+type RuntimeMetadata interface {
+	WatchedProjectIDs() []string
+	SetUIBaseURLResolver(func(context.Context) string)
+}
+
+// RuntimeClient is the tracker contract required at service runtime.
+type RuntimeClient interface {
+	Client
+	RuntimeMetadata
+}

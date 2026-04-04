@@ -94,7 +94,7 @@ func TestPrepareReviewIssueDoesNotWaitWhenReviewContextHasNoPullRequest(t *testi
 		runtime: Runtime{
 			Config:    cfg,
 			Tracker:   tracker,
-			Repo:      repoops.NewManagerWithGitHubClient(cfg, logger, fakeGitHub),
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
 			Workspace: workspace.NewManager(cfg, logger),
 		},
 		reviewSync: map[string]*reviewSyncState{
@@ -173,7 +173,7 @@ func TestPrepareReviewIssueStartsImmediatelyWhenTrackedPullRequestHasNoUnresolve
 		runtime: Runtime{
 			Config:    cfg,
 			Tracker:   tracker,
-			Repo:      repoops.NewManagerWithGitHubClient(cfg, logger, fakeGitHub),
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
 			Workspace: workspace.NewManager(cfg, logger),
 		},
 		reviewSync: map[string]*reviewSyncState{},
@@ -250,7 +250,7 @@ func TestPrepareReviewIssueInjectsUnresolvedThreadsWhenTrackedPullRequestHasThem
 		runtime: Runtime{
 			Config:    cfg,
 			Tracker:   tracker,
-			Repo:      repoops.NewManagerWithGitHubClient(cfg, logger, fakeGitHub),
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
 			Workspace: workspace.NewManager(cfg, logger),
 		},
 		reviewSync: map[string]*reviewSyncState{
@@ -348,7 +348,7 @@ func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testi
 		runtime: Runtime{
 			Config:    cfg,
 			Tracker:   tracker,
-			Repo:      repoops.NewManagerWithGitHubClient(cfg, logger, fakeGitHub),
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
 			Workspace: workspace.NewManager(cfg, logger),
 		},
 		reviewSync: map[string]*reviewSyncState{

@@ -564,7 +564,7 @@ func (r *Runner) blockMergeForCodexReview(ctx context.Context, issue domain.Issu
 	if pr := pullRequestRef(reviewContext.PullRequest); pr != nil {
 		issue.PullRequest = pr
 	}
-	issue.ReviewThreads = append([]domain.GitHubReviewThread(nil), reviewContext.CodexReviewThreads...)
+	issue.ReviewThreads = append([]domain.ReviewThread(nil), reviewContext.CodexReviewThreads...)
 	if moveToReview {
 		if r.tracker == nil {
 			return issue, "", false, errors.New("missing tracker client")
@@ -1043,7 +1043,7 @@ func mergeIssueContext(previous, refreshed domain.Issue) domain.Issue {
 		refreshed.ReviewFeedback = append([]domain.ReviewFeedback(nil), previous.ReviewFeedback...)
 	}
 	if len(refreshed.ReviewThreads) == 0 {
-		refreshed.ReviewThreads = append([]domain.GitHubReviewThread(nil), previous.ReviewThreads...)
+		refreshed.ReviewThreads = append([]domain.ReviewThread(nil), previous.ReviewThreads...)
 	}
 	if refreshed.ColinMetadata == nil {
 		refreshed.ColinMetadata = previous.ColinMetadata

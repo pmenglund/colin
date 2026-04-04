@@ -9,7 +9,6 @@ import (
 
 	"github.com/pmenglund/colin/internal/githubauth"
 	"github.com/pmenglund/colin/internal/repohost"
-	_ "github.com/pmenglund/colin/internal/repohost/github"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 

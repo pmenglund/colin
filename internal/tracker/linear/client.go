@@ -19,6 +19,8 @@ import (
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/tracker"
 )
 
@@ -78,7 +80,6 @@ type ProjectSummary struct {
 type Client struct {
 	endpoint           string
 	apiKey             string
-	project            string
 	primaryProjectSlug string
 	projectsByID       map[string]string
 	watchedProjectIDs  []string
@@ -98,7 +99,6 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 		return nil, err
 	}
 	client := newAPIClient(cfg.Tracker.Endpoint, cfg.Tracker.APIKey)
-	client.project = cfg.Tracker.ProjectSlug
 	client.primaryProjectSlug = cfg.Tracker.ProjectSlug
 	client.active = slices.Clone(config.CandidateStates(cfg))
 	client.uiBaseURL = uiBaseURL(cfg.Server)
@@ -1449,9 +1449,13 @@ func extractReviewFeedback(state string, node map[string]any) []domain.ReviewFee
 	}
 
 	comments := flattenComments(node)
+	colinCommentIDs := colinCommentIDSet(node)
 	feedback := make([]domain.ReviewFeedback, 0, len(comments))
 	for _, comment := range comments {
 		if comment.CreatedAt.Before(start) || comment.CreatedAt.After(end) {
+			continue
+		}
+		if _, ok := colinCommentIDs[comment.ID]; ok {
 			continue
 		}
 		body := strings.TrimSpace(comment.Body)
@@ -1530,6 +1534,22 @@ func flattenComments(node map[string]any) []linearComment {
 	})
 
 	return out
+}
+
+func colinCommentIDSet(node map[string]any) map[string]struct{} {
+	metadata := extractColinMetadata(node)
+	if metadata == nil || len(metadata.ColinCommentIDs) == 0 {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(metadata.ColinCommentIDs))
+	for _, id := range metadata.ColinCommentIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		ids[id] = struct{}{}
+	}
+	return ids
 }
 
 func flattenStateChanges(node map[string]any) []linearStateChange {
@@ -1744,6 +1764,7 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 		metadata.LastOutcome = domain.RunOutcome(value)
 	}
 	metadata.LastSummaryCommentID, _ = stringValue(metadataMap["last_summary_comment_id"])
+	metadata.ColinCommentIDs = stringSliceValue(metadataMap["colin_comment_ids"])
 	if value, ok := intValue(metadataMap["pull_request_number"]); ok {
 		metadata.PullRequestNumber = value
 	}
@@ -1834,6 +1855,7 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		"last_run_type":             strings.TrimSpace(string(metadata.LastRunType)),
 		"last_outcome":              strings.TrimSpace(string(metadata.LastOutcome)),
 		"last_summary_comment_id":   strings.TrimSpace(metadata.LastSummaryCommentID),
+		"colin_comment_ids":         stringSliceAny(metadata.ColinCommentIDs),
 		"pull_request_number":       metadata.PullRequestNumber,
 		"pull_request_url":          strings.TrimSpace(metadata.PullRequestURL),
 		"pull_request_state":        strings.TrimSpace(metadata.PullRequestState),
@@ -2020,20 +2042,13 @@ func extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
 }
 
 func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	builtin.Register()
+	adapter, err := repohost.Lookup(string(repohost.HostKindGitHub))
 	if err != nil {
 		return domain.PullRequestRef{}, false
 	}
-	if !strings.EqualFold(parsed.Host, "github.com") {
-		return domain.PullRequestRef{}, false
-	}
-
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) != 4 || !strings.EqualFold(parts[2], "pull") {
-		return domain.PullRequestRef{}, false
-	}
-	number, err := strconv.Atoi(parts[3])
-	if err != nil || number <= 0 {
+	owner, repo, number, ok := adapter.ParsePullRequestURL(strings.TrimSpace(rawURL))
+	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" || number <= 0 {
 		return domain.PullRequestRef{}, false
 	}
 
@@ -2041,6 +2056,41 @@ func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, boo
 		Number: number,
 		URL:    strings.TrimSpace(rawURL),
 	}, true
+}
+
+func stringSliceValue(value any) []string {
+	nodes, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		text, ok := stringValue(node)
+		if !ok {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		out = append(out, text)
+	}
+	return out
+}
+
+func stringSliceAny(values []string) []any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func uiBaseURL(cfg domain.ServerConfig) string {

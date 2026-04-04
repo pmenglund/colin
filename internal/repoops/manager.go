@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os/exec"
-	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,7 +15,6 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/repohost"
-	_ "github.com/pmenglund/colin/internal/repohost/github"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -74,11 +73,6 @@ func NewManagerWithRepoHostClient(cfg domain.ServiceConfig, logger *slog.Logger,
 	return &Manager{cfg: cfg, logger: logger, host: client}
 }
 
-// NewManagerWithGitHubClient constructs a repository automation manager with an injected GitHub client.
-func NewManagerWithGitHubClient(cfg domain.ServiceConfig, logger *slog.Logger, client GitHubClient) *Manager {
-	return NewManagerWithRepoHostClient(cfg, logger, client)
-}
-
 // ValidateRepoAccess verifies that a configured repository-host token can authenticate before startup continues.
 func (m *Manager) ValidateRepoAccess(ctx context.Context) error {
 	if m == nil || strings.TrimSpace(m.cfg.Repo.APIToken) == "" {
@@ -89,11 +83,6 @@ func (m *Manager) ValidateRepoAccess(ctx context.Context) error {
 		return err
 	}
 	return client.ValidateAuth(ctx)
-}
-
-// ValidateGitHubAccess is kept as a compatibility wrapper while the codebase migrates to backend-neutral naming.
-func (m *Manager) ValidateGitHubAccess(ctx context.Context) error {
-	return m.ValidateRepoAccess(ctx)
 }
 
 // Publish commits workspace changes, pushes the issue branch, and creates or reuses a PR.
@@ -445,7 +434,7 @@ func (m *Manager) ensureIdentity(ctx context.Context, workspacePath string) erro
 	return nil
 }
 
-func (m *Manager) findPullRequest(ctx context.Context, issue domain.Issue, workspacePath, branch string) (*GitHubPullRequest, error) {
+func (m *Manager) findPullRequest(ctx context.Context, issue domain.Issue, workspacePath, branch string) (*repohost.PullRequest, error) {
 	owner, name, err := m.remoteRepository(ctx, workspacePath)
 	if err != nil {
 		return nil, err
@@ -461,7 +450,7 @@ func (m *Manager) findPullRequest(ctx context.Context, issue domain.Issue, works
 	return client.PullRequestByHead(ctx, owner, name, branch, target.BaseRef)
 }
 
-func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*GitHubPullRequest, error) {
+func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*repohost.PullRequest, error) {
 	if number <= 0 {
 		return nil, nil
 	}
@@ -476,7 +465,7 @@ func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath str
 	return client.PullRequestByNumber(ctx, owner, name, number)
 }
 
-func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, workspacePath, currentBranch string, allowCreate bool) (*GitHubPullRequest, bool, error) {
+func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, workspacePath, currentBranch string, allowCreate bool) (*repohost.PullRequest, bool, error) {
 	tracked, hasTracked := trackedPullRequest(issue)
 	if hasTracked {
 		pr, err := m.resolveTrackedPullRequest(ctx, workspacePath, tracked, currentBranch)
@@ -547,7 +536,7 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	return pr, true, nil
 }
 
-func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath string, tracked domain.PullRequestRef, currentBranch string) (*GitHubPullRequest, error) {
+func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath string, tracked domain.PullRequestRef, currentBranch string) (*repohost.PullRequest, error) {
 	pr, err := m.findPullRequestByNumber(ctx, workspacePath, tracked.Number)
 	if err != nil {
 		return nil, fmt.Errorf("view tracked pull request #%d: %w", tracked.Number, err)
@@ -628,7 +617,7 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 	if err != nil {
 		return "", err
 	}
-	pr, err := client.CreatePullRequest(ctx, owner, name, CreatePullRequestInput{
+	pr, err := client.CreatePullRequest(ctx, owner, name, repohost.CreatePullRequestInput{
 		Title: title,
 		Head:  branch,
 		Base:  target.BaseRef,
@@ -645,38 +634,37 @@ func (m *Manager) remoteRepository(ctx context.Context, workspacePath string) (s
 	if err != nil {
 		return "", "", err
 	}
-	return parseRemoteRepository(strings.TrimSpace(remoteURL))
+	remoteURL = strings.TrimSpace(remoteURL)
+	adapter, err := repohost.Lookup(m.cfg.Repo.Backend)
+	if err != nil {
+		return "", "", err
+	}
+	repo, err := adapter.ParseRepositoryURL(remoteURL)
+	if err != nil {
+		if owner, name, ok := localRemoteRepository(remoteURL); ok {
+			return owner, name, nil
+		}
+		return "", "", err
+	}
+	return strings.TrimSpace(repo.Owner), strings.TrimSpace(repo.Name), nil
 }
 
-func parseRemoteRepository(remoteURL string) (string, string, error) {
-	remoteURL = strings.TrimSpace(remoteURL)
-	if remoteURL == "" {
-		return "", "", errors.New("empty remote url")
+func localRemoteRepository(remoteURL string) (string, string, bool) {
+	raw := strings.TrimSpace(remoteURL)
+	if raw == "" {
+		return "", "", false
 	}
-	if strings.Contains(remoteURL, "://") {
-		u, err := url.Parse(remoteURL)
-		if err != nil {
-			return "", "", err
-		}
-		repoPath := strings.Trim(path.Clean(u.Path), "/")
-		parts := strings.Split(repoPath, "/")
-		if len(parts) < 2 {
-			return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
-		}
-		return parts[len(parts)-2], strings.TrimSuffix(parts[len(parts)-1], ".git"), nil
+	if parsed, err := url.Parse(raw); err == nil && strings.EqualFold(parsed.Scheme, "file") {
+		raw = parsed.Path
 	}
-	if idx := strings.Index(remoteURL, ":"); idx >= 0 {
-		repoPath := strings.Trim(remoteURL[idx+1:], "/")
-		parts := strings.Split(repoPath, "/")
-		if len(parts) < 2 {
-			return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
-		}
-		return parts[len(parts)-2], strings.TrimSuffix(parts[len(parts)-1], ".git"), nil
+	if strings.Contains(raw, "://") || strings.Contains(raw, "@") {
+		return "", "", false
 	}
-	if strings.HasSuffix(remoteURL, ".git") {
-		return "local", strings.TrimSuffix(path.Base(remoteURL), ".git"), nil
+	name := strings.TrimSpace(strings.TrimSuffix(filepath.Base(raw), ".git"))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return "", "", false
 	}
-	return "", "", fmt.Errorf("unsupported remote url: %s", remoteURL)
+	return "local", name, true
 }
 
 func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, name string, prNumber int) ([]domain.ReviewThread, []domain.ReviewThread, bool, error) {

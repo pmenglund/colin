@@ -10,7 +10,6 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/repohost"
-	_ "github.com/pmenglund/colin/internal/repohost/github"
 )
 
 var (

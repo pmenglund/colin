@@ -14,6 +14,7 @@ import (
 	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/pmenglund/colin/internal/githubauth"
 	"github.com/pmenglund/colin/internal/repohost"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 )
 
 var ErrAborted = errors.New("bootstrap_aborted")
@@ -268,11 +269,20 @@ func printGitHubSetupGuidance(out io.Writer, repoURL string) {
 }
 
 func githubSetupDetails(repoURL string) (githubauth.SetupDetails, error) {
-	repo, err := githubauth.ParseRepositoryURL(repoURL)
+	builtin.Register()
+	adapter, err := repohost.Lookup(string(repohost.HostKindGitHub))
 	if err != nil {
 		return githubauth.SetupDetails{}, err
 	}
-	return githubauth.BuildSetupDetails(repo), nil
+	repo, err := adapter.ParseRepositoryURL(repoURL)
+	if err != nil {
+		return githubauth.SetupDetails{}, err
+	}
+	return githubauth.BuildSetupDetails(githubauth.Repository{
+		Owner: repo.Owner,
+		Name:  repo.Name,
+		URL:   repo.URL,
+	}), nil
 }
 
 func confirmOverwrite(reader *bufio.Reader, out io.Writer, workflowPath string) (bool, error) {

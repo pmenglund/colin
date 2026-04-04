@@ -16,10 +16,16 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/repoops/fakes"
 	"github.com/pmenglund/colin/internal/workspace"
 )
+
+func init() {
+	builtin.Register()
+}
 
 const (
 	fakeExecPlanBody      = "# Fake ExecPlan\n\n## Progress\n\n- [x] Plan generated."
@@ -595,7 +601,7 @@ func TestBlockMergeForCodexReviewIgnoresThreadsWhenDisabled(t *testing.T) {
 		State:      "Merge",
 	}, repoops.ReviewContext{
 		PullRequest: domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
-		CodexReviewThreads: []domain.GitHubReviewThread{
+		CodexReviewThreads: []domain.ReviewThread{
 			{ID: "thread-1", Path: "internal/foo.go", Body: "Please fix this."},
 		},
 	})
@@ -641,7 +647,7 @@ func TestBlockMergeForCodexReviewReturnsIssueToReviewWhenThreadsRemain(t *testin
 		PullRequest:            domain.PullRequestRef{Number: 1, URL: "https://example.test/pr/1", State: "OPEN"},
 		CodexReviewRequestedAt: &requestedAt,
 		CodexReviewApprovedAt:  &approvedAt,
-		CodexReviewThreads: []domain.GitHubReviewThread{
+		CodexReviewThreads: []domain.ReviewThread{
 			{ID: "thread-1", Path: "internal/foo.go", Body: "Please fix this."},
 		},
 	})
@@ -980,15 +986,15 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		resolveMergeStateOK: true,
 	}
 	fakeGitHub := &fakes.FakeGitHubClient{}
-	fakeGitHub.PullRequestByHeadReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
 		Number:      19,
 		URL:         "https://github.com/pmenglund/colin/pull/19",
 		State:       "OPEN",
 		HeadRefName: branch,
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 	fakeGitHub.MergePullRequestReturnsOnCall(0, errors.New("X Pull request pmenglund/colin#19 is not mergeable: the merge commit cannot be cleanly created."))
 	fakeGitHub.MergePullRequestReturnsOnCall(1, nil)
 
@@ -997,7 +1003,7 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
 		tracker,
 		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
-		repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
+		repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
@@ -1077,18 +1083,18 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 	}
 	tracker := &stubTracker{}
 	fakeGitHub := &fakes.FakeGitHubClient{}
-	fakeGitHub.PullRequestByHeadReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
 		Number:      19,
 		URL:         "https://github.com/pmenglund/colin/pull/19",
 		State:       "OPEN",
 		HeadRefName: branch,
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
 	requestedAt := testTimePtr(time.Date(2026, time.March, 30, 19, 51, 30, 0, time.UTC))
 	approvedAt := testTimePtr(time.Date(2026, time.March, 30, 19, 51, 45, 0, time.UTC))
-	fakeGitHub.PullRequestReactionsReturnsOnCall(0, repoops.GitHubReactionPage{
-		Reactions: []repoops.GitHubReaction{
+	fakeGitHub.PullRequestReactionsReturnsOnCall(0, repohost.ReactionPage{
+		Reactions: []repohost.Reaction{
 			{
 				Content:   "EYES",
 				UserLogin: "chatgpt-codex-connector[bot]",
@@ -1101,8 +1107,8 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 			},
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturnsOnCall(1, repoops.GitHubReactionPage{
-		Reactions: []repoops.GitHubReaction{
+	fakeGitHub.PullRequestReactionsReturnsOnCall(1, repohost.ReactionPage{
+		Reactions: []repohost.Reaction{
 			{
 				Content:   "EYES",
 				UserLogin: "chatgpt-codex-connector[bot]",
@@ -1117,7 +1123,7 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
 		tracker,
 		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
-		repoops.NewManagerWithGitHubClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
+		repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 

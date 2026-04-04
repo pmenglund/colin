@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/workflow"
 	"gopkg.in/yaml.v3"
 )
 
 func workflowDefinition(t *testing.T, raw map[string]any) domain.WorkflowDefinition {
 	t.Helper()
+	builtin.Register()
 
 	var body bytes.Buffer
 	body.WriteString("---\n")

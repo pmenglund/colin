@@ -35,17 +35,17 @@ func TestRunResumeLaunchesResolvedThread(t *testing.T) {
 		}, nil
 	}
 
-	var gotCommand string
-	execResumeCommand = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command string) error {
-		gotCommand = command
+	var gotArgs []string
+	execResumeCommand = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []string) error {
+		gotArgs = append([]string(nil), args...)
 		return nil
 	}
 
 	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", threadID: "thread'123"}); code != 0 {
 		t.Fatalf("runResume() exit code = %d, want 0", code)
 	}
-	if gotCommand != "codex --profile local resume 'thread'\"'\"'123' -C '/tmp/work tree'" {
-		t.Fatalf("command = %q", gotCommand)
+	if got := strings.Join(gotArgs, "\n"); got != "codex\n--profile\nlocal\nresume\nthread'123\n-C\n/tmp/work tree" {
+		t.Fatalf("args = %#v", gotArgs)
 	}
 	if got := stdout.String(); got != "Resuming COLIN-123 in /tmp/work tree\n" {
 		t.Fatalf("stdout = %q, want summary line", got)
@@ -72,7 +72,7 @@ func TestRunResumePropagatesChildExitCode(t *testing.T) {
 			CLICommand:    "codex",
 		}, nil
 	}
-	execResumeCommand = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command string) error {
+	execResumeCommand = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []string) error {
 		return exec.Command("bash", "-lc", "exit 7").Run()
 	}
 

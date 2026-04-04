@@ -14,8 +14,13 @@ import (
 	"github.com/pmenglund/colin/internal/agent/codex"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/notify"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/userworkflow"
 )
+
+func init() {
+	builtin.Register()
+}
 
 type trackerStub struct {
 	candidateIssues     []domain.Issue
@@ -117,8 +122,38 @@ func (s *trackerStub) CreateCommentReply(_ context.Context, _ string, _ string, 
 }
 
 func (s *trackerStub) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	if metadataClearsLoopState(metadata) && metadataTouchesCommentState(metadata) {
+		metadata.LoopFailureFingerprint = s.metadata.LoopFailureFingerprint
+		metadata.LoopFailureCount = s.metadata.LoopFailureCount
+		metadata.PausedAt = s.metadata.PausedAt
+		metadata.PausedRunType = s.metadata.PausedRunType
+		metadata.PausedState = s.metadata.PausedState
+		metadata.PausedReason = s.metadata.PausedReason
+	}
 	s.metadata = metadata
 	return metadata, nil
+}
+
+func (s *trackerStub) WatchedProjectIDs() []string {
+	return nil
+}
+
+func (s *trackerStub) SetUIBaseURLResolver(func(context.Context) string) {}
+
+func metadataClearsLoopState(metadata domain.ColinMetadata) bool {
+	return strings.TrimSpace(metadata.LoopFailureFingerprint) == "" &&
+		metadata.LoopFailureCount == 0 &&
+		metadata.PausedAt == nil &&
+		strings.TrimSpace(metadata.PausedRunType) == "" &&
+		strings.TrimSpace(metadata.PausedState) == "" &&
+		strings.TrimSpace(metadata.PausedReason) == ""
+}
+
+func metadataTouchesCommentState(metadata domain.ColinMetadata) bool {
+	return strings.TrimSpace(metadata.LastSummaryCommentID) != "" ||
+		strings.TrimSpace(metadata.ProgressRootCommentID) != "" ||
+		len(metadata.ColinCommentIDs) > 0 ||
+		len(metadata.CodexOutput) > 0
 }
 
 func (s *trackerStub) UpsertIssueExecPlan(_ context.Context, _ string, plan domain.ExecPlan) (domain.ExecPlan, error) {

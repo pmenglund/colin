@@ -63,6 +63,7 @@ type GitHubWebhookEvent struct {
 	RepositoryFullName string
 	PullRequestNumber  int
 	HasPullRequest     bool
+	Relevant           bool
 }
 
 // GitHubWebhookTriggerResult describes how the service handled a validated webhook delivery.

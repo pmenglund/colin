@@ -14,9 +14,14 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	repoops "github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/repoops/fakes"
 )
+
+func init() {
+	builtin.Register()
+}
 
 func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	workspacePath, remotePath := setupRepoAutomationTest(t)
@@ -29,7 +34,7 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(3, testPullRequest(1, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issueURL := "https://linear.example/COLIN-93"
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
@@ -56,29 +61,29 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	}
 }
 
-func TestValidateGitHubAccessSkipsWhenTokenMissing(t *testing.T) {
+func TestValidateRepoAccessSkipsWhenTokenMissing(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 
-	if err := manager.ValidateGitHubAccess(context.Background()); err != nil {
-		t.Fatalf("ValidateGitHubAccess() error = %v", err)
+	if err := manager.ValidateRepoAccess(context.Background()); err != nil {
+		t.Fatalf("ValidateRepoAccess() error = %v", err)
 	}
 	if fakeGitHub.ValidateAuthCallCount() != 0 {
 		t.Fatalf("ValidateAuthCallCount() = %d, want 0", fakeGitHub.ValidateAuthCallCount())
 	}
 }
 
-func TestValidateGitHubAccessChecksConfiguredToken(t *testing.T) {
+func TestValidateRepoAccessChecksConfiguredToken(t *testing.T) {
 	cfg := testConfig()
 	cfg.Repo.APIToken = "test-token"
 
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.ValidateAuthReturns(errors.New("unauthorized"))
-	manager := repoops.NewManagerWithGitHubClient(cfg, testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(cfg, testLogger(), fakeGitHub)
 
-	err := manager.ValidateGitHubAccess(context.Background())
+	err := manager.ValidateRepoAccess(context.Background())
 	if err == nil {
-		t.Fatal("ValidateGitHubAccess() error = nil, want unauthorized")
+		t.Fatal("ValidateRepoAccess() error = nil, want unauthorized")
 	}
 	if fakeGitHub.ValidateAuthCallCount() != 1 {
 		t.Fatalf("ValidateAuthCallCount() = %d, want 1", fakeGitHub.ValidateAuthCallCount())
@@ -99,7 +104,7 @@ func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(cfg, testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(cfg, testLogger(), fakeGitHub)
 	if _, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Use template",
@@ -134,7 +139,7 @@ func TestPublishUsesTargetBaseRefWhenConfigured(t *testing.T) {
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(cfg, testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(cfg, testLogger(), fakeGitHub)
 	if _, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier:  "COLIN-93",
 		Title:       "Use target base ref",
@@ -162,7 +167,7 @@ func TestMergeMergesExistingPR(t *testing.T) {
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
 	result, err := manager.Merge(context.Background(), issue, workspacePath)
 	if err != nil {
@@ -191,7 +196,7 @@ func TestMergeReturnsPublishContextWhenGitHubMergeFails(t *testing.T) {
 	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.MergePullRequestReturns(errors.New("merge failed"))
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
 	result, err := manager.Merge(context.Background(), issue, workspacePath)
 	if err == nil {
@@ -215,7 +220,7 @@ func TestMergePullRequestMergesPublishedPR(t *testing.T) {
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
 	result, err := manager.Publish(context.Background(), issue, workspacePath)
 	if err != nil {
@@ -242,7 +247,7 @@ func TestMergePullRequestRetriesAfterRefreshWhenPullRequestIsAlreadyMergeable(t 
 	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", true), nil)
 	fakeGitHub.MergePullRequestReturnsOnCall(1, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	merged, err := manager.MergePullRequest(context.Background(), workspacePath, repoops.Result{
 		PRNumber: 11,
 		PRURL:    "https://github.com/pmenglund/colin/pull/11",
@@ -270,7 +275,7 @@ func TestMergePullRequestDoesNotRetryWhenRefreshStillReportsNotMergeable(t *test
 	fakeGitHub.MergePullRequestReturns(mergeErr)
 	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", false), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.MergePullRequest(context.Background(), workspacePath, repoops.Result{
 		PRNumber: 11,
 		PRURL:    "https://github.com/pmenglund/colin/pull/11",
@@ -299,7 +304,7 @@ func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address review",
@@ -339,7 +344,7 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 		},
 	}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address Codex review",
@@ -374,7 +379,7 @@ func TestReviewContextMarksResolvedCodexReviewAsObservedWithoutReactions(t *test
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address Codex review",
@@ -419,7 +424,7 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address paginated Codex review",
@@ -454,7 +459,7 @@ func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
 		},
 	}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address Codex bot review",
@@ -488,7 +493,7 @@ func TestReviewContextPrefersCurrentWorkspaceBranchOverTrackerBranchName(t *test
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address review",
@@ -529,7 +534,7 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 	}, nil)
 	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Address review",
@@ -561,7 +566,7 @@ func TestPublishReusesTrackedPullRequestFromMetadata(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Reuse tracked PR",
@@ -599,7 +604,7 @@ func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *test
 		BaseRefName: "symphony",
 	}, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Reject branch drift",
@@ -628,7 +633,7 @@ func TestPublishFailsWhenBranchIsNotAheadOfBaseAndWorkspaceIsClean(t *testing.T)
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(nil, nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Refuse empty review handoff",
@@ -650,7 +655,7 @@ func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Adopt attached PR",
@@ -692,7 +697,7 @@ func TestPublishRebasesOntoRemoteBranchWhenPushIsRejectedAsNonFastForward(t *tes
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	result, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Rebase divergent branch before publish",
@@ -742,7 +747,7 @@ func TestPublishReturnsErrorWhenAutomaticRebaseConflicts(t *testing.T) {
 	fakeGitHub := &fakes.FakeGitHubClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Conflict while rebasing divergent branch",
@@ -764,7 +769,7 @@ func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
 	fakeGitHub := &fakes.FakeGitHubClient{}
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
 		Title:      "Reject duplicate attached PRs",
@@ -787,9 +792,9 @@ func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
 func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	fakeGitHub := &fakes.FakeGitHubClient{}
-	manager := repoops.NewManagerWithGitHubClient(testConfig(), testLogger(), fakeGitHub)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 
-	thread := domain.GitHubReviewThread{
+	thread := domain.ReviewThread{
 		ID:         "thread-1",
 		Path:       "internal/foo.go",
 		CommentID:  "comment-1",

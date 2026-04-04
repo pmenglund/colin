@@ -53,7 +53,7 @@ func (o *Orchestrator) createRootComment(ctx context.Context, entry *runningEntr
 		return
 	}
 	entry.comment.RootCommentID = commentID
-	entry.issue = o.persistProgressRootCommentMetadata(ctx, entry.issue, commentID)
+	entry.issue = o.persistIssueCommentMetadata(ctx, entry.issue, "", commentID, commentID)
 	o.logger.Info(
 		"created Linear progress comment",
 		"issue_id", entry.issue.ID,
@@ -82,6 +82,7 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 		)
 		return ""
 	}
+	entry.issue = o.persistIssueCommentMetadata(ctx, entry.issue, "", "", commentID)
 	return commentID
 }
 
@@ -111,7 +112,7 @@ func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain
 			return issue, comment, ""
 		}
 		comment.RootCommentID = commentID
-		issue = o.persistProgressRootCommentMetadata(ctx, issue, commentID)
+		issue = o.persistIssueCommentMetadata(ctx, issue, "", commentID, commentID)
 		return issue, comment, commentID
 	}
 
@@ -128,6 +129,7 @@ func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain
 		)
 		return issue, comment, ""
 	}
+	issue = o.persistIssueCommentMetadata(ctx, issue, "", "", commentID)
 	return issue, comment, commentID
 }
 
@@ -138,22 +140,26 @@ func (o *Orchestrator) withCommentTimeout(ctx context.Context, fn func(context.C
 }
 
 func (o *Orchestrator) persistSummaryCommentMetadata(ctx context.Context, issue domain.Issue, commentID string) domain.Issue {
-	return o.persistIssueMetadata(ctx, issue, strings.TrimSpace(commentID), "", nil)
+	return o.persistIssueCommentMetadata(ctx, issue, strings.TrimSpace(commentID), "", "")
 }
 
 func (o *Orchestrator) persistProgressRootCommentMetadata(ctx context.Context, issue domain.Issue, commentID string) domain.Issue {
-	return o.persistIssueMetadata(ctx, issue, "", strings.TrimSpace(commentID), nil)
+	return o.persistIssueCommentMetadata(ctx, issue, "", strings.TrimSpace(commentID), "")
+}
+
+func (o *Orchestrator) persistIssueCommentMetadata(ctx context.Context, issue domain.Issue, summaryCommentID string, progressRootCommentID string, colinCommentID string) domain.Issue {
+	return o.persistIssueMetadata(ctx, issue, summaryCommentID, progressRootCommentID, nil, colinCommentID)
 }
 
 func (o *Orchestrator) persistIssueOutputMetadata(ctx context.Context, issue domain.Issue, output []domain.OutputLog) domain.Issue {
-	return o.persistIssueMetadata(ctx, issue, "", "", output)
+	return o.persistIssueMetadata(ctx, issue, "", "", output, "")
 }
 
-func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Issue, summaryCommentID string, progressRootCommentID string, output []domain.OutputLog) domain.Issue {
+func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Issue, summaryCommentID string, progressRootCommentID string, output []domain.OutputLog, colinCommentID string) domain.Issue {
 	if o.runtime.Tracker == nil {
 		return issue
 	}
-	if strings.TrimSpace(summaryCommentID) == "" && strings.TrimSpace(progressRootCommentID) == "" && len(output) == 0 {
+	if strings.TrimSpace(summaryCommentID) == "" && strings.TrimSpace(progressRootCommentID) == "" && len(output) == 0 && strings.TrimSpace(colinCommentID) == "" {
 		return issue
 	}
 	metadata := domain.ColinMetadata{
@@ -172,6 +178,9 @@ func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Is
 	if len(output) > 0 {
 		metadata.CodexOutput = append([]domain.OutputLog(nil), output...)
 	}
+	if trimmed := strings.TrimSpace(colinCommentID); trimmed != "" {
+		metadata.ColinCommentIDs = appendUniqueStrings(metadata.ColinCommentIDs, trimmed)
+	}
 	now := time.Now().UTC()
 	metadata.UpdatedAt = &now
 	persisted, err := o.runtime.Tracker.UpsertIssueMetadata(ctx, issue.ID, metadata)
@@ -188,6 +197,34 @@ func (o *Orchestrator) persistIssueMetadata(ctx context.Context, issue domain.Is
 	}
 	issue.ColinMetadata = &persisted
 	return issue
+}
+
+func appendUniqueStrings(values []string, items ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values)+len(items))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func shouldCreateRootComment(eventName string) bool {

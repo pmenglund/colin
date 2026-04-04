@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/workflow"
 )
 
@@ -68,6 +69,7 @@ func (e *commandExitError) Error() string {
 
 // Execute runs the Colin CLI and returns the process exit code.
 func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	builtin.Register()
 	return run(args, stdin, stdout, stderr, defaultCommandDeps())
 }
 
