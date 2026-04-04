@@ -20,6 +20,7 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("COLIN-7");
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("Issue ID");
   await expect(page.getByTestId("state-issues-in-progress")).toContainText("Title");
+  await expect.poll(async () => page.getByTestId("linear-state-counts").evaluate((element) => getComputedStyle(element).zIndex)).toBe("20");
   await expect(page.getByTestId("state-issue-in-progress-COLIN-7").locator(".state-issue-id-link")).toHaveAttribute(
     "href",
     "https://linear.app/example/issue/COLIN-7",

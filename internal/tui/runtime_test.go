@@ -267,7 +267,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 			Running: []domain.SnapshotRunning{{
 				Identifier:  "COLIN-147",
 				State:       "In Progress",
-				SessionID:   "thread-1",
+				SessionID:   "019d54ec-2095-7b2d-8e1a-0123456789ab",
 				TurnCount:   2,
 				LastMessage: "Investigating worker output",
 				StartedAt:   now.Add(-2 * time.Minute),
@@ -296,6 +296,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	for _, want := range []string{
 		"COLIN-147",
 		"In Progress",
+		"019d54ec-2095-7b2d-8e1a-0123456789ab",
 		"running 2m",
 		"https://colin.tail.example.ts.net",
 		"linear hook https://colin.example.test/webhooks/linear",
@@ -306,6 +307,9 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q", view, want)
 		}
+	}
+	if strings.Contains(view, "019d54ec-2095-7...") {
+		t.Fatalf("view = %q, want full session ID without truncation", view)
 	}
 	if strings.Contains(view, "Investigating worker output") {
 		t.Fatalf("view = %q, want worker runtime instead of last message", view)

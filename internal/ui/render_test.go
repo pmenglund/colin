@@ -142,11 +142,19 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Merge`,
 		`Issue is approved and waiting to be merged.`,
 		`data-testid="rate-limits-codex"`,
+		`data-testid="rate-limit-codex-primary"`,
+		`data-testid="rate-limit-codex-secondary"`,
 		`data-testid="rate-limits-linear"`,
 		`Codex`,
 		`Linear`,
-		`5% used of 5h window which resets in 5h32m`,
-		`9% used of 1w window which resets in 1w`,
+		`aria-label="Codex 5h window used"`,
+		`aria-valuenow="5"`,
+		`aria-label="Codex 1w window used"`,
+		`aria-valuenow="9"`,
+		`5h`,
+		`1w`,
+		`resets in 5h32m`,
+		`resets in 1w`,
 		`resets in 5m, 25 of 100 remaining next request in 3s`,
 		`data-local-time="true"`,
 		`data-timestamp="2026-03-28T11:58:01Z"`,
@@ -175,6 +183,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	if strings.Index(html, "Running tasks") > strings.Index(html, "API snapshot") {
 		t.Fatalf("API snapshot should render after running tasks:\n%s", html)
 	}
+	if strings.Contains(html, `5% used of 5h window which resets in 5h32m`) {
+		t.Fatalf("codex rate limits should render progress bars instead of old text rows\n%s", html)
+	}
 }
 
 func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
@@ -189,6 +200,39 @@ func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
 	}
 	if strings.Contains(html, `<a `) {
 		t.Fatalf("paused indicator should not render a link without URL\n%s", html)
+	}
+}
+
+func TestRateLimitPanelKeepsCodexBucketWhenUsageUnavailable(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, rateLimitsPanel(domain.Snapshot{
+		GeneratedAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
+		RateLimits: domain.RateLimitSnapshot{
+			"primary": {
+				ResetsAt:              ptr(time.Date(2026, 3, 28, 17, 32, 0, 0, time.UTC)),
+				WindowDurationMinutes: int64Ptr(300),
+			},
+		},
+	}))
+
+	for _, want := range []string{
+		`data-testid="rate-limits-codex"`,
+		`data-testid="rate-limit-codex-primary"`,
+		`aria-label="Codex 5h window used"`,
+		`aria-valuetext="usage unavailable"`,
+		`usage unavailable`,
+		`resets in 5h32m`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, `aria-valuenow=`) {
+		t.Fatalf("unknown codex usage should not render aria-valuenow\n%s", html)
+	}
+	if strings.Contains(html, `data-testid="rate-limits-codex">none reported`) {
+		t.Fatalf("unknown codex usage should not collapse to none reported\n%s", html)
 	}
 }
 
