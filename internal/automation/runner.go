@@ -198,11 +198,14 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		})
 		issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
 		issue.PullRequest = &domain.PullRequestRef{
-			Number:  result.PRNumber,
-			URL:     result.PRURL,
-			State:   result.PRState,
-			HeadRef: result.PRHeadRef,
-			BaseRef: result.PRBaseRef,
+			Number:          result.PRNumber,
+			URL:             result.PRURL,
+			State:           result.PRState,
+			HeadRef:         result.PRHeadRef,
+			BaseRef:         result.PRBaseRef,
+			Backend:         result.PRBackend,
+			RepositoryOwner: result.PROwner,
+			RepositoryName:  result.PRRepoName,
 		}
 		issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadataWithResult(issue, runType, metadataOutcomeReady, "", result))
 		return Result{
@@ -211,11 +214,14 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			WorkspacePath: ws.Path,
 			Status:        "succeeded",
 			PR: &domain.PullRequestRef{
-				Number:  result.PRNumber,
-				URL:     result.PRURL,
-				State:   result.PRState,
-				HeadRef: result.PRHeadRef,
-				BaseRef: result.PRBaseRef,
+				Number:          result.PRNumber,
+				URL:             result.PRURL,
+				State:           result.PRState,
+				HeadRef:         result.PRHeadRef,
+				BaseRef:         result.PRBaseRef,
+				Backend:         result.PRBackend,
+				RepositoryOwner: result.PROwner,
+				RepositoryName:  result.PRRepoName,
 			},
 		}
 	}
@@ -668,11 +674,14 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 	}
 	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, published.Branch)
 	issue.PullRequest = &domain.PullRequestRef{
-		Number:  published.PRNumber,
-		URL:     published.PRURL,
-		State:   published.PRState,
-		HeadRef: published.PRHeadRef,
-		BaseRef: published.PRBaseRef,
+		Number:          published.PRNumber,
+		URL:             published.PRURL,
+		State:           published.PRState,
+		HeadRef:         published.PRHeadRef,
+		BaseRef:         published.PRBaseRef,
+		Backend:         published.PRBackend,
+		RepositoryOwner: published.PROwner,
+		RepositoryName:  published.PRRepoName,
 	}
 
 	reviewContext, err := r.repo.ReviewContext(ctx, issue, workspacePath)
@@ -850,11 +859,14 @@ func (r *Runner) buildMergedResult(ctx context.Context, issue domain.Issue, work
 	issue = r.clearManagedCodexReviewLabelsBestEffort(ctx, issue)
 	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
 	issue.PullRequest = &domain.PullRequestRef{
-		Number:  result.PRNumber,
-		URL:     result.PRURL,
-		State:   result.PRState,
-		HeadRef: result.PRHeadRef,
-		BaseRef: result.PRBaseRef,
+		Number:          result.PRNumber,
+		URL:             result.PRURL,
+		State:           result.PRState,
+		HeadRef:         result.PRHeadRef,
+		BaseRef:         result.PRBaseRef,
+		Backend:         result.PRBackend,
+		RepositoryOwner: result.PROwner,
+		RepositoryName:  result.PRRepoName,
 	}
 	issue = r.persistIssueMetadataBestEffort(ctx, issue, codexMetadataWithResult(issue, RunTypeMerge, metadataOutcomeMerged, "", result))
 	return Result{
@@ -863,11 +875,14 @@ func (r *Runner) buildMergedResult(ctx context.Context, issue domain.Issue, work
 		WorkspacePath: workspacePath,
 		Status:        "succeeded",
 		PR: &domain.PullRequestRef{
-			Number:  result.PRNumber,
-			URL:     result.PRURL,
-			State:   result.PRState,
-			HeadRef: result.PRHeadRef,
-			BaseRef: result.PRBaseRef,
+			Number:          result.PRNumber,
+			URL:             result.PRURL,
+			State:           result.PRState,
+			HeadRef:         result.PRHeadRef,
+			BaseRef:         result.PRBaseRef,
+			Backend:         result.PRBackend,
+			RepositoryOwner: result.PROwner,
+			RepositoryName:  result.PRRepoName,
 		},
 	}
 }
@@ -1501,6 +1516,9 @@ func codexMetadataWithResult(issue domain.Issue, runType string, outcome string,
 	metadata.PullRequestState = strings.TrimSpace(result.PRState)
 	metadata.PullRequestHeadRef = strings.TrimSpace(result.PRHeadRef)
 	metadata.PullRequestBaseRef = strings.TrimSpace(result.PRBaseRef)
+	metadata.PullRequestBackend = strings.TrimSpace(result.PRBackend)
+	metadata.PullRequestRepoOwner = strings.TrimSpace(result.PROwner)
+	metadata.PullRequestRepoName = strings.TrimSpace(result.PRRepoName)
 	return metadata
 }
 

@@ -1,4 +1,4 @@
-package repoops
+package github
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 )
 
 func TestGoGitHubClientPullRequestByHeadReturnsMergedState(t *testing.T) {
@@ -66,16 +67,16 @@ func TestGoGitHubClientPullRequestByHeadReturnsMergedState(t *testing.T) {
 func TestNewGitHubClientFromConfigAppliesDefaultHTTPTimeout(t *testing.T) {
 	t.Parallel()
 
-	client, err := NewGitHubClientFromConfig(domain.ServiceConfig{
+	client, err := NewClientFromConfig(domain.ServiceConfig{
 		Repo: domain.RepoConfig{APIToken: "test-token"},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
-		t.Fatalf("NewGitHubClientFromConfig() error = %v", err)
+		t.Fatalf("NewClientFromConfig() error = %v", err)
 	}
 
-	goClient, ok := client.(*goGitHubClient)
+	goClient, ok := client.(*Client)
 	if !ok {
-		t.Fatalf("client type = %T, want *goGitHubClient", client)
+		t.Fatalf("client type = %T, want *Client", client)
 	}
 	if got := goClient.HTTPTimeout(); got != 2*time.Minute {
 		t.Fatalf("http timeout = %s, want %s", got, 2*time.Minute)
@@ -201,7 +202,7 @@ func TestGoGitHubClientCreateAndMergePullRequestUseREST(t *testing.T) {
 	defer server.Close()
 
 	client := newTestGoGitHubClient(t, server)
-	pr, err := client.CreatePullRequest(context.Background(), "acme", "widgets", CreatePullRequestInput{
+	pr, err := client.CreatePullRequest(context.Background(), "acme", "widgets", repohost.CreatePullRequestInput{
 		Title: "Title",
 		Head:  "feature",
 		Base:  "main",
@@ -510,18 +511,18 @@ func TestGoGitHubClientGraphQLUsesEnterpriseEndpoint(t *testing.T) {
 	}
 }
 
-func newTestGoGitHubClient(t *testing.T, server *httptest.Server) *goGitHubClient {
+func newTestGoGitHubClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 
 	return newTestGoGitHubClientWithBaseURL(t, server, server.URL+"/")
 }
 
-func newTestGoGitHubClientWithBaseURL(t *testing.T, server *httptest.Server, baseURL string) *goGitHubClient {
+func newTestGoGitHubClientWithBaseURL(t *testing.T, server *httptest.Server, baseURL string) *Client {
 	t.Helper()
 
-	client, err := newGoGitHubClient("test-token", server.Client(), baseURL, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	client, err := NewClient("test-token", server.Client(), baseURL, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
-		t.Fatalf("newGoGitHubClient() error = %v", err)
+		t.Fatalf("NewClient() error = %v", err)
 	}
 	return client
 }

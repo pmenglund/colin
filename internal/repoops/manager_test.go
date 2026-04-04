@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	repoops "github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/repoops/fakes"
@@ -27,7 +28,7 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	workspacePath, remotePath := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
@@ -62,7 +63,7 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 }
 
 func TestValidateRepoAccessSkipsWhenTokenMissing(t *testing.T) {
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 
 	if err := manager.ValidateRepoAccess(context.Background()); err != nil {
@@ -77,7 +78,7 @@ func TestValidateRepoAccessChecksConfiguredToken(t *testing.T) {
 	cfg := testConfig()
 	cfg.Repo.APIToken = "test-token"
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.ValidateAuthReturns(errors.New("unauthorized"))
 	manager := repoops.NewManagerWithRepoHostClient(cfg, testLogger(), fakeGitHub)
 
@@ -98,7 +99,7 @@ func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
 	cfg.Workspace.BaseRef = "symphony"
 	cfg.Repo.PRTemplate = "PRBODY issue={{.issue.identifier}} branch={{.branch}} base={{.base_ref}}"
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
@@ -133,7 +134,7 @@ func TestPublishUsesTargetBaseRefWhenConfigured(t *testing.T) {
 	}
 	cfg.Repo.PRTemplate = "base={{.base_ref}}"
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
@@ -161,7 +162,7 @@ func TestMergeMergesExistingPR(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
@@ -189,7 +190,7 @@ func TestMergeReturnsPublishContextWhenGitHubMergeFails(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
@@ -214,7 +215,7 @@ func TestMergePullRequestMergesPublishedPR(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
 	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
 	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
@@ -242,7 +243,7 @@ func TestMergePullRequestMergesPublishedPR(t *testing.T) {
 func TestMergePullRequestRetriesAfterRefreshWhenPullRequestIsAlreadyMergeable(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.MergePullRequestReturnsOnCall(0, errors.New("PUT https://api.github.com/repos/acme/widgets/pulls/11/merge: 405 Pull Request is not mergeable []"))
 	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", true), nil)
 	fakeGitHub.MergePullRequestReturnsOnCall(1, nil)
@@ -270,7 +271,7 @@ func TestMergePullRequestRetriesAfterRefreshWhenPullRequestIsAlreadyMergeable(t 
 func TestMergePullRequestDoesNotRetryWhenRefreshStillReportsNotMergeable(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	mergeErr := errors.New("PUT https://api.github.com/repos/acme/widgets/pulls/11/merge: 405 Pull Request is not mergeable []")
 	fakeGitHub.MergePullRequestReturns(mergeErr)
 	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", false), nil)
@@ -295,14 +296,14 @@ func TestMergePullRequestDoesNotRetryWhenRefreshStillReportsNotMergeable(t *test
 func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
@@ -330,15 +331,15 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 	requestedAt := time.Date(2026, 3, 28, 18, 1, 0, 0, time.UTC)
 	approvedAt := time.Date(2026, 3, 28, 18, 2, 0, 0, time.UTC)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewThreadNode("thread-1", "chatgpt-codex-connector", "Please fix this.", false, false),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{
-		Reactions: []repoops.GitHubReaction{
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{
+		Reactions: []repohost.Reaction{
 			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector"},
 			{Content: "THUMBS_UP", CreatedAt: &approvedAt, UserLogin: "chatgpt-codex-connector"},
 		},
@@ -370,14 +371,14 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 func TestReviewContextMarksResolvedCodexReviewAsObservedWithoutReactions(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewThreadNode("thread-1", "chatgpt-codex-connector", "Please fix this.", true, false),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
@@ -406,23 +407,23 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	workspacePath, _ := setupRepoAutomationTest(t)
 
 	threadNode := reviewThreadNode("thread-1", "reviewer", "Comment 20", false, true)
-	threadNode.Comments = repoops.GitHubReviewCommentConnection{
+	threadNode.Comments = repohost.ReviewCommentConnection{
 		Comments:    reviewComments("reviewer", 20),
 		HasNextPage: true,
 		EndCursor:   "comments-page-2",
 	}
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{threadNode},
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{threadNode},
 	}, nil)
-	fakeGitHub.ReviewThreadCommentsReturns(repoops.GitHubReviewThreadCommentPage{
-		Comments: []repoops.GitHubReviewComment{
+	fakeGitHub.ReviewThreadCommentsReturns(repohost.ReviewThreadCommentPage{
+		Comments: []repohost.ReviewComment{
 			{AuthorLogin: "chatgpt-codex-connector"},
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
@@ -446,15 +447,15 @@ func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
 
 	requestedAt := time.Date(2026, 3, 28, 18, 1, 0, 0, time.UTC)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewThreadNode("thread-1", "chatgpt-codex-connector[bot]", "Please fix this.", false, false),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{
-		Reactions: []repoops.GitHubReaction{
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{
+		Reactions: []repohost.Reaction{
 			{Content: "EYES", CreatedAt: &requestedAt, UserLogin: "chatgpt-codex-connector[bot]"},
 		},
 	}, nil)
@@ -479,19 +480,19 @@ func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
 func TestReviewContextPrefersCurrentWorkspaceBranchOverTrackerBranchName(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
-	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repoops.GitHubPullRequest, error) {
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repohost.PullRequest, error) {
 		if head == "colin-93" {
 			return testPullRequest(1, "OPEN", "colin-93"), nil
 		}
 		return nil, nil
 	})
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{
@@ -520,19 +521,19 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 	workspacePath, _ := setupRepoAutomationTest(t)
 	runCmd(t, workspacePath, "git", "checkout", "--detach")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
-	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repoops.GitHubPullRequest, error) {
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repohost.PullRequest, error) {
 		if head == "colin-93" {
 			return testPullRequest(1, "OPEN", "colin-93"), nil
 		}
 		return nil, nil
 	})
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewThreadNode("thread-1", "reviewer", "Please fix this.", false, false),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	issue := domain.Issue{
@@ -563,7 +564,7 @@ func TestReviewContextFallsBackToMetadataActualBranchNameWhenWorkspaceBranchUnav
 func TestPublishReusesTrackedPullRequestFromMetadata(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
@@ -595,8 +596,8 @@ func TestPublishReusesTrackedPullRequestFromMetadata(t *testing.T) {
 func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://github.com/pmenglund/colin/pull/11",
 		State:       "OPEN",
@@ -630,7 +631,7 @@ func TestPublishFailsWhenTrackedPullRequestHeadDoesNotMatchCurrentBranch(t *test
 func TestPublishFailsWhenBranchIsNotAheadOfBaseAndWorkspaceIsClean(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(nil, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
@@ -652,7 +653,7 @@ func TestPublishFailsWhenBranchIsNotAheadOfBaseAndWorkspaceIsClean(t *testing.T)
 func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
@@ -694,7 +695,7 @@ func TestPublishRebasesOntoRemoteBranchWhenPushIsRejectedAsNonFastForward(t *tes
 
 	writeFile(t, filepath.Join(workspacePath, "local.txt"), "local\n")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
@@ -744,7 +745,7 @@ func TestPublishReturnsErrorWhenAutomaticRebaseConflicts(t *testing.T) {
 
 	writeFile(t, filepath.Join(workspacePath, "shared.txt"), "local\n")
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
@@ -768,7 +769,7 @@ func TestPublishReturnsErrorWhenAutomaticRebaseConflicts(t *testing.T) {
 func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
@@ -791,7 +792,7 @@ func TestPublishFailsWhenMultipleAttachedPullRequestsExist(t *testing.T) {
 
 func TestReplyAndResolveReviewThreadRunsGraphQLMutations(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
 
 	thread := domain.ReviewThread{
@@ -894,8 +895,8 @@ func stringPtr(value string) *string {
 	return &value
 }
 
-func testPullRequest(number int, state, head string) *repoops.GitHubPullRequest {
-	return &repoops.GitHubPullRequest{
+func testPullRequest(number int, state, head string) *repohost.PullRequest {
+	return &repohost.PullRequest{
 		Number:      number,
 		URL:         fmt.Sprintf("https://github.com/pmenglund/colin/pull/%d", number),
 		State:       state,
@@ -904,17 +905,17 @@ func testPullRequest(number int, state, head string) *repoops.GitHubPullRequest 
 	}
 }
 
-func testPullRequestWithMergeable(number int, state, head string, mergeable bool) *repoops.GitHubPullRequest {
+func testPullRequestWithMergeable(number int, state, head string, mergeable bool) *repohost.PullRequest {
 	pr := testPullRequest(number, state, head)
 	pr.Mergeable = &mergeable
 	return pr
 }
 
-func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPage bool) repoops.GitHubReviewThread {
+func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPage bool) repohost.ReviewThread {
 	createdAt := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
 	line := 42
 	startLine := 40
-	return repoops.GitHubReviewThread{
+	return repohost.ReviewThread{
 		ID:               id,
 		IsResolved:       resolved,
 		IsOutdated:       false,
@@ -923,8 +924,8 @@ func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPag
 		Path:             "internal/foo.go",
 		Line:             &line,
 		StartLine:        &startLine,
-		Comments: repoops.GitHubReviewCommentConnection{
-			Comments: []repoops.GitHubReviewComment{
+		Comments: repohost.ReviewCommentConnection{
+			Comments: []repohost.ReviewComment{
 				{
 					ID:          "comment-1",
 					Body:        body,
@@ -939,11 +940,11 @@ func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPag
 	}
 }
 
-func reviewComments(author string, count int) []repoops.GitHubReviewComment {
-	out := make([]repoops.GitHubReviewComment, 0, count)
+func reviewComments(author string, count int) []repohost.ReviewComment {
+	out := make([]repohost.ReviewComment, 0, count)
 	createdAt := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
 	for i := 1; i <= count; i++ {
-		out = append(out, repoops.GitHubReviewComment{
+		out = append(out, repohost.ReviewComment{
 			ID:          fmt.Sprintf("comment-%d", i),
 			Body:        fmt.Sprintf("Comment %d", i),
 			URL:         fmt.Sprintf("https://example.test/comment/%d", i),
