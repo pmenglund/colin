@@ -21,6 +21,7 @@ func New(runtime Runtime, logger *slog.Logger) *Orchestrator {
 		logger:            logger,
 		eventCh:           make(chan any, 256),
 		runtime:           runtime,
+		subscribers:       map[uint64]chan domain.SnapshotUpdate{},
 		running:           map[string]*runningEntry{},
 		claimed:           map[string]struct{}{},
 		retrying:          map[string]*retryState{},

@@ -79,7 +79,9 @@ func (o *Orchestrator) publishSnapshot(now time.Time) {
 	if o == nil {
 		return
 	}
-	o.snapshot.Store(o.snapshotAt(now))
+	snapshot := o.snapshotAt(now)
+	o.snapshot.Store(snapshot)
+	o.publishSnapshotUpdate(domain.SnapshotUpdate{GeneratedAt: snapshot.GeneratedAt})
 }
 
 func cloneSnapshot(input domain.Snapshot) domain.Snapshot {

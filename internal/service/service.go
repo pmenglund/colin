@@ -411,10 +411,16 @@ func (s *Service) newDashboardHandler() (http.Handler, error) {
 		}
 		return s.logBuffer.Snapshot(minLevel), nil
 	}
-	if !hasEnabledPort(s.webhookPort) {
-		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.logger)
+	streamProvider := func(ctx context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error) {
+		if s.orch == nil {
+			return domain.SnapshotUpdate{}, nil, nil
+		}
+		return s.orch.LatestSnapshotUpdate(), s.orch.SubscribeSnapshotUpdates(ctx), nil
 	}
-	return app.NewUIHandler(provider, issueProvider, setupProvider, logProvider)
+	if !hasEnabledPort(s.webhookPort) {
+		return app.NewObservabilityServer(provider, issueProvider, setupProvider, logProvider, streamProvider, s.linearWebhookTrigger(), s.linearWebhookSecretProvider(), s.githubWebhookTrigger(), s.githubWebhookSecretProvider(), s.logger)
+	}
+	return app.NewUIHandler(provider, issueProvider, setupProvider, logProvider, streamProvider)
 }
 
 func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {

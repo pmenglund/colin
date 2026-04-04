@@ -91,6 +91,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	html := renderNode(t, Page(snapshot, snapshot.GeneratedAt))
 	for _, want := range []string{
 		`data-testid="dashboard-root"`,
+		`data-live-refresh-mode="fragment"`,
 		`data-testid="refresh-button"`,
 		`data-testid="refresh-status"`,
 		`data-testid="shutdown-alert"`,
@@ -171,6 +172,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	}
 	if strings.Contains(html, `data-testid="shell-instance"`) {
 		t.Fatalf("render should not include shell renderer card\n%s", html)
+	}
+	if strings.Contains(html, `hx-trigger="every 5s"`) {
+		t.Fatalf("render should not include timer-driven polling\n%s", html)
 	}
 	if strings.Contains(html, "Tracked Issues") {
 		t.Fatalf("render should not include tracked issues summary card\n%s", html)
@@ -345,6 +349,12 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	if !strings.Contains(html, `id="dashboard-root"`) {
 		t.Fatalf("fragment missing dashboard root:\n%s", html)
 	}
+	if !strings.Contains(html, `data-live-refresh-mode="fragment"`) {
+		t.Fatalf("fragment missing live refresh mode:\n%s", html)
+	}
+	if strings.Contains(html, `hx-trigger="every 5s"`) {
+		t.Fatalf("fragment should not render timer-driven polling:\n%s", html)
+	}
 	if !strings.Contains(html, `data-testid="refresh-status"`) {
 		t.Fatalf("fragment missing refresh status badge:\n%s", html)
 	}
@@ -385,6 +395,8 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 	for _, want := range []string{
 		`data-testid="issue-metadata-panel"`,
 		`data-testid="issue-metadata-output"`,
+		`data-live-refresh-mode="reload"`,
+		`src="/assets/htmx.min.js"`,
 		`COLIN-111 - Update metadata link`,
 		`ExecPlan decision`,
 		`one_shot`,
@@ -427,6 +439,8 @@ func TestExecPlanPageRendersStoredPlan(t *testing.T) {
 	for _, want := range []string{
 		`data-testid="issue-exec-plan-panel"`,
 		`data-testid="issue-exec-plan-body"`,
+		`data-live-refresh-mode="reload"`,
+		`src="/assets/htmx.min.js"`,
 		`COLIN-135 - ExecPlan attachment`,
 		`attachment-99`,
 		`# Plan`,

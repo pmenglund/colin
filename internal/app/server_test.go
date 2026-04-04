@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -40,6 +41,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Fields:    []string{"error=boom"},
 		},
 	}
+	streamUpdates := make(chan domain.SnapshotUpdate, 1)
 
 	handler, err := NewObservabilityServer(func(context.Context) (domain.Snapshot, error) {
 		now := time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC)
@@ -157,6 +159,11 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Count:    len(filtered),
 			Entries:  filtered,
 		}, nil
+	}, func(context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error) {
+		return domain.SnapshotUpdate{
+			Sequence:    7,
+			GeneratedAt: time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC),
+		}, streamUpdates, nil
 	}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
@@ -280,6 +287,42 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("events api", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/events", nil)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /api/v1/events error = %v", err)
+		}
+		defer resp.Body.Close()
+		if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+			t.Fatalf("Content-Type = %q, want text/event-stream", got)
+		}
+
+		reader := bufio.NewReader(resp.Body)
+		readyEvent := readSSEEvent(t, reader)
+		if !strings.Contains(readyEvent, "event: ready") {
+			t.Fatalf("ready event = %q, want ready event", readyEvent)
+		}
+		if !strings.Contains(readyEvent, `"sequence":7`) {
+			t.Fatalf("ready event = %q, want initial sequence", readyEvent)
+		}
+
+		streamUpdates <- domain.SnapshotUpdate{
+			Sequence:    8,
+			GeneratedAt: time.Date(2026, 3, 28, 12, 34, 57, 0, time.UTC),
+		}
+		snapshotEvent := readSSEEvent(t, reader)
+		if !strings.Contains(snapshotEvent, "event: snapshot") {
+			t.Fatalf("snapshot event = %q, want snapshot event", snapshotEvent)
+		}
+		if !strings.Contains(snapshotEvent, `"sequence":8`) {
+			t.Fatalf("snapshot event = %q, want updated sequence", snapshotEvent)
+		}
+	})
+
 	t.Run("logs api", func(t *testing.T) {
 		resp, err := http.Get(server.URL + "/api/v1/logs?level=info")
 		if err != nil {
@@ -389,6 +432,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		for _, want := range []string{
 			`data-testid="issue-metadata-panel"`,
+			`data-live-refresh-mode="reload"`,
 			`COLIN-93 - Add dashboard`,
 			`ExecPlan decision`,
 			`one_shot`,
@@ -416,6 +460,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		for _, want := range []string{
 			`data-testid="issue-exec-plan-panel"`,
 			`data-testid="issue-exec-plan-body"`,
+			`data-live-refresh-mode="reload"`,
 			`COLIN-93 - Add dashboard`,
 			`attachment-1`,
 			`# Fake ExecPlan`,
@@ -500,7 +545,7 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 
 	uiHandler, err := NewUIHandler(func(context.Context) (domain.Snapshot, error) {
 		return domain.Snapshot{GeneratedAt: time.Now().UTC(), Counts: map[string]int{}}, nil
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewUIHandler() error = %v", err)
 	}
@@ -557,7 +602,7 @@ func TestSeparateUIAndWebhookHandlers(t *testing.T) {
 func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -583,7 +628,7 @@ func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T)
 func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(context.Context) string {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(context.Context) string {
 		return "secret"
 	}, nil, nil, nil)
 	if err != nil {
@@ -631,7 +676,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var events []LinearWebhookEvent
-			handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
+			handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 				events = append(events, event)
 				return LinearWebhookTriggerResult{Relevant: true, Queued: true}
 			}, nil, nil, nil, nil)
@@ -687,7 +732,7 @@ func TestObservabilityServerLinearWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	t.Parallel()
 
 	triggerCalls := 0
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		triggerCalls++
 		return LinearWebhookTriggerResult{Relevant: true, Queued: true}
 	}, nil, nil, nil, nil)
@@ -714,7 +759,7 @@ func TestObservabilityServerLinearWebhookIgnoresIrrelevantEvents(t *testing.T) {
 func TestObservabilityServerLinearWebhookAcknowledgesCoalescedRefresh(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
 		return LinearWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
 	}, nil, nil, nil, nil)
 	if err != nil {
@@ -743,7 +788,7 @@ func TestObservabilityServerLinearWebhookLogsRequests(t *testing.T) {
 
 	var output strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, logger)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -784,7 +829,7 @@ func TestObservabilityServerLinearWebhookLogsRequests(t *testing.T) {
 func TestObservabilityServerGitHubWebhookVerifiesSignatureWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
 		return "secret"
 	}, nil)
 	if err != nil {
@@ -843,7 +888,7 @@ func TestObservabilityServerGitHubWebhookTriggersRefreshForRelevantEvents(t *tes
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var events []GitHubWebhookEvent
-			handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+			handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
 				events = append(events, event)
 				return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
 			}, nil, nil)
@@ -899,7 +944,7 @@ func TestObservabilityServerGitHubWebhookIgnoresIrrelevantEvents(t *testing.T) {
 	t.Parallel()
 
 	triggerCalls := 0
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
 		triggerCalls++
 		return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
 	}, nil, nil)
@@ -932,7 +977,7 @@ func TestObservabilityServerGitHubWebhookIgnoresIrrelevantEvents(t *testing.T) {
 func TestObservabilityServerGitHubWebhookAcknowledgesCoalescedRefresh(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
 		return GitHubWebhookTriggerResult{Relevant: true, Queued: true, Coalesced: true}
 	}, nil, nil)
 	if err != nil {
@@ -961,7 +1006,7 @@ func TestObservabilityServerGitHubWebhookLogsRequests(t *testing.T) {
 
 	var output strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, logger)
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
 	}
@@ -1001,7 +1046,7 @@ func TestObservabilityServerGitHubWebhookAcceptsValidSignature(t *testing.T) {
 
 	const secret = "secret"
 	payload := `{"action":"submitted","repository":{"full_name":"acme/widgets"},"pull_request":{"number":11}}`
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, nil, func(context.Context) string {
 		return secret
 	}, nil)
 	if err != nil {
@@ -1032,6 +1077,22 @@ func gitHubTestSignature(secret string, payload string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(payload))
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func readSSEEvent(t *testing.T, reader *bufio.Reader) string {
+	t.Helper()
+
+	var builder strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("ReadString() error = %v", err)
+		}
+		builder.WriteString(line)
+		if line == "\n" {
+			return builder.String()
+		}
+	}
 }
 
 func ptr(value time.Time) *time.Time {

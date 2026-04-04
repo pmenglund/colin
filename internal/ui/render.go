@@ -74,9 +74,11 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
 			h.Title("Colin Metadata: "+title),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
+			h.Script(h.Src("/assets/htmx.min.js"), h.Defer()),
 		),
 		h.Body(
 			h.Class("page-shell"),
+			g.Attr("data-live-refresh-mode", "reload"),
 			h.Div(
 				h.Class("page-inner"),
 				h.Header(
@@ -158,9 +160,11 @@ func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
 			h.Title("Colin ExecPlan: "+title),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
+			h.Script(h.Src("/assets/htmx.min.js"), h.Defer()),
 		),
 		h.Body(
 			h.Class("page-shell"),
+			g.Attr("data-live-refresh-mode", "reload"),
 			h.Div(
 				h.Class("page-inner"),
 				h.Header(
@@ -323,8 +327,8 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 		h.ID("dashboard-root"),
 		h.Class("dashboard-root"),
 		h.Data("testid", "dashboard-root"),
+		g.Attr("data-live-refresh-mode", "fragment"),
 		g.Attr("hx-get", "/"),
-		g.Attr("hx-trigger", "every 5s"),
 		g.Attr("hx-target", "#dashboard-root"),
 		g.Attr("hx-swap", "outerHTML"),
 		toolbar(snapshot),

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,6 +42,11 @@ type Orchestrator struct {
 	refreshReady      atomic.Bool
 	refreshPending    atomic.Bool
 	snapshot          atomic.Value
+	subscriberMu      sync.Mutex
+	subscribers       map[uint64]chan domain.SnapshotUpdate
+	nextSubscriberID  uint64
+	snapshotSequence  uint64
+	lastSnapshotEvent domain.SnapshotUpdate
 	running           map[string]*runningEntry
 	claimed           map[string]struct{}
 	retrying          map[string]*retryState
