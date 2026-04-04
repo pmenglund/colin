@@ -119,7 +119,12 @@ a {
 .card,
 .table-card,
 .alert {
+  position: relative;
   padding: 1rem 1.1rem;
+}
+
+.table-card:has(.state-issues-popup[open]) {
+  z-index: 20;
 }
 
 .dashboard-toolbar {
