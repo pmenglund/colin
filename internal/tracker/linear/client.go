@@ -2024,7 +2024,7 @@ func extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
 		return nil
 	}
 
-	seen := make(map[int]struct{}, len(attachments))
+	seen := make(map[string]struct{}, len(attachments))
 	prs := make([]domain.PullRequestRef, 0, len(attachments))
 	for _, attachment := range attachments {
 		urlValue, _ := stringValue(attachment["url"])
@@ -2032,13 +2032,23 @@ func extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
 		if !ok {
 			continue
 		}
-		if _, exists := seen[pr.Number]; exists {
+		key := attachedPullRequestKey(pr)
+		if _, exists := seen[key]; exists {
 			continue
 		}
-		seen[pr.Number] = struct{}{}
+		seen[key] = struct{}{}
 		prs = append(prs, pr)
 	}
 	return prs
+}
+
+func attachedPullRequestKey(pr domain.PullRequestRef) string {
+	return strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(pr.Backend)),
+		strings.ToLower(strings.TrimSpace(pr.Owner)),
+		strings.ToLower(strings.TrimSpace(pr.Repository)),
+		strconv.Itoa(pr.Number),
+	}, "\x00")
 }
 
 func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, bool) {
@@ -2053,8 +2063,11 @@ func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, boo
 	}
 
 	return domain.PullRequestRef{
-		Number: number,
-		URL:    strings.TrimSpace(rawURL),
+		Backend:    string(repohost.HostKindGitHub),
+		Owner:      owner,
+		Repository: repo,
+		Number:     number,
+		URL:        strings.TrimSpace(rawURL),
 	}, true
 }
 

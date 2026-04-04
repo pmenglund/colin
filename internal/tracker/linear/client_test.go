@@ -936,10 +936,10 @@ func TestEnsureProjectIssueWebhookReplacesManagedWebhookMissingIssueLabelSubscri
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		project:  "project-1",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
 	result, err := client.EnsureProjectIssueWebhook(context.Background(), "https://hooks.colin.example.test/webhooks/linear", "colin")
@@ -2964,11 +2964,16 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 									},
 									{
 										"id":    "attachment-2",
-										"title": "PR 14",
-										"url":   "https://github.com/pmenglund/colin/pull/14",
+										"title": "PR 11 in sibling repo",
+										"url":   "https://github.com/pmenglund/sibling/pull/11",
 									},
 									{
 										"id":    "attachment-3",
+										"title": "Duplicate PR 11",
+										"url":   "https://github.com/pmenglund/colin/pull/11",
+									},
+									{
+										"id":    "attachment-4",
 										"title": "Metadata",
 										"url":   "https://colin.example.test/root/linear/issues/issue-1/metadata",
 									},
@@ -3005,8 +3010,14 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 	if issues[0].AttachedPullRequests[0].Number != 11 {
 		t.Fatalf("AttachedPullRequests[0].Number = %d, want 11", issues[0].AttachedPullRequests[0].Number)
 	}
-	if issues[0].AttachedPullRequests[1].Number != 14 {
-		t.Fatalf("AttachedPullRequests[1].Number = %d, want 14", issues[0].AttachedPullRequests[1].Number)
+	if issues[0].AttachedPullRequests[0].Backend != "github" || issues[0].AttachedPullRequests[0].Owner != "pmenglund" || issues[0].AttachedPullRequests[0].Repository != "colin" {
+		t.Fatalf("AttachedPullRequests[0] identity = %+v, want github pmenglund/colin", issues[0].AttachedPullRequests[0])
+	}
+	if issues[0].AttachedPullRequests[1].Number != 11 {
+		t.Fatalf("AttachedPullRequests[1].Number = %d, want 11", issues[0].AttachedPullRequests[1].Number)
+	}
+	if issues[0].AttachedPullRequests[1].Backend != "github" || issues[0].AttachedPullRequests[1].Owner != "pmenglund" || issues[0].AttachedPullRequests[1].Repository != "sibling" {
+		t.Fatalf("AttachedPullRequests[1] identity = %+v, want github pmenglund/sibling", issues[0].AttachedPullRequests[1])
 	}
 }
 

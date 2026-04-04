@@ -154,11 +154,14 @@ type ReviewCycle struct {
 
 // PullRequestRef is the minimal PR metadata Colin uses in prompts and comments.
 type PullRequestRef struct {
-	Number  int
-	URL     string
-	State   string
-	HeadRef string
-	BaseRef string
+	Backend    string
+	Owner      string
+	Repository string
+	Number     int
+	URL        string
+	State      string
+	HeadRef    string
+	BaseRef    string
 }
 
 // ReviewThread is one unresolved pull-request review thread.

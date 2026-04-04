@@ -211,11 +211,14 @@ func pullRequestToMap(value *domain.PullRequestRef) any {
 		return nil
 	}
 	return map[string]any{
-		"number":   value.Number,
-		"url":      value.URL,
-		"state":    value.State,
-		"head_ref": value.HeadRef,
-		"base_ref": value.BaseRef,
+		"backend":    value.Backend,
+		"owner":      value.Owner,
+		"repository": value.Repository,
+		"number":     value.Number,
+		"url":        value.URL,
+		"state":      value.State,
+		"head_ref":   value.HeadRef,
+		"base_ref":   value.BaseRef,
 	}
 }
 

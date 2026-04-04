@@ -579,11 +579,13 @@ func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name 
 
 	filtered := make([]domain.PullRequestRef, 0, len(prs))
 	for _, pr := range prs {
-		prOwner, prName, number, ok := adapter.ParsePullRequestURL(pr.URL)
-		if !ok || pr.Number <= 0 || pr.Number != number {
+		if pr.Number <= 0 {
 			continue
 		}
-		if !strings.EqualFold(prOwner, owner) || !strings.EqualFold(prName, name) {
+		if !strings.EqualFold(pr.Backend, string(adapter.Kind())) {
+			continue
+		}
+		if !strings.EqualFold(pr.Owner, owner) || !strings.EqualFold(pr.Repository, name) {
 			continue
 		}
 		filtered = append(filtered, pr)
@@ -594,9 +596,22 @@ func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name 
 func duplicatePullRequestsError(prs []domain.PullRequestRef) error {
 	refs := make([]string, 0, len(prs))
 	for _, pr := range prs {
-		refs = append(refs, fmt.Sprintf("#%d", pr.Number))
+		refs = append(refs, pullRequestDisplayRef(pr))
 	}
 	return fmt.Errorf("%w: multiple pull requests linked to this issue: %s", ErrDuplicatePullRequests, strings.Join(refs, ", "))
+}
+
+func pullRequestDisplayRef(pr domain.PullRequestRef) string {
+	if strings.TrimSpace(pr.Owner) != "" && strings.TrimSpace(pr.Repository) != "" && pr.Number > 0 {
+		return fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repository, pr.Number)
+	}
+	if pr.Number > 0 {
+		return fmt.Sprintf("#%d", pr.Number)
+	}
+	if url := strings.TrimSpace(pr.URL); url != "" {
+		return url
+	}
+	return "unknown"
 }
 
 func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, issue domain.Issue, branch string) (string, error) {
