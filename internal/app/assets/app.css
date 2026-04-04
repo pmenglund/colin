@@ -308,6 +308,17 @@ a {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.rate-limit-progress-bar-unknown {
+  border-style: dashed;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.05) 0.4rem,
+    rgba(255, 255, 255, 0.1) 0.4rem,
+    rgba(255, 255, 255, 0.1) 0.8rem
+  );
+}
+
 .rate-limit-progress-fill {
   height: 100%;
   border-radius: inherit;

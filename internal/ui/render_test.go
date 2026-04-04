@@ -199,6 +199,39 @@ func TestPausedIndicatorRendersWithoutLinkWhenURLMissing(t *testing.T) {
 	}
 }
 
+func TestRateLimitPanelKeepsCodexBucketWhenUsageUnavailable(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, rateLimitsPanel(domain.Snapshot{
+		GeneratedAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
+		RateLimits: domain.RateLimitSnapshot{
+			"primary": {
+				ResetsAt:              ptr(time.Date(2026, 3, 28, 17, 32, 0, 0, time.UTC)),
+				WindowDurationMinutes: int64Ptr(300),
+			},
+		},
+	}))
+
+	for _, want := range []string{
+		`data-testid="rate-limits-codex"`,
+		`data-testid="rate-limit-codex-primary"`,
+		`aria-label="Codex 5h window used"`,
+		`aria-valuetext="usage unavailable"`,
+		`usage unavailable`,
+		`resets in 5h32m`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("render missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, `aria-valuenow=`) {
+		t.Fatalf("unknown codex usage should not render aria-valuenow\n%s", html)
+	}
+	if strings.Contains(html, `data-testid="rate-limits-codex">none reported`) {
+		t.Fatalf("unknown codex usage should not collapse to none reported\n%s", html)
+	}
+}
+
 func TestStateIssuePopoverRendersLinks(t *testing.T) {
 	t.Parallel()
 

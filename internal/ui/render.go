@@ -729,7 +729,8 @@ func rateLimitBox(title string, content g.Node) g.Node {
 type codexRateLimitRow struct {
 	Bucket      string
 	Window      string
-	UsedPercent int
+	UsedLabel   string
+	UsedPercent *int
 	ResetIn     string
 }
 
@@ -740,27 +741,34 @@ func renderCodexRateLimitRows(rows []codexRateLimitRow) g.Node {
 
 	items := make(g.Group, 0, len(rows))
 	for _, row := range rows {
+		barClass := "rate-limit-progress-bar"
+		barNodes := g.Group{
+			g.Attr("role", "progressbar"),
+			g.Attr("aria-label", "Codex "+row.Window+" window used"),
+			g.Attr("aria-valuemin", "0"),
+			g.Attr("aria-valuemax", "100"),
+			g.Attr("aria-valuetext", row.UsedLabel),
+		}
+		if row.UsedPercent != nil {
+			barNodes = append(barNodes, g.Attr("aria-valuenow", strconv.Itoa(*row.UsedPercent)))
+			barNodes = append(barNodes, h.Div(
+				h.Class("rate-limit-progress-fill"),
+				g.Attr("style", fmt.Sprintf("width: %d%%;", *row.UsedPercent)),
+			))
+		} else {
+			barClass += " rate-limit-progress-bar-unknown"
+		}
+
 		items = append(items, h.Div(
 			h.Class("rate-limit-progress-row"),
 			h.Data("testid", "rate-limit-codex-"+row.Bucket),
 			h.Div(
 				h.Class("rate-limit-progress-meta"),
 				h.Span(h.Class("rate-limit-progress-window"), g.Text(row.Window)),
-				h.Span(h.Class("rate-limit-progress-used"), g.Text(fmt.Sprintf("%d%% used", row.UsedPercent))),
+				h.Span(h.Class("rate-limit-progress-used"), g.Text(row.UsedLabel)),
 				h.Span(h.Class("rate-limit-progress-reset"), g.Text("resets in "+row.ResetIn)),
 			),
-			h.Div(
-				h.Class("rate-limit-progress-bar"),
-				g.Attr("role", "progressbar"),
-				g.Attr("aria-label", "Codex "+row.Window+" window used"),
-				g.Attr("aria-valuemin", "0"),
-				g.Attr("aria-valuemax", "100"),
-				g.Attr("aria-valuenow", strconv.Itoa(row.UsedPercent)),
-				h.Div(
-					h.Class("rate-limit-progress-fill"),
-					g.Attr("style", fmt.Sprintf("width: %d%%;", row.UsedPercent)),
-				),
-			),
+			h.Div(append(g.Group{h.Class(barClass)}, barNodes...)...),
 		))
 	}
 
@@ -790,16 +798,17 @@ func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]codexR
 		if !ok {
 			continue
 		}
-		usedPercent, ok := rateLimitUsedPercent(limit.UsedPercent)
-		if !ok {
-			continue
+		row := codexRateLimitRow{
+			Bucket:    name,
+			Window:    rateLimitWindow(limit.WindowDurationMinutes),
+			UsedLabel: "usage unavailable",
+			ResetIn:   rateLimitResetDuration(now, limit.ResetsAt),
 		}
-		codexRows = append(codexRows, codexRateLimitRow{
-			Bucket:      name,
-			Window:      rateLimitWindow(limit.WindowDurationMinutes),
-			UsedPercent: usedPercent,
-			ResetIn:     rateLimitResetDuration(now, limit.ResetsAt),
-		})
+		if usedPercent, ok := rateLimitUsedPercent(limit.UsedPercent); ok {
+			row.UsedPercent = intPtr(usedPercent)
+			row.UsedLabel = fmt.Sprintf("%d%% used", usedPercent)
+		}
+		codexRows = append(codexRows, row)
 	}
 	var linearRows []string
 	for name, limit := range rateLimits {
@@ -1117,6 +1126,10 @@ func rateLimitUsedPercent(value *int64) (int, bool) {
 	default:
 		return percent, true
 	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func rateLimitWindow(value *int64) string {
