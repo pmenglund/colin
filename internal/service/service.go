@@ -636,25 +636,35 @@ func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProj
 	if len(watchedProjectIDs) == 0 {
 		return false
 	}
-	projectID := strings.TrimSpace(event.ProjectID)
-	if projectID == "" {
-		return false
-	}
-	matched := false
-	for _, watchedProjectID := range watchedProjectIDs {
-		if strings.EqualFold(projectID, strings.TrimSpace(watchedProjectID)) {
-			matched = true
-			break
+	resourceType := strings.ToLower(strings.TrimSpace(event.ResourceType))
+	switch resourceType {
+	case "issue":
+		projectID := strings.TrimSpace(event.ProjectID)
+		if projectID == "" || !matchesWatchedProject(projectID, watchedProjectIDs) {
+			return false
 		}
-	}
-	if !matched {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(event.Action)) {
-	case "create":
-		return true
-	case "update":
-		return hasRelevantIssueChange(event.ChangedFields)
+		switch strings.ToLower(strings.TrimSpace(event.Action)) {
+		case "create":
+			return true
+		case "update":
+			return hasRelevantIssueChange(event.ChangedFields)
+		default:
+			return false
+		}
+	case "issuelabel":
+		projectID := strings.TrimSpace(event.ProjectID)
+		if projectID != "" && !matchesWatchedProject(projectID, watchedProjectIDs) {
+			return false
+		}
+		if strings.TrimSpace(event.IssueID) == "" {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(event.Action)) {
+		case "create", "update", "remove":
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -742,6 +752,19 @@ func hasRelevantIssueChange(changedFields []string) bool {
 	for _, field := range changedFields {
 		switch strings.ToLower(strings.TrimSpace(field)) {
 		case "stateid", "projectid", "teamid", "priority", "title", "description", "branchname", "labelids":
+			return true
+		}
+	}
+	return false
+}
+
+func matchesWatchedProject(projectID string, watchedProjectIDs []string) bool {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return false
+	}
+	for _, watchedProjectID := range watchedProjectIDs {
+		if strings.EqualFold(projectID, strings.TrimSpace(watchedProjectID)) {
 			return true
 		}
 	}
