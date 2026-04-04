@@ -227,6 +227,189 @@ func TestNewTracksMultipleWatchedProjects(t *testing.T) {
 	}
 }
 
+func TestFindIssueByCodexThreadID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "IssuesByCodexThreadID") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						testLinearIssueNode("issue-1", "COLIN-1", "thread-1"),
+						testLinearIssueNode("issue-2", "COLIN-2", "thread-2"),
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newAPIClient(server.URL, "token")
+	client.watchedProjectIDs = []string{"project-1"}
+
+	issue, err := client.FindIssueByCodexThreadID(context.Background(), "thread-2")
+	if err != nil {
+		t.Fatalf("FindIssueByCodexThreadID() error = %v", err)
+	}
+	if got := issue.ID; got != "issue-2" {
+		t.Fatalf("issue.ID = %q, want %q", got, "issue-2")
+	}
+	if issue.ColinMetadata == nil || issue.ColinMetadata.CodexThreadID != "thread-2" {
+		t.Fatalf("issue.ColinMetadata = %#v, want thread-2", issue.ColinMetadata)
+	}
+}
+
+func TestFindIssueByCodexThreadIDPaginates(t *testing.T) {
+	t.Parallel()
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		requestCount++
+
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "IssuesByCodexThreadID") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+
+		switch requestCount {
+		case 1:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": true,
+							"endCursor":   "cursor-1",
+						},
+						"nodes": []map[string]any{
+							testLinearIssueNode("issue-1", "COLIN-1", "thread-1"),
+						},
+					},
+				},
+			})
+		case 2:
+			if got, _ := request.Variables["after"].(string); got != "cursor-1" {
+				t.Fatalf("after = %q, want %q", got, "cursor-1")
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   nil,
+						},
+						"nodes": []map[string]any{
+							testLinearIssueNode("issue-2", "COLIN-2", "thread-2"),
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request count %d", requestCount)
+		}
+	}))
+	defer server.Close()
+
+	client := newAPIClient(server.URL, "token")
+	client.watchedProjectIDs = []string{"project-1"}
+
+	issue, err := client.FindIssueByCodexThreadID(context.Background(), "thread-2")
+	if err != nil {
+		t.Fatalf("FindIssueByCodexThreadID() error = %v", err)
+	}
+	if got := issue.Identifier; got != "COLIN-2" {
+		t.Fatalf("issue.Identifier = %q, want %q", got, "COLIN-2")
+	}
+}
+
+func TestFindIssueByCodexThreadIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						testLinearIssueNode("issue-1", "COLIN-1", "thread-1"),
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newAPIClient(server.URL, "token")
+	client.watchedProjectIDs = []string{"project-1"}
+
+	_, err := client.FindIssueByCodexThreadID(context.Background(), "thread-2")
+	if !errors.Is(err, ErrCodexThreadNotFound) {
+		t.Fatalf("FindIssueByCodexThreadID() error = %v, want ErrCodexThreadNotFound", err)
+	}
+}
+
+func TestFindIssueByCodexThreadIDReturnsAmbiguousMatch(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						testLinearIssueNode("issue-1", "COLIN-1", "thread-1"),
+						testLinearIssueNode("issue-2", "COLIN-2", "thread-1"),
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newAPIClient(server.URL, "token")
+	client.watchedProjectIDs = []string{"project-1"}
+
+	_, err := client.FindIssueByCodexThreadID(context.Background(), "thread-1")
+	var ambiguousErr *AmbiguousCodexThreadError
+	if !errors.As(err, &ambiguousErr) {
+		t.Fatalf("FindIssueByCodexThreadID() error = %v, want AmbiguousCodexThreadError", err)
+	}
+	if got := strings.Join(ambiguousErr.IssueIdentifiers, ","); got != "COLIN-1,COLIN-2" {
+		t.Fatalf("IssueIdentifiers = %q, want %q", got, "COLIN-1,COLIN-2")
+	}
+}
+
 func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	t.Parallel()
 
@@ -316,6 +499,35 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	}
 	if got := projects[0].TeamNames; len(got) != 2 || got[0] != "Platform" || got[1] != "Infra" {
 		t.Fatalf("projects[0].TeamNames = %#v, want [Platform Infra]", got)
+	}
+}
+
+func testLinearIssueNode(issueID, identifier, threadID string) map[string]any {
+	return map[string]any{
+		"id":         issueID,
+		"identifier": identifier,
+		"title":      identifier + " title",
+		"project": map[string]any{
+			"id":     "project-1",
+			"slugId": "project-1",
+		},
+		"state": map[string]any{
+			"name": "Todo",
+		},
+		"attachments": map[string]any{
+			"nodes": []map[string]any{
+				{
+					"id":        "attachment-" + issueID,
+					"title":     "Colin metadata",
+					"url":       "https://colin.invalid/linear/issues/" + issueID + "/metadata",
+					"createdAt": "2026-04-03T12:00:00Z",
+					"updatedAt": "2026-04-03T12:00:00Z",
+					"metadata": map[string]any{
+						"codex_thread_id": threadID,
+					},
+				},
+			},
+		},
 	}
 }
 

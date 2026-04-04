@@ -185,6 +185,14 @@ Useful flags:
 - `colin --port 9999` overrides the dashboard port.
 - `colin --workflow /path/to/WORKFLOW.md config` generates or refreshes a workflow file at a custom path.
 
+When you want to reopen a Colin-managed Codex thread locally, run:
+
+```bash
+colin resume <thread-id>
+```
+
+Colin resolves the owning issue through stored Linear metadata, prepares that issue's workspace locally, and then launches `codex resume` there. Interactive launches use `codex.cli_command`, which defaults to `codex`; the existing `codex.command` setting remains the app-server command Colin uses for autonomous runs.
+
 ### 4a. Optional: inspect Slack setup
 
 If you want Colin to mirror tracked issues into Slack, use:

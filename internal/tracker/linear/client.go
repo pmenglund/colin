@@ -30,7 +30,17 @@ var (
 	ErrMissingEndCursor     = errors.New("linear_missing_end_cursor")
 	ErrUnknownState         = errors.New("linear_unknown_state")
 	ErrMissingWorkflowState = errors.New("linear_missing_workflow_state")
+	ErrCodexThreadNotFound  = errors.New("linear_codex_thread_not_found")
 )
+
+type AmbiguousCodexThreadError struct {
+	ThreadID         string
+	IssueIdentifiers []string
+}
+
+func (e *AmbiguousCodexThreadError) Error() string {
+	return fmt.Sprintf("codex thread %q is linked from multiple watched issues: %s", e.ThreadID, strings.Join(e.IssueIdentifiers, ", "))
+}
 
 const (
 	defaultEndpoint              = "https://api.linear.app/graphql"
@@ -353,6 +363,140 @@ query IssueByID($id: String!) {
 		return domain.Issue{}, ErrUnknownPayload
 	}
 	return normalizeIssue(node)
+}
+
+// FindIssueByCodexThreadID returns the watched issue whose Colin metadata stores the supplied Codex thread id.
+func (c *Client) FindIssueByCodexThreadID(ctx context.Context, threadID string) (domain.Issue, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return domain.Issue{}, fmt.Errorf("%w: thread id is required", ErrCodexThreadNotFound)
+	}
+
+	const query = `
+query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
+  issues(
+    first: 50
+    after: $after
+    filter: {
+      project: { id: { in: $projectIDs } }
+    }
+  ) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      identifier
+      title
+      description
+      priority
+      project {
+        id
+        slugId
+      }
+      branchName
+      url
+      createdAt
+      updatedAt
+      state { name }
+      labels { nodes { name } }
+      inverseRelations {
+        nodes {
+          type
+          issue {
+            id
+            identifier
+            state { name }
+          }
+        }
+      }
+      attachments(first: 50) {
+        nodes {
+          id
+          title
+          url
+          createdAt
+          updatedAt
+          metadata
+        }
+      }
+      comments(first: 50) {
+        nodes {
+          id
+          body
+          createdAt
+          parentId
+          children(first: 50) {
+            nodes {
+              id
+              body
+              createdAt
+              parentId
+            }
+          }
+        }
+      }
+      history(first: 100) {
+        nodes {
+          createdAt
+          fromState { name }
+          toState { name }
+        }
+      }
+    }
+  }
+}
+`
+
+	var (
+		after      *string
+		match      *domain.Issue
+		duplicates []string
+	)
+	for {
+		resp, err := c.doQuery(ctx, query, map[string]any{
+			"projectIDs": c.watchedProjectIDs,
+			"after":      after,
+		})
+		if err != nil {
+			return domain.Issue{}, err
+		}
+		nodes, ok := nestedSlice(resp, "data", "issues", "nodes")
+		if !ok {
+			return domain.Issue{}, ErrUnknownPayload
+		}
+		for _, node := range nodes {
+			issue, err := normalizeIssue(node)
+			if err != nil {
+				return domain.Issue{}, err
+			}
+			if issue.ColinMetadata == nil || strings.TrimSpace(issue.ColinMetadata.CodexThreadID) != threadID {
+				continue
+			}
+			if match == nil {
+				candidate := issue
+				match = &candidate
+				duplicates = append(duplicates, issue.Identifier)
+				continue
+			}
+			duplicates = append(duplicates, issue.Identifier)
+			return domain.Issue{}, &AmbiguousCodexThreadError{
+				ThreadID:         threadID,
+				IssueIdentifiers: duplicates,
+			}
+		}
+		hasNextPage, _ := nestedBool(resp, "data", "issues", "pageInfo", "hasNextPage")
+		if !hasNextPage {
+			break
+		}
+		cursor, ok := nestedString(resp, "data", "issues", "pageInfo", "endCursor")
+		if !ok || strings.TrimSpace(cursor) == "" {
+			return domain.Issue{}, ErrMissingEndCursor
+		}
+		after = &cursor
+	}
+	if match == nil {
+		return domain.Issue{}, fmt.Errorf("%w: %s", ErrCodexThreadNotFound, threadID)
+	}
+	return *match, nil
 }
 
 // UpdateIssueState moves an issue to the named workflow state within the issue's team.

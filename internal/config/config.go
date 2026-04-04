@@ -74,6 +74,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 		},
 		Codex: domain.CodexConfig{
 			Command:           "codex app-server",
+			CLICommand:        "codex",
 			TurnTimeout:       1 * time.Hour,
 			ReadTimeout:       5 * time.Second,
 			StallTimeout:      5 * time.Minute,
@@ -476,6 +477,9 @@ func applyAgentConfig(cfg *domain.ServiceConfig, raw domain.WorkflowAgentConfig)
 func applyCodexConfig(cfg *domain.ServiceConfig, raw domain.WorkflowCodexConfig) error {
 	if value := stringValue(raw.Command); value != "" {
 		cfg.Codex.Command = value
+	}
+	if value := stringValue(raw.CLICommand); value != "" {
+		cfg.Codex.CLICommand = value
 	}
 	if value := stringValue(raw.ApprovalPolicy); value != "" {
 		cfg.Codex.ApprovalPolicy = value

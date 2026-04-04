@@ -265,6 +265,7 @@ type WorkflowSandboxPolicy struct {
 
 type WorkflowCodexConfig struct {
 	Command            *string                `yaml:"command"`
+	CLICommand         *string                `yaml:"cli_command"`
 	ApprovalPolicy     *string                `yaml:"approval_policy"`
 	ThreadSandbox      *string                `yaml:"thread_sandbox"`
 	TurnSandboxPolicy  *WorkflowSandboxPolicy `yaml:"turn_sandbox_policy"`
@@ -372,6 +373,7 @@ type AgentConfig struct {
 // CodexConfig configures the Codex app-server process and timeout behavior.
 type CodexConfig struct {
 	Command           string
+	CLICommand        string
 	ApprovalPolicy    string
 	ThreadSandbox     string
 	TurnSandboxPolicy SandboxPolicy

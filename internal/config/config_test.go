@@ -62,6 +62,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Agent.CreateExecPlan {
 		t.Fatal("cfg.Agent.CreateExecPlan = true, want false by default")
 	}
+	if cfg.Codex.CLICommand != "codex" {
+		t.Fatalf("cfg.Codex.CLICommand = %q, want %q", cfg.Codex.CLICommand, "codex")
+	}
 	if cfg.Repo.BranchTemplate != "colin/{{.issue.identifier}}-{{.issue.title}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q", cfg.Repo.BranchTemplate)
 	}
@@ -467,6 +470,29 @@ func TestBuildNormalizesTurnSandboxPolicy(t *testing.T) {
 	}
 	if got := cfg.Codex.TurnSandboxPolicy.Type; got != "dangerFullAccess" {
 		t.Fatalf("sandbox policy type = %v", got)
+	}
+}
+
+func TestBuildReadsCodexCLICommand(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"codex": map[string]any{
+			"cli_command": "my-codex --profile local",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Codex.CLICommand; got != "my-codex --profile local" {
+		t.Fatalf("cfg.Codex.CLICommand = %q, want %q", got, "my-codex --profile local")
 	}
 }
 

@@ -21,6 +21,7 @@ type rootOptions struct {
 type commandDeps struct {
 	runRoot               func(*cobra.Command, rootOptions) int
 	runConfig             func(*cobra.Command, configOptions) int
+	runResume             func(*cobra.Command, resumeOptions) int
 	runSetupRepo          func(*cobra.Command, string) int
 	runSetupSlack         func(*cobra.Command, string) int
 	runSetupGitHub        func(*cobra.Command, string) int
@@ -34,6 +35,11 @@ type commandDeps struct {
 type configOptions struct {
 	workflowPath string
 	autoStart    bool
+}
+
+type resumeOptions struct {
+	workflowPath string
+	threadID     string
 }
 
 type usageError struct {
@@ -134,6 +140,7 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer, deps commandDeps) *co
 	}
 	cmd.Flags().BoolVar(&opts.verbose, "verbose", false, "print structured service logs")
 	cmd.AddCommand(newConfigCmd(stdin, stdout, stderr, opts, deps))
+	cmd.AddCommand(newResumeCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupCmd(stdin, stdout, stderr, opts, deps))
 
 	return cmd
@@ -143,6 +150,7 @@ func defaultCommandDeps() commandDeps {
 	return commandDeps{
 		runRoot:               runRoot,
 		runConfig:             runConfig,
+		runResume:             runResume,
 		runSetupRepo:          runSetupRepo,
 		runSetupSlack:         runSetupSlack,
 		runSetupGitHub:        runSetupGitHub,
@@ -181,6 +189,18 @@ func maximumArgs(limit int) cobra.PositionalArgs {
 		return &usageError{
 			Command: cmd,
 			Err:     fmt.Errorf("accepts at most %d arg(s), received %d", limit, len(args)),
+		}
+	}
+}
+
+func exactArgs(count int) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) == count {
+			return nil
+		}
+		return &usageError{
+			Command: cmd,
+			Err:     fmt.Errorf("accepts exactly %d arg(s), received %d", count, len(args)),
 		}
 	}
 }

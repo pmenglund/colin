@@ -125,6 +125,9 @@ func TestRunHelp(t *testing.T) {
 	if !strings.Contains(got, "config") {
 		t.Fatalf("help output = %q, want to mention config", got)
 	}
+	if !strings.Contains(got, "resume") {
+		t.Fatalf("help output = %q, want to mention resume", got)
+	}
 	if !strings.Contains(got, "setup") {
 		t.Fatalf("help output = %q, want to mention setup", got)
 	}
@@ -157,6 +160,48 @@ func TestRunRejectsExtraRootArgs(t *testing.T) {
 	}
 	if !strings.Contains(got, "colin [flags]") {
 		t.Fatalf("stderr = %q, want root usage", got)
+	}
+}
+
+func TestRunRejectsResumeWithoutThreadID(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := run([]string{"resume"}, emptyInput(), &stdout, &stderr, defaultCommandDeps()); code != 2 {
+		t.Fatalf("run(resume) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "accepts exactly 1 arg(s)") {
+		t.Fatalf("stderr = %q, want exact arg error", got)
+	}
+}
+
+func TestRunDispatchesResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var got resumeOptions
+
+	deps := commandDeps{
+		runResume: func(cmd *cobra.Command, opts resumeOptions) int {
+			got = opts
+			return 0
+		},
+	}
+
+	if code := run([]string{"--workflow", "custom.md", "resume", "thread-123"}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(resume) exit code = %d, want 0, stderr=%q", code, stderr.String())
+	}
+	if got.workflowPath != "custom.md" {
+		t.Fatalf("workflowPath = %q, want %q", got.workflowPath, "custom.md")
+	}
+	if got.threadID != "thread-123" {
+		t.Fatalf("threadID = %q, want %q", got.threadID, "thread-123")
 	}
 }
 

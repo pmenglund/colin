@@ -53,6 +53,7 @@ agent:
 
 codex:
   command: codex app-server
+  cli_command: codex
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
