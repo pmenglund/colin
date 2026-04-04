@@ -139,9 +139,80 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	_, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if !errors.Is(err, linear.ErrMissingWorkflowState) {
 		t.Fatalf("New() error = %v, want linear.ErrMissingWorkflowState", err)
+	}
+}
+
+func TestLoadRuntimeHonorsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "ProjectTeamStates") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  endpoint: ` + server.URL + `
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+codex:
+  command: codex app-server
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := loadRuntime(ctx, workflowPath, slog.New(slog.NewTextHandler(io.Discard, nil)), options{})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("loadRuntime() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, linear.ErrAPIRequest) {
+		t.Fatalf("loadRuntime() error = %v, want linear.ErrAPIRequest", err)
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("loadRuntime() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("loadRuntime() took %s, want under 1s", elapsed)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("loadRuntime() did not reach workflow state validation before timing out")
 	}
 }
 
@@ -151,7 +222,7 @@ func TestValidateGitHubAccessReturnsManagerError(t *testing.T) {
 	cfg := domain.ServiceConfig{Repo: domain.RepoConfig{APIToken: "test-token"}}
 	manager := repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
 
-	err := validateGitHubAccess(cfg, manager)
+	err := validateGitHubAccess(context.Background(), cfg, manager)
 	if err == nil {
 		t.Fatal("validateGitHubAccess() error = nil, want bad credentials")
 	}
@@ -330,7 +401,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath); err != nil {
+	if _, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath); err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 
@@ -426,7 +497,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	_, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if err == nil {
 		t.Fatal("New() error = nil, want preflight failure")
 	}
@@ -470,7 +541,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	_, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if !errors.Is(err, errDuplicateListenerPorts) {
 		t.Fatalf("New() error = %v, want errDuplicateListenerPorts", err)
 	}

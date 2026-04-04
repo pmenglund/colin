@@ -87,6 +87,11 @@ func PreflightTrackerConfig(ctx context.Context, cfg domain.ServiceConfig) (*lin
 		report.Checks[1].Detail = err.Error()
 		return nil, report, err
 	}
+	if err := trackerClient.ValidateWorkflowStates(ctx, cfg); err != nil {
+		report.Checks[1].Status = PreflightStatusError
+		report.Checks[1].Detail = err.Error()
+		return nil, report, err
+	}
 	report.Checks[1].Status = PreflightStatusOK
 	report.Checks[1].Detail = "Configured project states are available."
 
@@ -104,7 +109,7 @@ func PreflightTrackerConfig(ctx context.Context, cfg domain.ServiceConfig) (*lin
 		return trackerClient, report, nil
 	}
 
-	if err := validateRepoAccess(cfg, newPreflightRepoManager(cfg)); err != nil {
+	if err := validateRepoAccess(ctx, cfg, newPreflightRepoManager(cfg)); err != nil {
 		report.Checks[3].Status = PreflightStatusError
 		report.Checks[3].Detail = err.Error()
 		return nil, report, err

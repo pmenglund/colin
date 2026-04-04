@@ -102,12 +102,21 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	client.primaryProjectSlug = cfg.Tracker.ProjectSlug
 	client.active = slices.Clone(config.CandidateStates(cfg))
 	client.uiBaseURL = uiBaseURL(cfg.Server)
-	projectIDs, err := client.validateWorkflowStates(context.Background(), cfg)
-	if err != nil {
-		return nil, err
-	}
-	client.watchedProjectIDs = projectIDs
 	return client, nil
+}
+
+// ValidateWorkflowStates validates the configured workflow states against Linear and refreshes watched project metadata.
+func (c *Client) ValidateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) error {
+	if c == nil {
+		return errors.New("nil linear client")
+	}
+	projectIDs, projectsByID, err := c.validateWorkflowStates(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	c.watchedProjectIDs = projectIDs
+	c.projectsByID = projectsByID
+	return nil
 }
 
 // ListProjects returns the caller's accessible Linear projects for setup-time selection.
@@ -1080,7 +1089,7 @@ query IssueTeamStates($id: String!) {
 	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
 }
 
-func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) ([]string, error) {
+func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) ([]string, map[string]string, error) {
 	requiredStates := requiredWorkflowStates(cfg)
 
 	const query = `
@@ -1108,26 +1117,27 @@ query ProjectTeamStates($slug: String!) {
 		targets = []domain.TargetConfig{{ProjectSlug: cfg.Tracker.ProjectSlug}}
 	}
 	projectIDs := make([]string, 0, len(targets))
+	projectsByID := make(map[string]string, len(targets))
 	for _, target := range targets {
 		projectSlug := strings.TrimSpace(target.ProjectSlug)
 		resp, err := c.doQuery(ctx, query, map[string]any{"slug": projectSlug})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		projects, ok := nestedSlice(resp, "data", "projects", "nodes")
 		if !ok || len(projects) == 0 {
-			return nil, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, projectSlug)
+			return nil, nil, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, projectSlug)
 		}
 		projectID, _ := stringValue(projects[0]["id"])
 		if strings.TrimSpace(projectID) == "" {
-			return nil, fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, projectSlug)
+			return nil, nil, fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, projectSlug)
 		}
 		projectID = strings.TrimSpace(projectID)
 		projectIDs = append(projectIDs, projectID)
-		c.projectsByID[projectID] = projectSlug
+		projectsByID[projectID] = projectSlug
 		teamNodes, ok := nestedSlice(projects[0], "teams", "nodes")
 		if !ok || len(teamNodes) == 0 {
-			return nil, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, projectSlug)
+			return nil, nil, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, projectSlug)
 		}
 
 		var missing []string
@@ -1165,10 +1175,10 @@ query ProjectTeamStates($slug: String!) {
 			missing = append(missing, fmt.Sprintf("team %q missing [%s]", teamName, strings.Join(missingForTeam, ", ")))
 		}
 		if len(missing) > 0 {
-			return nil, fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, projectSlug, strings.Join(missing, "; "))
+			return nil, nil, fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, projectSlug, strings.Join(missing, "; "))
 		}
 	}
-	return projectIDs, nil
+	return projectIDs, projectsByID, nil
 }
 
 type workflowStateRequirement struct {

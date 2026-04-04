@@ -41,7 +41,10 @@ type slackHomePublisherClient interface {
 	PublishHome(context.Context, string, userworkflow.SlackHomeView) error
 }
 
-const githubStartupValidationTimeout = 10 * time.Second
+const (
+	runtimePreflightTimeout        = 20 * time.Second
+	githubStartupValidationTimeout = 10 * time.Second
+)
 
 var errDuplicateListenerPorts = errors.New("server.port and server.webhook_port must be different when both are enabled")
 
@@ -83,13 +86,13 @@ type Service struct {
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
-func New(logger *slog.Logger, workflowPath string, optionFns ...Option) (*Service, error) {
+func New(ctx context.Context, logger *slog.Logger, workflowPath string, optionFns ...Option) (*Service, error) {
 	loader := workflow.Loader{}
 	path := loader.ResolvePath(workflowPath)
 	options := buildOptions(optionFns...)
 	buffer := logbuffer.New(domain.DefaultLogBufferLines)
 	logger = wrapLogger(logger, buffer)
-	runtime, err := loadRuntime(path, logger, options)
+	runtime, err := loadRuntime(ctx, path, logger, options)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +194,7 @@ func (s *Service) FunnelSetupStatus(ctx context.Context) domain.FunnelSetupStatu
 	return s.funnelSetupStatus(ctx)
 }
 
-func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.Runtime, error) {
+func loadRuntime(ctx context.Context, path string, logger *slog.Logger, opts options) (orchestrator.Runtime, error) {
 	loader := workflow.Loader{}
 	def, err := loader.Load(path)
 	if err != nil {
@@ -207,7 +210,9 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	if err := validateListenerPorts(cfg.Server.Port, cfg.Server.WebhookPort); err != nil {
 		return orchestrator.Runtime{}, err
 	}
-	trackerClient, _, err := PreflightTrackerConfig(context.Background(), cfg)
+	preflightCtx, cancel := runtimePreflightContext(ctx)
+	defer cancel()
+	trackerClient, _, err := PreflightTrackerConfig(preflightCtx, cfg)
 	if err != nil {
 		return orchestrator.Runtime{}, err
 	}
@@ -238,6 +243,13 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 		Runner:    runner,
 		Notifier:  notifier,
 	}, nil
+}
+
+func runtimePreflightContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, runtimePreflightTimeout)
 }
 
 func (s *Service) watchWorkflow(ctx context.Context) {
@@ -271,7 +283,7 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 			lastModTime = stat.ModTime()
 			lastSize = stat.Size()
 
-			runtime, err := loadRuntime(s.workflowPath, s.logger, s.options)
+			runtime, err := loadRuntime(ctx, s.workflowPath, s.logger, s.options)
 			if err != nil {
 				s.logger.Error("workflow reload failed; keeping last good config", "path", s.workflowPath, "error", err)
 				continue
@@ -287,17 +299,20 @@ func (s *Service) watchWorkflow(ctx context.Context) {
 	}
 }
 
-func validateRepoAccess(cfg domain.ServiceConfig, manager *repoops.Manager) error {
+func validateRepoAccess(ctx context.Context, cfg domain.ServiceConfig, manager *repoops.Manager) error {
 	if strings.TrimSpace(cfg.Repo.APIToken) == "" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), githubStartupValidationTimeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, githubStartupValidationTimeout)
 	defer cancel()
 	return manager.ValidateRepoAccess(ctx)
 }
 
-func validateGitHubAccess(cfg domain.ServiceConfig, manager *repoops.Manager) error {
-	return validateRepoAccess(cfg, manager)
+func validateGitHubAccess(ctx context.Context, cfg domain.ServiceConfig, manager *repoops.Manager) error {
+	return validateRepoAccess(ctx, cfg, manager)
 }
 
 func (s *Service) startUIServer(ctx context.Context) error {

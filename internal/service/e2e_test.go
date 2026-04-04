@@ -83,7 +83,7 @@ Work on {{ .issue.identifier }}.
 	}
 
 	logger := newLogger(io.Discard, false)
-	svc, err := New(logger, workflowPath)
+	svc, err := New(context.Background(), logger, workflowPath)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -215,7 +215,7 @@ Work on {{ .issue.identifier }}.
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc, err := New(logger, workflowPath)
+	svc, err := New(context.Background(), logger, workflowPath)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
