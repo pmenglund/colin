@@ -227,6 +227,7 @@ When `WORKFLOW.md` contains:
 ```yaml
 slack:
   bot_token: $SLACK_BOT_TOKEN
+  app_token: $SLACK_APP_TOKEN
   channel_id: C0123456789
   signing_secret: $SLACK_SIGNING_SECRET
 ```
@@ -236,6 +237,10 @@ Colin uses Slack in two read-only operator surfaces. First, it keeps one Slack m
 The Slack view is intentionally high-level: it shows the current state and next action directly, and links out to the Linear issue, PR, Colin metadata page, and stored ExecPlan when those links are available. The App Home tab is also read-only. It does not move Linear issues, approve PRs, or replace the existing Slack summary messages.
 
 To enable the App Home tab, configure the Slack app with Home tabs enabled, subscribe the app to the `app_home_opened` event, and point Slack's event request URL at Colin's `/webhooks/slack` endpoint. The bot token should be exported as `SLACK_BOT_TOKEN`, and the Slack event signing secret should be exported as `SLACK_SIGNING_SECRET` and referenced from `WORKFLOW.md` as `slack.signing_secret: $SLACK_SIGNING_SECRET`.
+
+Slack summaries now require Socket Mode. Colin refuses to start if `slack.bot_token`, `slack.app_token`, or `slack.channel_id` is missing once the `slack` section is enabled. Configure the Slack app with an app-level `xapp-...` token that has `connections:write`, enable Socket Mode, keep interactivity enabled for the app, and reinstall the app after changing scopes or app settings.
+
+Use `colin setup slack` to inspect the current workflow's Slack section and get the exact token, channel, Socket Mode, and interactivity checklist Colin expects before startup.
 
 Slack is an operator-facing status surface, not a control plane. Colin does not add Slack commands, Slack-originated workflow transitions, or interactive approvals in this change. Slack delivery failures are logged, but they do not stop Colin's core Linear, Codex, publish, or merge workflow.
 

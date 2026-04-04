@@ -1471,7 +1471,9 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	if !ok {
 		return nil
 	}
-	return &selected.metadata
+	merged := selected.metadata
+	mergeSlackMetadataFields(&merged, metadataAttachments)
+	return &merged
 }
 
 func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
@@ -1734,6 +1736,37 @@ func selectCanonicalMetadataAttachment(attachments []colinMetadataAttachment) (c
 		}
 	}
 	return best, true
+}
+
+func mergeSlackMetadataFields(target *domain.ColinMetadata, attachments []colinMetadataAttachment) {
+	if target == nil || len(attachments) == 0 {
+		return
+	}
+
+	sorted := append([]colinMetadataAttachment(nil), attachments...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return compareMetadataAttachment(sorted[i], sorted[j]) > 0
+	})
+	for _, attachment := range sorted {
+		if strings.TrimSpace(target.SlackChannelID) == "" {
+			target.SlackChannelID = strings.TrimSpace(attachment.metadata.SlackChannelID)
+		}
+		if strings.TrimSpace(target.SlackMessageTS) == "" {
+			target.SlackMessageTS = strings.TrimSpace(attachment.metadata.SlackMessageTS)
+		}
+		if strings.TrimSpace(target.SlackPermalink) == "" {
+			target.SlackPermalink = strings.TrimSpace(attachment.metadata.SlackPermalink)
+		}
+		if strings.TrimSpace(target.SlackSummaryFingerprint) == "" {
+			target.SlackSummaryFingerprint = strings.TrimSpace(attachment.metadata.SlackSummaryFingerprint)
+		}
+		if strings.TrimSpace(target.SlackChannelID) != "" &&
+			strings.TrimSpace(target.SlackMessageTS) != "" &&
+			strings.TrimSpace(target.SlackPermalink) != "" &&
+			strings.TrimSpace(target.SlackSummaryFingerprint) != "" {
+			return
+		}
+	}
 }
 
 func compareMetadataAttachment(left, right colinMetadataAttachment) int {

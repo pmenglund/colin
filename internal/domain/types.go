@@ -284,6 +284,7 @@ type WorkflowServerConfig struct {
 
 type WorkflowSlackConfig struct {
 	BotToken      *string `yaml:"bot_token"`
+	AppToken      *string `yaml:"app_token"`
 	ChannelID     *string `yaml:"channel_id"`
 	SigningSecret *string `yaml:"signing_secret"`
 }
@@ -482,6 +483,7 @@ func (cfg ServiceConfig) WatchedRepoURLs() []string {
 // SlackConfig configures optional Slack issue-summary delivery.
 type SlackConfig struct {
 	BotToken      string
+	AppToken      string
 	ChannelID     string
 	SigningSecret string
 }

@@ -529,6 +529,9 @@ func applySlackConfig(cfg *domain.ServiceConfig, raw domain.WorkflowSlackConfig)
 	if value := stringValue(raw.BotToken); value != "" {
 		cfg.Slack.BotToken = resolveEnvToken(value)
 	}
+	if value := stringValue(raw.AppToken); value != "" {
+		cfg.Slack.AppToken = resolveEnvToken(value)
+	}
 	if value := stringValue(raw.ChannelID); value != "" {
 		cfg.Slack.ChannelID = strings.TrimSpace(resolveEnvToken(value))
 	}
@@ -537,6 +540,12 @@ func applySlackConfig(cfg *domain.ServiceConfig, raw domain.WorkflowSlackConfig)
 	}
 	if (cfg.Slack.BotToken == "") != (cfg.Slack.ChannelID == "") {
 		return fmt.Errorf("%w: slack.bot_token and slack.channel_id must both be set", ErrInvalidWorkflowConfig)
+	}
+	if (cfg.Slack.BotToken != "" || cfg.Slack.ChannelID != "") && strings.TrimSpace(cfg.Slack.AppToken) == "" {
+		return fmt.Errorf("%w: slack.app_token must be set when Slack is enabled", ErrInvalidWorkflowConfig)
+	}
+	if strings.TrimSpace(cfg.Slack.AppToken) != "" && (cfg.Slack.BotToken == "" || cfg.Slack.ChannelID == "") {
+		return fmt.Errorf("%w: slack.app_token requires slack.bot_token and slack.channel_id", ErrInvalidWorkflowConfig)
 	}
 	return nil
 }

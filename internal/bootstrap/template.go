@@ -77,6 +77,7 @@ server:
 # Optional: enable Slack issue summaries plus the Slack App Home view for tracked issues.
 # slack:
 #   bot_token: $SLACK_BOT_TOKEN
+#   app_token: $SLACK_APP_TOKEN
 #   channel_id: C0123456789
 #   signing_secret: $SLACK_SIGNING_SECRET
 ---

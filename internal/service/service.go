@@ -53,7 +53,15 @@ var newSlackHomeNotifier = func(cfg domain.ServiceConfig) slackHomePublisherClie
 	if strings.TrimSpace(cfg.Slack.BotToken) == "" || strings.TrimSpace(cfg.Slack.ChannelID) == "" {
 		return nil
 	}
-	return slacknotify.New(cfg.Slack.BotToken, cfg.Slack.ChannelID)
+	return slacknotify.New(cfg.Slack.BotToken, cfg.Slack.ChannelID, nil)
+}
+
+type slackSocketModeRunner interface {
+	Run(context.Context) error
+}
+
+var newSlackSocketModeRunner = func(cfg domain.SlackConfig, logger *slog.Logger) slackSocketModeRunner {
+	return slacknotify.NewSocketMode(cfg.AppToken, cfg.BotToken, logger)
 }
 
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
@@ -110,6 +118,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.startWebhookServer(ctx); err != nil {
 		return err
 	}
+	s.startSlackSocketMode(ctx)
 	stopGOPS := startGOPSAgent(ctx, s.logger, defaultGOPSHooks)
 	defer stopGOPS()
 	s.applyUIBaseURLResolver(s.currentRuntime())
@@ -199,7 +208,7 @@ func loadRuntime(path string, logger *slog.Logger, opts options) (orchestrator.R
 	runner := automation.NewRunner(cfg, def, trackerClient, manager, logger)
 	notifier := notify.NewNoop()
 	if strings.TrimSpace(cfg.Slack.BotToken) != "" && strings.TrimSpace(cfg.Slack.ChannelID) != "" {
-		notifier = slacknotify.New(cfg.Slack.BotToken, cfg.Slack.ChannelID)
+		notifier = slacknotify.New(cfg.Slack.BotToken, cfg.Slack.ChannelID, logger)
 	}
 	logger.Info(
 		"runtime loaded",
@@ -364,6 +373,25 @@ func (s *Service) startWebhookServer(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (s *Service) startSlackSocketMode(ctx context.Context) {
+	runtime := s.currentRuntime()
+	if strings.TrimSpace(runtime.Config.Slack.AppToken) == "" {
+		return
+	}
+
+	runner := newSlackSocketModeRunner(runtime.Config.Slack, s.logger)
+	if runner == nil {
+		return
+	}
+
+	s.logger.Info("slack socket mode enabled")
+	go func() {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			s.logger.Warn("slack socket mode exited", "error", err)
+		}
+	}()
 }
 
 func clonePort(value *int) *int {

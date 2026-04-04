@@ -494,6 +494,68 @@ func TestEnsureManagedLabelsEnsuresPausedAndCodexReviewLabels(t *testing.T) {
 	}
 }
 
+func TestStartSlackSocketModeStartsWhenAppTokenConfigured(t *testing.T) {
+	previousFactory := newSlackSocketModeRunner
+	defer func() {
+		newSlackSocketModeRunner = previousFactory
+	}()
+
+	started := make(chan struct{})
+	newSlackSocketModeRunner = func(domain.SlackConfig, *slog.Logger) slackSocketModeRunner {
+		return &slackSocketModeRunnerStub{started: started}
+	}
+
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					AppToken:  "xapp-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc.startSlackSocketMode(ctx)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startSlackSocketMode() did not start the Slack runner")
+	}
+}
+
+func TestStartSlackSocketModeSkipsWhenAppTokenMissing(t *testing.T) {
+	previousFactory := newSlackSocketModeRunner
+	defer func() {
+		newSlackSocketModeRunner = previousFactory
+	}()
+
+	newSlackSocketModeRunner = func(domain.SlackConfig, *slog.Logger) slackSocketModeRunner {
+		t.Fatal("newSlackSocketModeRunner() should not be called without an app token")
+		return nil
+	}
+
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+	}
+
+	svc.startSlackSocketMode(context.Background())
+}
+
 func TestSetupLinearWebhookCreatesManagedWebhook(t *testing.T) {
 	t.Parallel()
 
@@ -868,6 +930,95 @@ Work on {{ .issue.identifier }}.
 	_, err := LoadLinearAppSetup(context.Background(), workflowPath)
 	if !errors.Is(err, config.ErrMissingTrackerProject) {
 		t.Fatalf("LoadLinearAppSetup() error = %v, want ErrMissingTrackerProject", err)
+	}
+}
+
+func TestLoadSlackSetupReportsConfiguredSlackSection(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  project_slug: test-project
+slack:
+  bot_token: $SLACK_BOT_TOKEN
+  app_token: $SLACK_APP_TOKEN
+  channel_id: C12345678
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+
+	result, err := LoadSlackSetup(workflowPath)
+	if err != nil {
+		t.Fatalf("LoadSlackSetup() error = %v", err)
+	}
+	if !result.BotTokenDeclared || !result.BotTokenConfigured {
+		t.Fatalf("bot token state = declared:%v configured:%v, want true/true", result.BotTokenDeclared, result.BotTokenConfigured)
+	}
+	if !result.AppTokenDeclared || !result.AppTokenConfigured {
+		t.Fatalf("app token state = declared:%v configured:%v, want true/true", result.AppTokenDeclared, result.AppTokenConfigured)
+	}
+	if !result.ChannelDeclared || !result.ChannelConfigured {
+		t.Fatalf("channel state = declared:%v configured:%v, want true/true", result.ChannelDeclared, result.ChannelConfigured)
+	}
+	if result.ChannelID != "C12345678" {
+		t.Fatalf("ChannelID = %q, want %q", result.ChannelID, "C12345678")
+	}
+	if got := strings.Join(result.RequiredBotScopes, ","); got != "chat:write" {
+		t.Fatalf("RequiredBotScopes = %q, want %q", got, "chat:write")
+	}
+	if got := strings.Join(result.RequiredAppScopes, ","); got != "connections:write" {
+		t.Fatalf("RequiredAppScopes = %q, want %q", got, "connections:write")
+	}
+}
+
+func TestLoadSlackSetupReportsMissingEnvValues(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  api_key: test-linear-key
+  project_slug: test-project
+slack:
+  bot_token: $SLACK_BOT_TOKEN
+  app_token: $SLACK_APP_TOKEN
+  channel_id: $SLACK_CHANNEL_ID
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("SLACK_APP_TOKEN", "")
+	t.Setenv("SLACK_CHANNEL_ID", "")
+
+	result, err := LoadSlackSetup(workflowPath)
+	if err != nil {
+		t.Fatalf("LoadSlackSetup() error = %v", err)
+	}
+	if !result.BotTokenDeclared || result.BotTokenConfigured {
+		t.Fatalf("bot token state = declared:%v configured:%v, want true/false", result.BotTokenDeclared, result.BotTokenConfigured)
+	}
+	if result.BotTokenEnvVar != "SLACK_BOT_TOKEN" {
+		t.Fatalf("BotTokenEnvVar = %q, want %q", result.BotTokenEnvVar, "SLACK_BOT_TOKEN")
+	}
+	if !result.AppTokenDeclared || result.AppTokenConfigured {
+		t.Fatalf("app token state = declared:%v configured:%v, want true/false", result.AppTokenDeclared, result.AppTokenConfigured)
+	}
+	if result.AppTokenEnvVar != "SLACK_APP_TOKEN" {
+		t.Fatalf("AppTokenEnvVar = %q, want %q", result.AppTokenEnvVar, "SLACK_APP_TOKEN")
+	}
+	if !result.ChannelDeclared || result.ChannelConfigured {
+		t.Fatalf("channel state = declared:%v configured:%v, want true/false", result.ChannelDeclared, result.ChannelConfigured)
+	}
+	if result.ChannelEnvVar != "SLACK_CHANNEL_ID" {
+		t.Fatalf("ChannelEnvVar = %q, want %q", result.ChannelEnvVar, "SLACK_CHANNEL_ID")
 	}
 }
 
@@ -1376,8 +1527,18 @@ type serviceSlackHomeNotifier struct {
 	view   userworkflow.SlackHomeView
 }
 
+type slackSocketModeRunnerStub struct {
+	started chan struct{}
+}
+
 type serviceGitHubStub struct {
 	validateErr error
+}
+
+func (s *slackSocketModeRunnerStub) Run(ctx context.Context) error {
+	close(s.started)
+	<-ctx.Done()
+	return nil
 }
 
 func (s *serviceGitHubStub) ValidateAuth(context.Context) error {

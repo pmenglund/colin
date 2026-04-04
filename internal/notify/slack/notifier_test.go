@@ -3,6 +3,8 @@ package slack
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"reflect"
 	"testing"
 
@@ -10,6 +12,10 @@ import (
 
 	"github.com/pmenglund/colin/internal/notify"
 )
+
+func testSlackLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 type fakeClient struct {
 	postCalls      int
@@ -74,7 +80,7 @@ func TestSyncIssuePostsNewMessage(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",
@@ -102,7 +108,7 @@ func TestSyncIssueSkipsUnchangedFingerprint(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 	existing := notify.IssueNotificationState{
 		ChannelID:   "C12345678",
 		MessageTS:   "1743630000.123456",
@@ -132,7 +138,7 @@ func TestSyncIssueUpdatesExistingMessage(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",
@@ -165,7 +171,7 @@ func TestSyncIssueUsesConfiguredChannelForExistingMessage(t *testing.T) {
 	client := &fakeClient{
 		updateErr: slackapi.SlackErrorResponse{Err: "message_not_found"},
 	}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",
@@ -198,7 +204,7 @@ func TestSyncIssueRepostsWhenMessageWasDeleted(t *testing.T) {
 	client := &fakeClient{
 		updateErr: slackapi.SlackErrorResponse{Err: "message_not_found"},
 	}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	_, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",
@@ -228,7 +234,7 @@ func TestSyncIssuePersistsReferenceWhenPermalinkLookupFails(t *testing.T) {
 	client := &fakeClient{
 		permalinkErr: errors.New("missing_scope"),
 	}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",
@@ -254,7 +260,7 @@ func TestSyncIssueKeepsExistingPermalinkWhenLookupFailsForSameMessage(t *testing
 	client := &fakeClient{
 		permalinkErr: errors.New("missing_scope"),
 	}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	state, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",
@@ -282,7 +288,7 @@ func TestSyncIssueReturnsUpdateError(t *testing.T) {
 	client := &fakeClient{
 		updateErr: errors.New("slack unavailable"),
 	}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	_, err := notifier.SyncIssue(context.Background(), notify.IssueSummary{
 		Identifier:  "COLIN-153",

@@ -346,6 +346,18 @@ func mergeRunningIssueContext(previous, current domain.Issue) domain.Issue {
 		current.ColinMetadata = previous.ColinMetadata
 	} else if previous.ColinMetadata != nil {
 		merged := *current.ColinMetadata
+		if strings.TrimSpace(merged.SlackChannelID) == "" {
+			merged.SlackChannelID = previous.ColinMetadata.SlackChannelID
+		}
+		if strings.TrimSpace(merged.SlackMessageTS) == "" {
+			merged.SlackMessageTS = previous.ColinMetadata.SlackMessageTS
+		}
+		if strings.TrimSpace(merged.SlackPermalink) == "" {
+			merged.SlackPermalink = previous.ColinMetadata.SlackPermalink
+		}
+		if strings.TrimSpace(merged.SlackSummaryFingerprint) == "" {
+			merged.SlackSummaryFingerprint = previous.ColinMetadata.SlackSummaryFingerprint
+		}
 		if strings.TrimSpace(merged.CodexThreadID) == "" {
 			merged.CodexThreadID = previous.ColinMetadata.CodexThreadID
 		}

@@ -83,13 +83,14 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Server.LogBufferLines != domain.DefaultLogBufferLines {
 		t.Fatalf("cfg.Server.LogBufferLines = %d, want %d", cfg.Server.LogBufferLines, domain.DefaultLogBufferLines)
 	}
-	if cfg.Slack.BotToken != "" || cfg.Slack.ChannelID != "" {
+	if cfg.Slack.BotToken != "" || cfg.Slack.AppToken != "" || cfg.Slack.ChannelID != "" {
 		t.Fatalf("cfg.Slack = %#v, want disabled by default", cfg.Slack)
 	}
 }
 
 func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test-token")
 	t.Setenv("SLACK_SIGNING_SECRET", "slack-signing-secret")
 
 	def := workflowDefinition(t, map[string]any{
@@ -100,6 +101,7 @@ func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
 		},
 		"slack": map[string]any{
 			"bot_token":      "$SLACK_BOT_TOKEN",
+			"app_token":      "$SLACK_APP_TOKEN",
 			"channel_id":     "C12345678",
 			"signing_secret": "$SLACK_SIGNING_SECRET",
 		},
@@ -111,6 +113,9 @@ func TestBuildReadsSlackConfigFromEnv(t *testing.T) {
 	}
 	if got := cfg.Slack.BotToken; got != "xoxb-test-token" {
 		t.Fatalf("cfg.Slack.BotToken = %q, want %q", got, "xoxb-test-token")
+	}
+	if got := cfg.Slack.AppToken; got != "xapp-test-token" {
+		t.Fatalf("cfg.Slack.AppToken = %q, want %q", got, "xapp-test-token")
 	}
 	if got := cfg.Slack.ChannelID; got != "C12345678" {
 		t.Fatalf("cfg.Slack.ChannelID = %q, want %q", got, "C12345678")
@@ -140,6 +145,53 @@ func TestBuildRejectsPartialSlackConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "slack.bot_token and slack.channel_id must both be set") {
 		t.Fatalf("Build() error = %v, want slack config guidance", err)
+	}
+}
+
+func TestBuildRejectsSlackConfigWithoutAppToken(t *testing.T) {
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"slack": map[string]any{
+			"bot_token":  "$SLACK_BOT_TOKEN",
+			"channel_id": "C12345678",
+		},
+	})
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err == nil {
+		t.Fatal("Build() error = nil, want invalid slack config")
+	}
+	if !strings.Contains(err.Error(), "slack.app_token must be set when Slack is enabled") {
+		t.Fatalf("Build() error = %v, want missing slack app token guidance", err)
+	}
+}
+
+func TestBuildRejectsSlackAppTokenWithoutSummaryConfig(t *testing.T) {
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test-token")
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "project-1",
+			"api_key":      "token",
+		},
+		"slack": map[string]any{
+			"app_token": "$SLACK_APP_TOKEN",
+		},
+	})
+
+	_, err := Build(def, "WORKFLOW.md")
+	if err == nil {
+		t.Fatal("Build() error = nil, want invalid slack app token config")
+	}
+	if !strings.Contains(err.Error(), "slack.app_token requires slack.bot_token and slack.channel_id") {
+		t.Fatalf("Build() error = %v, want slack app token guidance", err)
 	}
 }
 

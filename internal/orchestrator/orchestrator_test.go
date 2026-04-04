@@ -451,13 +451,15 @@ func (s *runnerStub) Run(_ context.Context, issue domain.Issue, attempt *int, _ 
 }
 
 type notifierStub struct {
-	err   error
-	state notify.IssueNotificationState
-	calls []notify.IssueSummary
+	err      error
+	state    notify.IssueNotificationState
+	calls    []notify.IssueSummary
+	existing []notify.IssueNotificationState
 }
 
 func (s *notifierStub) SyncIssue(_ context.Context, summary notify.IssueSummary, existing notify.IssueNotificationState) (notify.IssueNotificationState, error) {
 	s.calls = append(s.calls, summary)
+	s.existing = append(s.existing, existing)
 	if s.err != nil {
 		return notify.IssueNotificationState{}, s.err
 	}
@@ -560,6 +562,167 @@ func TestHandleTickSyncsSlackSummaryForTrackedIssues(t *testing.T) {
 	}
 }
 
+func TestHandleTickSkipsSlackSummaryForStableTerminalIssue(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.example.test/COLIN-169"
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-169",
+		Title:      "Done issue",
+		State:      "Done",
+		URL:        &issueURL,
+		ColinMetadata: &domain.ColinMetadata{
+			SlackChannelID: "C12345678",
+			SlackMessageTS: "1743630000.123456",
+			SlackPermalink: "https://example.slack.com/archives/C12345678/p1743630000123456",
+			SlackSummaryFingerprint: userworkflow.SlackIssueSummary(domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					ActiveStates:   []string{"Todo", "In Progress"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			}, domain.Issue{
+				Identifier: "COLIN-169",
+				Title:      "Done issue",
+				State:      "Done",
+				URL:        &issueURL,
+			}).Fingerprint,
+		},
+	}
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{issue},
+	}
+	notifier := &notifierStub{
+		state: notify.IssueNotificationState{
+			ChannelID:   "C12345678",
+			MessageTS:   "1743630000.123456",
+			Permalink:   "https://example.slack.com/archives/C12345678/p1743630000123456",
+			Fingerprint: issue.ColinMetadata.SlackSummaryFingerprint,
+		},
+	}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo", "In Progress"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf("notifier calls = %d, want 0", len(notifier.calls))
+	}
+	if tracker.metadata.SlackPermalink != "" {
+		t.Fatalf("tracker metadata = %#v, want no metadata upsert", tracker.metadata)
+	}
+}
+
+func TestHandleTickSyncsSlackSummaryForTerminalTransition(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.example.test/COLIN-170"
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-170",
+		Title:      "Freshly done issue",
+		State:      "Done",
+		URL:        &issueURL,
+		ColinMetadata: &domain.ColinMetadata{
+			URL:                     "https://colin.example.test/linear/issues/issue-1/metadata",
+			SlackChannelID:          "C12345678",
+			SlackMessageTS:          "1743630000.123456",
+			SlackPermalink:          "https://example.slack.com/archives/C12345678/p1743630000123456",
+			SlackSummaryFingerprint: "previous-non-terminal-fingerprint",
+		},
+	}
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{issue},
+	}
+	notifier := &notifierStub{
+		state: notify.IssueNotificationState{
+			ChannelID:   "C12345678",
+			MessageTS:   "1743630000.123456",
+			Permalink:   "https://example.slack.com/archives/C12345678/p1743630000123456",
+			Fingerprint: "terminal-fingerprint",
+		},
+	}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo", "In Progress"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+				Slack: domain.SlackConfig{
+					BotToken:  "xoxb-test",
+					ChannelID: "C12345678",
+				},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if got := tracker.metadata.SlackPermalink; got != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("metadata.SlackPermalink = %q, want persisted permalink", got)
+	}
+}
+
 func TestSyncSlackIssueSkipsMetadataPersistWhenStateUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -608,6 +771,155 @@ func TestSyncSlackIssueSkipsMetadataPersistWhenStateUnchanged(t *testing.T) {
 	}
 	if issue.ColinMetadata == nil || issue.ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743630000123456" {
 		t.Fatalf("issue.ColinMetadata = %#v, want existing Slack ref preserved", issue.ColinMetadata)
+	}
+}
+
+func TestMergeRunningIssueContextPreservesSlackMetadataFromPreviousIssue(t *testing.T) {
+	t.Parallel()
+
+	previous := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-174",
+		State:      "In Progress",
+		ColinMetadata: &domain.ColinMetadata{
+			SlackChannelID:          "C12345678",
+			SlackMessageTS:          "1743630000.123456",
+			SlackPermalink:          "https://example.slack.com/archives/C12345678/p1743630000123456",
+			SlackSummaryFingerprint: "fp-1",
+			CodexThreadID:           "thread-1",
+		},
+	}
+	current := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-174",
+		State:      "In Progress",
+		ColinMetadata: &domain.ColinMetadata{
+			ProgressRootCommentID: "comment-1",
+		},
+	}
+
+	merged := mergeRunningIssueContext(previous, current)
+
+	if merged.ColinMetadata == nil {
+		t.Fatal("merged.ColinMetadata = nil, want merged metadata")
+	}
+	if got := merged.ColinMetadata.SlackChannelID; got != "C12345678" {
+		t.Fatalf("SlackChannelID = %q, want preserved value", got)
+	}
+	if got := merged.ColinMetadata.SlackMessageTS; got != "1743630000.123456" {
+		t.Fatalf("SlackMessageTS = %q, want preserved value", got)
+	}
+	if got := merged.ColinMetadata.SlackPermalink; got != "https://example.slack.com/archives/C12345678/p1743630000123456" {
+		t.Fatalf("SlackPermalink = %q, want preserved value", got)
+	}
+	if got := merged.ColinMetadata.SlackSummaryFingerprint; got != "fp-1" {
+		t.Fatalf("SlackSummaryFingerprint = %q, want preserved value", got)
+	}
+	if got := merged.ColinMetadata.CodexThreadID; got != "thread-1" {
+		t.Fatalf("CodexThreadID = %q, want preserved value", got)
+	}
+	if got := merged.ColinMetadata.ProgressRootCommentID; got != "comment-1" {
+		t.Fatalf("ProgressRootCommentID = %q, want current value", got)
+	}
+}
+
+func TestHandleTickMergesRunningSlackMetadataIntoTrackedIssueSync(t *testing.T) {
+	t.Parallel()
+
+	issueURL := "https://linear.example.test/COLIN-175"
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			Kind:           "linear",
+			APIKey:         "token",
+			ProjectSlug:    "project-1",
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Done"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+		Codex: domain.CodexConfig{Command: "codex app-server"},
+		Slack: domain.SlackConfig{
+			BotToken:  "xoxb-test",
+			ChannelID: "C12345678",
+		},
+	}
+	fingerprint := userworkflow.SlackIssueSummary(cfg, domain.Issue{
+		Identifier: "COLIN-175",
+		Title:      "Running issue",
+		State:      "In Progress",
+		URL:        &issueURL,
+	}).Fingerprint
+	runningIssue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-175",
+		Title:      "Running issue",
+		State:      "Todo",
+		URL:        &issueURL,
+		ColinMetadata: &domain.ColinMetadata{
+			SlackChannelID:          "C12345678",
+			SlackMessageTS:          "1743630000.123456",
+			SlackPermalink:          "https://example.slack.com/archives/C12345678/p1743630000123456",
+			SlackSummaryFingerprint: fingerprint,
+		},
+	}
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{{
+			ID:         "issue-1",
+			Identifier: "COLIN-175",
+			Title:      "Running issue",
+			State:      "In Progress",
+			URL:        &issueURL,
+		}},
+		issuesByID: []domain.Issue{{
+			ID:         "issue-1",
+			Identifier: "COLIN-175",
+			Title:      "Running issue",
+			State:      "In Progress",
+			URL:        &issueURL,
+		}},
+	}
+	notifier := &notifierStub{}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 1),
+		runtime: Runtime{
+			Tracker:  tracker,
+			Notifier: notifier,
+			Config:   cfg,
+		},
+		running: map[string]*runningEntry{
+			"issue-1": {
+				issue:      runningIssue,
+				identifier: "COLIN-175",
+				startedAt:  time.Now().UTC(),
+				session:    domain.LiveSession{},
+				cancel:     func() {},
+			},
+		},
+		claimed:           map[string]struct{}{"issue-1": {}},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if len(notifier.existing) != 1 {
+		t.Fatalf("notifier existing calls = %d, want 1", len(notifier.existing))
+	}
+	if got := notifier.existing[0].MessageTS; got != "1743630000.123456" {
+		t.Fatalf("existing message ts = %q, want preserved running slack reference", got)
+	}
+	if tracker.metadata.SlackPermalink != "" {
+		t.Fatalf("tracker metadata = %#v, want no metadata upsert for unchanged running issue", tracker.metadata)
 	}
 }
 

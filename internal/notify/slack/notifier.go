@@ -3,11 +3,20 @@ package slack
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 
 	slackapi "github.com/slack-go/slack"
 
 	"github.com/pmenglund/colin/internal/notify"
+)
+
+const (
+	actionIDLinearIssue = "linear_issue"
+	actionIDPullRequest = "pull_request"
+	actionIDMetadata    = "metadata"
+	actionIDExecPlan    = "exec_plan"
 )
 
 type client interface {
@@ -21,20 +30,23 @@ type client interface {
 type Notifier struct {
 	channelID string
 	client    client
+	logger    *slog.Logger
 }
 
 // New constructs a Slack-backed issue notifier.
-func New(botToken string, channelID string) *Notifier {
+func New(botToken string, channelID string, logger *slog.Logger) *Notifier {
 	return &Notifier{
 		channelID: strings.TrimSpace(channelID),
 		client:    slackapi.New(strings.TrimSpace(botToken)),
+		logger:    slackLogger(logger),
 	}
 }
 
-func newWithClient(channelID string, client client) *Notifier {
+func newWithClient(channelID string, client client, logger *slog.Logger) *Notifier {
 	return &Notifier{
 		channelID: strings.TrimSpace(channelID),
 		client:    client,
+		logger:    slackLogger(logger),
 	}
 }
 
@@ -44,25 +56,61 @@ func (n *Notifier) SyncIssue(ctx context.Context, summary notify.IssueSummary, e
 		return notify.IssueNotificationState{}, nil
 	}
 	if strings.TrimSpace(summary.Fingerprint) != "" && strings.TrimSpace(existing.Fingerprint) == strings.TrimSpace(summary.Fingerprint) {
+		n.logger.Info(
+			"slack sync skipped unchanged fingerprint",
+			"issue_identifier", strings.TrimSpace(summary.Identifier),
+			"channel_id", strings.TrimSpace(existing.ChannelID),
+			"message_ts", strings.TrimSpace(existing.MessageTS),
+			"fingerprint", strings.TrimSpace(existing.Fingerprint),
+		)
 		return existing, nil
 	}
 
 	options := n.messageOptions(summary)
 	channelID := n.channelID
 	if messageTS := strings.TrimSpace(existing.MessageTS); messageTS != "" {
+		n.logger.Info(
+			"slack sync attempting message update",
+			"issue_identifier", strings.TrimSpace(summary.Identifier),
+			"configured_channel_id", channelID,
+			"existing_channel_id", strings.TrimSpace(existing.ChannelID),
+			"message_ts", messageTS,
+			"previous_fingerprint", strings.TrimSpace(existing.Fingerprint),
+			"next_fingerprint", strings.TrimSpace(summary.Fingerprint),
+		)
 		channel, timestamp, _, err := n.client.UpdateMessageContext(ctx, channelID, messageTS, options...)
 		if err == nil {
+			n.logger.Info(
+				"slack sync updated existing message",
+				"issue_identifier", strings.TrimSpace(summary.Identifier),
+				"channel_id", strings.TrimSpace(channel),
+				"message_ts", strings.TrimSpace(timestamp),
+			)
 			return n.notificationState(ctx, summary, existing, channel, timestamp), nil
 		}
 		if !isMessageNotFound(err) {
 			return notify.IssueNotificationState{}, err
 		}
+		n.logger.Info(
+			"slack sync update target missing; posting replacement message",
+			"issue_identifier", strings.TrimSpace(summary.Identifier),
+			"configured_channel_id", channelID,
+			"existing_channel_id", strings.TrimSpace(existing.ChannelID),
+			"message_ts", messageTS,
+		)
 	}
 
 	channel, timestamp, err := n.client.PostMessageContext(ctx, n.channelID, options...)
 	if err != nil {
 		return notify.IssueNotificationState{}, err
 	}
+	n.logger.Info(
+		"slack sync posted message",
+		"issue_identifier", strings.TrimSpace(summary.Identifier),
+		"channel_id", strings.TrimSpace(channel),
+		"message_ts", strings.TrimSpace(timestamp),
+		"previous_message_ts", strings.TrimSpace(existing.MessageTS),
+	)
 	return n.notificationState(ctx, summary, notify.IssueNotificationState{}, channel, timestamp), nil
 }
 
@@ -79,6 +127,13 @@ func (n *Notifier) notificationState(ctx context.Context, summary notify.IssueSu
 		Ts:      messageTS,
 	})
 	if err != nil {
+		n.logger.Info(
+			"slack sync permalink lookup failed",
+			"issue_identifier", strings.TrimSpace(summary.Identifier),
+			"channel_id", channelID,
+			"message_ts", messageTS,
+			"error", err,
+		)
 		if sameMessage(channelID, messageTS, existing) {
 			state.Permalink = strings.TrimSpace(existing.Permalink)
 		}
@@ -86,6 +141,13 @@ func (n *Notifier) notificationState(ctx context.Context, summary notify.IssueSu
 	}
 	state.Permalink = strings.TrimSpace(permalink)
 	return state
+}
+
+func slackLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func (n *Notifier) messageOptions(summary notify.IssueSummary) []slackapi.MsgOption {
@@ -108,16 +170,16 @@ func (n *Notifier) messageOptions(summary notify.IssueSummary) []slackapi.MsgOpt
 func linkActionBlock(summary notify.IssueSummary) slackapi.Block {
 	var elements []slackapi.BlockElement
 	if url := strings.TrimSpace(summary.LinearURL); url != "" {
-		elements = append(elements, linkButton("linear_issue", "linear_issue", "Linear issue", url))
+		elements = append(elements, linkButton(actionIDLinearIssue, actionIDLinearIssue, "Linear issue", url))
 	}
 	if url := strings.TrimSpace(summary.PullRequestURL); url != "" {
-		elements = append(elements, linkButton("pull_request", "pull_request", "PR", url))
+		elements = append(elements, linkButton(actionIDPullRequest, actionIDPullRequest, "PR", url))
 	}
 	if url := strings.TrimSpace(summary.MetadataURL); url != "" {
-		elements = append(elements, linkButton("metadata", "metadata", "Colin metadata", url))
+		elements = append(elements, linkButton(actionIDMetadata, actionIDMetadata, "Colin metadata", url))
 	}
 	if url := strings.TrimSpace(summary.ExecPlanURL); url != "" {
-		elements = append(elements, linkButton("exec_plan", "exec_plan", "ExecPlan", url))
+		elements = append(elements, linkButton(actionIDExecPlan, actionIDExecPlan, "ExecPlan", url))
 	}
 	if len(elements) == 0 {
 		return nil
@@ -176,6 +238,15 @@ func safeBlockText(value string) string {
 		return "Not available"
 	}
 	return value
+}
+
+func isKnownLinkActionID(value string) bool {
+	switch strings.TrimSpace(value) {
+	case actionIDLinearIssue, actionIDPullRequest, actionIDMetadata, actionIDExecPlan:
+		return true
+	default:
+		return false
+	}
 }
 
 func isMessageNotFound(err error) bool {

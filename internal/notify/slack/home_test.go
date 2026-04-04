@@ -16,7 +16,7 @@ func TestPublishHomePublishesHomeTabView(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 	view := userworkflow.SlackHomeView{
 		TotalIssues: 2,
 		Groups: []userworkflow.SlackHomeStateGroup{
@@ -63,7 +63,7 @@ func TestPublishHomeRendersEmptyState(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	if err := notifier.PublishHome(context.Background(), "U12345678", userworkflow.SlackHomeView{}); err != nil {
 		t.Fatalf("PublishHome() error = %v", err)
@@ -82,7 +82,7 @@ func TestPublishHomeAddsOverflowNotice(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 
 	groups := make([]userworkflow.SlackHomeStateGroup, 0, 120)
 	totalIssues := 0
@@ -122,7 +122,7 @@ func TestPublishHomeTruncatesOverlongFirstIssueLine(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeClient{}
-	notifier := newWithClient("C12345678", client)
+	notifier := newWithClient("C12345678", client, testSlackLogger())
 	longTitle := strings.Repeat("very long title ", 300)
 
 	if err := notifier.PublishHome(context.Background(), "U12345678", userworkflow.SlackHomeView{

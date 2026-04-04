@@ -16,7 +16,7 @@ Optional but encouraged:
 
 - [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests, with `repo.codex_pr_reviews_enabled: true` set in `WORKFLOW.md` when you want Colin to wait for that review before merging
 - public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md), plus `LINEAR_WEBHOOK_SECRET` and `GITHUB_WEBHOOK_SECRET` exported when you enable signed provider webhooks
-- a Slack bot token exported as `SLACK_BOT_TOKEN`, a Slack signing secret exported as `SLACK_SIGNING_SECRET`, and a channel ID in `WORKFLOW.md` when you want Colin to keep one issue-summary message per tracked issue in Slack and serve the Slack app Home tab
+- a Slack bot token exported as `SLACK_BOT_TOKEN` and a channel ID in `WORKFLOW.md` when you want Colin to keep one issue-summary message per tracked issue in Slack; add `SLACK_APP_TOKEN` and `slack.app_token` when you also want Colin to acknowledge Slack button clicks over Socket Mode, and add `SLACK_SIGNING_SECRET` when you want Colin to serve the Slack app Home tab over the webhook server
 
 ## What Using Colin Looks Like
 
@@ -116,12 +116,13 @@ export GITHUB_TOKEN=github_pat_...
 export LINEAR_WEBHOOK_SECRET=...
 export GITHUB_WEBHOOK_SECRET=...
 export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_APP_TOKEN=xapp-...
 export SLACK_SIGNING_SECRET=...
 ```
 
 `GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`. Fine-grained `github_pat_...` tokens are preferred, but classic `ghp_...` PATs also work.
 
-If you enable the optional `slack` section in `WORKFLOW.md`, export both `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` before starting Colin. The workflow file should also name the destination `channel_id`. The bot token powers both the per-issue Slack messages and the Slack app Home publish call, while the signing secret lets Colin verify that inbound Slack event requests are genuine.
+If you enable the optional `slack` section in `WORKFLOW.md`, Colin requires `slack.bot_token`, `slack.app_token`, and `slack.channel_id` for issue summaries plus interactive buttons. Export both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, enable Socket Mode for the Slack app, and keep interactivity enabled so Slack button clicks can be acknowledged without a public Slack interactivity URL. If you also want Colin to publish the Slack app Home tab through the webhook server, export `SLACK_SIGNING_SECRET` so Colin can verify inbound Slack webhook requests.
 
 ### 2. Generate or refresh `WORKFLOW.md`
 
@@ -183,6 +184,16 @@ Useful flags:
 - `colin --workflow /path/to/WORKFLOW.md` points Colin at a different workflow file.
 - `colin --port 9999` overrides the dashboard port.
 - `colin --workflow /path/to/WORKFLOW.md config` generates or refreshes a workflow file at a custom path.
+
+### 4a. Optional: inspect Slack setup
+
+If you want Colin to mirror tracked issues into Slack, use:
+
+```bash
+colin setup slack
+```
+
+That command inspects the workflow's `slack` section, reports whether `slack.bot_token`, `slack.app_token`, and `slack.channel_id` are declared and resolved, and reminds you to enable Socket Mode and Interactivity for the Slack app before startup.
 
 ### 5. Optional: enable webhook-driven refreshes
 

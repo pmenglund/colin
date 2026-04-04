@@ -26,6 +26,7 @@ func newSetupCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, d
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.AddCommand(newSetupRepoCmd(stdin, stdout, stderr, opts, deps))
+	cmd.AddCommand(newSetupSlackCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupGitHubCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupTailscaleCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupLinearCmd(stdin, stdout, stderr, opts, deps))
@@ -69,6 +70,24 @@ func newSetupGitHubCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOpti
 	cmd.Example = "  colin setup github\n  colin setup github token\n  colin setup github webhook\n  colin --workflow /path/to/WORKFLOW.md setup github"
 	cmd.AddCommand(newSetupGitHubTokenCmd(stdin, stdout, stderr, opts, deps))
 	cmd.AddCommand(newSetupGitHubWebhookCmd(stdin, stdout, stderr, opts, deps))
+	return cmd
+}
+
+func newSetupSlackCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "slack",
+		Short: "Print the Slack setup Colin expects for this workflow",
+		Long: "Inspect the workflow's Slack section and print the Slack app, token, and channel setup Colin expects.\n\n" +
+			"This command helps you prepare Slack summaries and Socket Mode for Colin. It checks whether `slack.bot_token`, `slack.app_token`, and `slack.channel_id` are declared and resolved, then reminds you to enable Socket Mode and interactivity for the Slack app and invite the app to the target channel.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args:          maximumArgs(0),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return exitCode(deps.runSetupSlack(cmd, opts.workflowPath))
+		},
+	}
+	configureCommand(cmd, stdin, stdout, stderr)
+	cmd.Example = "  colin setup slack\n  colin --workflow /path/to/WORKFLOW.md setup slack"
 	return cmd
 }
 

@@ -2508,6 +2508,98 @@ func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) 
 	}
 }
 
+func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttachment(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-169",
+							"title":      "Investigate warning",
+							"state":      map[string]any{"name": "In Progress"},
+							"labels":     map[string]any{"nodes": []map[string]any{}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"attachments": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":        "attachment-old",
+										"title":     "Colin metadata",
+										"url":       "https://colin.example.test/linear/issues/issue-1/metadata",
+										"createdAt": "2026-04-03T15:32:00Z",
+										"updatedAt": "2026-04-03T15:32:10Z",
+										"metadata": map[string]any{
+											"slack_channel_id":          "C12345678",
+											"slack_message_ts":          "1743723180.123456",
+											"slack_permalink":           "https://example.slack.com/archives/C12345678/p1743723180123456",
+											"slack_summary_fingerprint": "fp-2",
+										},
+									},
+									{
+										"id":        "attachment-new",
+										"title":     "Colin metadata",
+										"url":       "https://colin.example.test/linear/issues/issue-1/metadata",
+										"createdAt": "2026-04-03T15:33:00Z",
+										"updatedAt": "2026-04-03T15:33:10Z",
+										"metadata": map[string]any{
+											"progress_root_comment_id": "comment-root-1",
+										},
+									},
+								},
+							},
+							"comments": map[string]any{
+								"nodes": []map[string]any{},
+							},
+							"history": map[string]any{
+								"nodes": []map[string]any{},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		project:  "project-1",
+		active:   []string{"In Progress"},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if issues[0].ColinMetadata == nil {
+		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
+	}
+	if issues[0].ColinMetadata.AttachmentID != "attachment-new" {
+		t.Fatalf("AttachmentID = %q, want newest metadata attachment", issues[0].ColinMetadata.AttachmentID)
+	}
+	if issues[0].ColinMetadata.ProgressRootCommentID != "comment-root-1" {
+		t.Fatalf("ProgressRootCommentID = %q, want newest metadata field", issues[0].ColinMetadata.ProgressRootCommentID)
+	}
+	if issues[0].ColinMetadata.SlackMessageTS != "1743723180.123456" {
+		t.Fatalf("SlackMessageTS = %q, want backfilled slack timestamp", issues[0].ColinMetadata.SlackMessageTS)
+	}
+	if issues[0].ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743723180123456" {
+		t.Fatalf("SlackPermalink = %q, want backfilled slack permalink", issues[0].ColinMetadata.SlackPermalink)
+	}
+}
+
 func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 	t.Parallel()
 
