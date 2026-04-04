@@ -1893,6 +1893,80 @@ func TestRunnerRetriesMalformedExecPlanDecisionOnce(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesLatestCompletedItemForExecPlanDecision(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_INTERMEDIATE_ITEM_COMPLETED_TEXT=%q COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		"I’m checking the workspace state and the code path behind this warning so I can judge whether this is a small direct fix or something that needs a persistent plan.",
+		execPlanDecisionOneShotLine,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-171",
+			Title:      "Investigate warning",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-171",
+		Title:      "Investigate warning",
+		State:      "Todo",
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if tracker.metadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("metadata.ExecPlanDecision = %q, want %q", tracker.metadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
+	}
+	logData, err := os.ReadFile(promptLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(logData), "Your previous ExecPlan strategy response could not be parsed.") {
+		t.Fatalf("prompts log unexpectedly retried malformed decision: %q", string(logData))
+	}
+}
+
 func TestRunnerParsesExecPlanTurnsFromCompletedItemTextOnly(t *testing.T) {
 	t.Parallel()
 
@@ -2403,6 +2477,19 @@ func runFakeCodex() error {
 			}
 			if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_ITEM_COMPLETED_PARAMS_TEXT"); ok {
 				itemCompletedParams["text"] = value
+			}
+			if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_INTERMEDIATE_ITEM_COMPLETED_TEXT"); ok {
+				if err := writeJSONMessage(writer, map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"item": map[string]any{
+							"text": value,
+						},
+					},
+				}); err != nil {
+					return err
+				}
 			}
 			if err := writeJSONMessage(writer, map[string]any{
 				"method": "item/completed",
