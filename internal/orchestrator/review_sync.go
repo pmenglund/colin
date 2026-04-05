@@ -139,8 +139,8 @@ func hasReviewSyncPullRequest(pr domain.PullRequestRef) bool {
 func reviewSyncPullRequestRepositoryKey(pr domain.PullRequestRef) string {
 	parts := []string{
 		strings.ToLower(strings.TrimSpace(pr.Backend)),
-		strings.ToLower(strings.TrimSpace(pr.Owner)),
-		strings.ToLower(strings.TrimSpace(pr.Repository)),
+		strings.ToLower(strings.TrimSpace(pr.RepositoryOwner)),
+		strings.ToLower(strings.TrimSpace(pr.RepositoryName)),
 	}
 	return strings.Join(parts, "\x00")
 }

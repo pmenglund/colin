@@ -33,15 +33,18 @@ var codexReviewLogins = []string{
 
 // Result captures the outcome of a publish or merge operation.
 type Result struct {
-	Branch    string
-	BaseRef   string
-	PRNumber  int
-	PRURL     string
-	PRState   string
-	PRHeadRef string
-	PRBaseRef string
-	Commit    string
-	Action    string
+	Branch     string
+	BaseRef    string
+	PRNumber   int
+	PRURL      string
+	PRState    string
+	PRHeadRef  string
+	PRBaseRef  string
+	PRBackend  string
+	PROwner    string
+	PRRepoName string
+	Commit     string
+	Action     string
 }
 
 // ReviewContext captures the PR, unresolved review threads, and Codex review signals for an issue branch.
@@ -172,6 +175,13 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 	result.PRState = pr.State
 	result.PRHeadRef = pr.HeadRefName
 	result.PRBaseRef = pr.BaseRefName
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	if err != nil {
+		return Result{}, err
+	}
+	result.PRBackend = repohost.NormalizeBackend(m.cfg.Repo.Backend)
+	result.PROwner = owner
+	result.PRRepoName = name
 	return result, nil
 }
 
@@ -262,11 +272,14 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 	}
 	return ReviewContext{
 		PullRequest: domain.PullRequestRef{
-			Number:  pr.Number,
-			URL:     pr.URL,
-			State:   pr.State,
-			HeadRef: pr.HeadRefName,
-			BaseRef: pr.BaseRefName,
+			Number:          pr.Number,
+			URL:             pr.URL,
+			State:           pr.State,
+			HeadRef:         pr.HeadRefName,
+			BaseRef:         pr.BaseRefName,
+			Backend:         repohost.NormalizeBackend(m.cfg.Repo.Backend),
+			RepositoryOwner: owner,
+			RepositoryName:  name,
 		},
 		Threads:                threads,
 		CodexReviewThreads:     codexThreads,
@@ -564,11 +577,14 @@ func trackedPullRequest(issue domain.Issue) (domain.PullRequestRef, bool) {
 		return domain.PullRequestRef{}, false
 	}
 	return domain.PullRequestRef{
-		Number:  issue.ColinMetadata.PullRequestNumber,
-		URL:     strings.TrimSpace(issue.ColinMetadata.PullRequestURL),
-		State:   strings.TrimSpace(issue.ColinMetadata.PullRequestState),
-		HeadRef: strings.TrimSpace(issue.ColinMetadata.PullRequestHeadRef),
-		BaseRef: strings.TrimSpace(issue.ColinMetadata.PullRequestBaseRef),
+		Number:          issue.ColinMetadata.PullRequestNumber,
+		URL:             strings.TrimSpace(issue.ColinMetadata.PullRequestURL),
+		State:           strings.TrimSpace(issue.ColinMetadata.PullRequestState),
+		HeadRef:         strings.TrimSpace(issue.ColinMetadata.PullRequestHeadRef),
+		BaseRef:         strings.TrimSpace(issue.ColinMetadata.PullRequestBaseRef),
+		Backend:         strings.TrimSpace(issue.ColinMetadata.PullRequestBackend),
+		RepositoryOwner: strings.TrimSpace(issue.ColinMetadata.PullRequestRepoOwner),
+		RepositoryName:  strings.TrimSpace(issue.ColinMetadata.PullRequestRepoName),
 	}, true
 }
 
@@ -579,13 +595,20 @@ func attachedPullRequestsForRepository(prs []domain.PullRequestRef, owner, name 
 
 	filtered := make([]domain.PullRequestRef, 0, len(prs))
 	for _, pr := range prs {
-		if pr.Number <= 0 {
+		prOwner := strings.TrimSpace(pr.RepositoryOwner)
+		prName := strings.TrimSpace(pr.RepositoryName)
+		number := pr.Number
+		if prOwner == "" || prName == "" || number <= 0 {
+			var ok bool
+			prOwner, prName, number, ok = adapter.ParsePullRequestURL(pr.URL)
+			if !ok || pr.Number <= 0 || pr.Number != number {
+				continue
+			}
+		}
+		if backend := strings.TrimSpace(pr.Backend); backend != "" && !strings.EqualFold(backend, string(adapter.Kind())) {
 			continue
 		}
-		if !strings.EqualFold(pr.Backend, string(adapter.Kind())) {
-			continue
-		}
-		if !strings.EqualFold(pr.Owner, owner) || !strings.EqualFold(pr.Repository, name) {
+		if !strings.EqualFold(prOwner, owner) || !strings.EqualFold(prName, name) {
 			continue
 		}
 		filtered = append(filtered, pr)
@@ -602,8 +625,8 @@ func duplicatePullRequestsError(prs []domain.PullRequestRef) error {
 }
 
 func pullRequestDisplayRef(pr domain.PullRequestRef) string {
-	if strings.TrimSpace(pr.Owner) != "" && strings.TrimSpace(pr.Repository) != "" && pr.Number > 0 {
-		return fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repository, pr.Number)
+	if strings.TrimSpace(pr.RepositoryOwner) != "" && strings.TrimSpace(pr.RepositoryName) != "" && pr.Number > 0 {
+		return fmt.Sprintf("%s/%s#%d", pr.RepositoryOwner, pr.RepositoryName, pr.Number)
 	}
 	if pr.Number > 0 {
 		return fmt.Sprintf("#%d", pr.Number)

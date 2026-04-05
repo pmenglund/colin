@@ -20,7 +20,8 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
-	"github.com/pmenglund/colin/internal/repoops"
+	"github.com/pmenglund/colin/internal/repohost"
+	repogithub "github.com/pmenglund/colin/internal/repohost/github"
 	lineartracker "github.com/pmenglund/colin/internal/tracker/linear"
 	"github.com/pmenglund/colin/internal/workspace"
 )
@@ -824,7 +825,7 @@ func isPublishOrPostPublishState(state string) bool {
 	}
 }
 
-func githubPullRequestByHead(ctx context.Context, branch string) (*repoops.GitHubPullRequest, error) {
+func githubPullRequestByHead(ctx context.Context, branch string) (*repohost.PullRequest, error) {
 	client, err := realE2EGitHubClient()
 	if err != nil {
 		return nil, err
@@ -907,8 +908,8 @@ func requireGitHubToken(t *testing.T) {
 	}
 }
 
-func realE2EGitHubClient() (repoops.GitHubClient, error) {
-	return repoops.NewGitHubClientFromConfig(domain.ServiceConfig{
+func realE2EGitHubClient() (repohost.Client, error) {
+	return repogithub.NewClientFromConfig(domain.ServiceConfig{
 		Repo: domain.RepoConfig{
 			APIToken: firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
 		},

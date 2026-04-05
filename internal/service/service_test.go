@@ -26,6 +26,7 @@ import (
 	"github.com/pmenglund/colin/internal/domain"
 	slacknotify "github.com/pmenglund/colin/internal/notify/slack"
 	"github.com/pmenglund/colin/internal/orchestrator"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/repoops"
 	tsdiag "github.com/pmenglund/colin/internal/tailscale"
@@ -1744,15 +1745,15 @@ func testServicePreflightConfig(endpoint string) domain.ServiceConfig {
 	}
 }
 
-func (s *serviceGitHubStub) PullRequestByHead(context.Context, string, string, string, string) (*repoops.GitHubPullRequest, error) {
+func (s *serviceGitHubStub) PullRequestByHead(context.Context, string, string, string, string) (*repohost.PullRequest, error) {
 	return nil, nil
 }
 
-func (s *serviceGitHubStub) PullRequestByNumber(context.Context, string, string, int) (*repoops.GitHubPullRequest, error) {
+func (s *serviceGitHubStub) PullRequestByNumber(context.Context, string, string, int) (*repohost.PullRequest, error) {
 	return nil, nil
 }
 
-func (s *serviceGitHubStub) CreatePullRequest(context.Context, string, string, repoops.CreatePullRequestInput) (*repoops.GitHubPullRequest, error) {
+func (s *serviceGitHubStub) CreatePullRequest(context.Context, string, string, repohost.CreatePullRequestInput) (*repohost.PullRequest, error) {
 	return nil, nil
 }
 
@@ -1764,16 +1765,16 @@ func (s *serviceGitHubStub) BranchExists(context.Context, string, string, string
 	return false, nil
 }
 
-func (s *serviceGitHubStub) ReviewThreads(context.Context, string, string, int, string) (repoops.GitHubReviewThreadPage, error) {
-	return repoops.GitHubReviewThreadPage{}, nil
+func (s *serviceGitHubStub) ReviewThreads(context.Context, string, string, int, string) (repohost.ReviewThreadPage, error) {
+	return repohost.ReviewThreadPage{}, nil
 }
 
-func (s *serviceGitHubStub) ReviewThreadComments(context.Context, string, string) (repoops.GitHubReviewThreadCommentPage, error) {
-	return repoops.GitHubReviewThreadCommentPage{}, nil
+func (s *serviceGitHubStub) ReviewThreadComments(context.Context, string, string) (repohost.ReviewThreadCommentPage, error) {
+	return repohost.ReviewThreadCommentPage{}, nil
 }
 
-func (s *serviceGitHubStub) PullRequestReactions(context.Context, string, string, int, string) (repoops.GitHubReactionPage, error) {
-	return repoops.GitHubReactionPage{}, nil
+func (s *serviceGitHubStub) PullRequestReactions(context.Context, string, string, int, string) (repohost.ReactionPage, error) {
+	return repohost.ReactionPage{}, nil
 }
 
 func (s *serviceGitHubStub) ReplyToReviewThread(context.Context, string, string) error {

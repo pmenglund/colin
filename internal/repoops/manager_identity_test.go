@@ -12,18 +12,18 @@ func TestAttachedPullRequestsForRepositoryUsesStoredIdentity(t *testing.T) {
 
 	prs := []domain.PullRequestRef{
 		{
-			Backend:    "github",
-			Owner:      "pmenglund",
-			Repository: "colin",
-			Number:     11,
-			URL:        "not-a-parseable-pr-url",
+			Backend:         "github",
+			RepositoryOwner: "pmenglund",
+			RepositoryName:  "colin",
+			Number:          11,
+			URL:             "not-a-parseable-pr-url",
 		},
 		{
-			Backend:    "github",
-			Owner:      "pmenglund",
-			Repository: "sibling",
-			Number:     11,
-			URL:        "https://github.com/pmenglund/sibling/pull/11",
+			Backend:         "github",
+			RepositoryOwner: "pmenglund",
+			RepositoryName:  "sibling",
+			Number:          11,
+			URL:             "https://github.com/pmenglund/sibling/pull/11",
 		},
 	}
 
@@ -31,7 +31,7 @@ func TestAttachedPullRequestsForRepositoryUsesStoredIdentity(t *testing.T) {
 	if len(filtered) != 1 {
 		t.Fatalf("filtered length = %d, want 1", len(filtered))
 	}
-	if filtered[0].Owner != "pmenglund" || filtered[0].Repository != "colin" || filtered[0].Number != 11 {
+	if filtered[0].RepositoryOwner != "pmenglund" || filtered[0].RepositoryName != "colin" || filtered[0].Number != 11 {
 		t.Fatalf("filtered[0] = %+v, want pmenglund/colin#11", filtered[0])
 	}
 	if filtered[0].URL != "not-a-parseable-pr-url" {

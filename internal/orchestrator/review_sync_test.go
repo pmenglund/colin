@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/repoops/fakes"
 	"github.com/pmenglund/colin/internal/workspace"
@@ -70,18 +71,18 @@ func TestNeedsReviewSyncRequiresConcretePullRequestSignal(t *testing.T) {
 				BranchName:  &branch,
 				AttachedPullRequests: []domain.PullRequestRef{
 					{
-						Backend:    "github",
-						Owner:      "pmenglund",
-						Repository: "colin",
-						Number:     11,
-						URL:        "https://github.com/pmenglund/colin/pull/11",
+						Backend:         "github",
+						RepositoryOwner: "pmenglund",
+						RepositoryName:  "colin",
+						Number:          11,
+						URL:             "https://github.com/pmenglund/colin/pull/11",
 					},
 					{
-						Backend:    "github",
-						Owner:      "pmenglund",
-						Repository: "sibling",
-						Number:     11,
-						URL:        "https://github.com/pmenglund/sibling/pull/11",
+						Backend:         "github",
+						RepositoryOwner: "pmenglund",
+						RepositoryName:  "sibling",
+						Number:          11,
+						URL:             "https://github.com/pmenglund/sibling/pull/11",
 					},
 				},
 			},
@@ -95,18 +96,18 @@ func TestNeedsReviewSyncRequiresConcretePullRequestSignal(t *testing.T) {
 				BranchName:  &branch,
 				AttachedPullRequests: []domain.PullRequestRef{
 					{
-						Backend:    "github",
-						Owner:      "pmenglund",
-						Repository: "colin",
-						Number:     11,
-						URL:        "https://github.com/pmenglund/colin/pull/11",
+						Backend:         "github",
+						RepositoryOwner: "pmenglund",
+						RepositoryName:  "colin",
+						Number:          11,
+						URL:             "https://github.com/pmenglund/colin/pull/11",
 					},
 					{
-						Backend:    "github",
-						Owner:      "pmenglund",
-						Repository: "colin",
-						Number:     12,
-						URL:        "https://github.com/pmenglund/colin/pull/12",
+						Backend:         "github",
+						RepositoryOwner: "pmenglund",
+						RepositoryName:  "colin",
+						Number:          12,
+						URL:             "https://github.com/pmenglund/colin/pull/12",
 					},
 				},
 			},
@@ -123,11 +124,11 @@ func TestNeedsReviewSyncRequiresConcretePullRequestSignal(t *testing.T) {
 
 func TestPrepareReviewIssueAcceptsCrossRepoAttachedPullRequestsWhenWorkspaceRepoDisambiguates(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberCalls(func(_ context.Context, owner, repo string, number int) (*repoops.GitHubPullRequest, error) {
+	fakeGitHub.PullRequestByNumberCalls(func(_ context.Context, owner, repo string, number int) (*repohost.PullRequest, error) {
 		if owner != "pmenglund" || repo != "colin" || number != 11 {
 			t.Fatalf("PullRequestByNumber() args = %q %q %d, want pmenglund colin 11", owner, repo, number)
 		}
-		return &repoops.GitHubPullRequest{
+		return &repohost.PullRequest{
 			Number:      11,
 			URL:         "https://github.com/pmenglund/colin/pull/11",
 			State:       "OPEN",
@@ -135,8 +136,8 @@ func TestPrepareReviewIssueAcceptsCrossRepoAttachedPullRequestsWhenWorkspaceRepo
 			BaseRefName: "main",
 		}, nil
 	})
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := &trackerStub{}
 	orch := &Orchestrator{
@@ -173,18 +174,18 @@ func TestPrepareReviewIssueAcceptsCrossRepoAttachedPullRequestsWhenWorkspaceRepo
 		},
 		AttachedPullRequests: []domain.PullRequestRef{
 			{
-				Backend:    "github",
-				Owner:      "pmenglund",
-				Repository: "colin",
-				Number:     11,
-				URL:        "https://github.com/pmenglund/colin/pull/11",
+				Backend:         "github",
+				RepositoryOwner: "pmenglund",
+				RepositoryName:  "colin",
+				Number:          11,
+				URL:             "https://github.com/pmenglund/colin/pull/11",
 			},
 			{
-				Backend:    "github",
-				Owner:      "pmenglund",
-				Repository: "sibling",
-				Number:     11,
-				URL:        "https://github.com/pmenglund/sibling/pull/11",
+				Backend:         "github",
+				RepositoryOwner: "pmenglund",
+				RepositoryName:  "sibling",
+				Number:          11,
+				URL:             "https://github.com/pmenglund/sibling/pull/11",
 			},
 		},
 	}
@@ -197,8 +198,8 @@ func TestPrepareReviewIssueAcceptsCrossRepoAttachedPullRequestsWhenWorkspaceRepo
 	if prepared.PullRequest == nil {
 		t.Fatal("PullRequest = nil, want resolved attached PR")
 	}
-	if prepared.PullRequest.Owner != "" || prepared.PullRequest.Repository != "" {
-		t.Fatalf("prepared.PullRequest identity = %+v, want review context PR payload", prepared.PullRequest)
+	if prepared.PullRequest.RepositoryOwner != "pmenglund" || prepared.PullRequest.RepositoryName != "colin" {
+		t.Fatalf("prepared.PullRequest identity = %+v, want pmenglund/colin", prepared.PullRequest)
 	}
 	if prepared.PullRequest.Number != 11 {
 		t.Fatalf("prepared.PullRequest.Number = %d, want 11", prepared.PullRequest.Number)
@@ -287,15 +288,15 @@ func TestPrepareReviewIssueDoesNotWaitWhenReviewContextHasNoPullRequest(t *testi
 
 func TestPrepareReviewIssueStartsImmediatelyWhenTrackedPullRequestHasNoUnresolvedThreads(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://example.test/pr/11",
 		State:       "OPEN",
 		HeadRefName: "colin-123",
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := &trackerStub{}
 	orch := &Orchestrator{
@@ -357,19 +358,19 @@ func TestPrepareReviewIssueStartsImmediatelyWhenTrackedPullRequestHasNoUnresolve
 
 func TestPrepareReviewIssueInjectsUnresolvedThreadsWhenTrackedPullRequestHasThem(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://example.test/pr/11",
 		State:       "OPEN",
 		HeadRefName: "colin-123",
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewSyncThreadNode("thread-1", "reviewer", "Please fix this."),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := &trackerStub{}
 
@@ -446,16 +447,16 @@ func TestPrepareReviewIssueInjectsUnresolvedThreadsWhenTrackedPullRequestHasThem
 
 func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://example.test/pr/11",
 		State:       "OPEN",
 		HeadRefName: "colin-123",
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			{
 				ID:               "thread-1",
 				IsResolved:       false,
@@ -463,8 +464,8 @@ func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testi
 				ViewerCanReply:   true,
 				ViewerCanResolve: true,
 				Path:             "internal/foo.go",
-				Comments: repoops.GitHubReviewCommentConnection{
-					Comments: []repoops.GitHubReviewComment{
+				Comments: repohost.ReviewCommentConnection{
+					Comments: []repohost.ReviewComment{
 						{ID: "comment-1", Body: "Please fix this.", AuthorLogin: "reviewer"},
 					},
 				},
@@ -541,7 +542,7 @@ func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testi
 	}
 }
 
-func setupReviewSyncTestRuntime(t *testing.T) (domain.ServiceConfig, *fakes.FakeGitHubClient) {
+func setupReviewSyncTestRuntime(t *testing.T) (domain.ServiceConfig, *fakes.FakeRepoHostClient) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -572,7 +573,7 @@ func setupReviewSyncTestRuntime(t *testing.T) (domain.ServiceConfig, *fakes.Fake
 		Hooks: domain.HookConfig{
 			AfterCreate: "git remote set-url origin https://github.com/pmenglund/colin.git",
 		},
-	}, &fakes.FakeGitHubClient{}
+	}, &fakes.FakeRepoHostClient{}
 }
 
 func reviewSyncRunCmd(t *testing.T, cwd string, name string, args ...string) string {
@@ -600,11 +601,11 @@ func reviewSyncWriteFile(t *testing.T, path string, content string) {
 	}
 }
 
-func reviewSyncThreadNode(id, author, body string) repoops.GitHubReviewThread {
+func reviewSyncThreadNode(id, author, body string) repohost.ReviewThread {
 	createdAt := time.Date(2026, time.March, 28, 18, 0, 0, 0, time.UTC)
 	line := 42
 	startLine := 40
-	return repoops.GitHubReviewThread{
+	return repohost.ReviewThread{
 		ID:               id,
 		IsResolved:       false,
 		IsOutdated:       false,
@@ -613,8 +614,8 @@ func reviewSyncThreadNode(id, author, body string) repoops.GitHubReviewThread {
 		Path:             "internal/foo.go",
 		Line:             &line,
 		StartLine:        &startLine,
-		Comments: repoops.GitHubReviewCommentConnection{
-			Comments: []repoops.GitHubReviewComment{
+		Comments: repohost.ReviewCommentConnection{
+			Comments: []repohost.ReviewComment{
 				{
 					ID:          "comment-1",
 					Body:        body,

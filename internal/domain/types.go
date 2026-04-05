@@ -110,6 +110,9 @@ type ColinMetadata struct {
 	PullRequestState        string
 	PullRequestHeadRef      string
 	PullRequestBaseRef      string
+	PullRequestBackend      string
+	PullRequestRepoOwner    string
+	PullRequestRepoName     string
 	LoopFailureFingerprint  string
 	LoopFailureCount        int
 	PausedAt                *time.Time
@@ -154,14 +157,14 @@ type ReviewCycle struct {
 
 // PullRequestRef is the minimal PR metadata Colin uses in prompts and comments.
 type PullRequestRef struct {
-	Backend    string
-	Owner      string
-	Repository string
-	Number     int
-	URL        string
-	State      string
-	HeadRef    string
-	BaseRef    string
+	Number          int
+	URL             string
+	State           string
+	HeadRef         string
+	BaseRef         string
+	Backend         string
+	RepositoryOwner string
+	RepositoryName  string
 }
 
 // ReviewThread is one unresolved pull-request review thread.
