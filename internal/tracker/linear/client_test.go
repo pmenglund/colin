@@ -70,143 +70,32 @@ func (a fakeAttachmentAdapter) NewClient(domain.ServiceConfig, *slog.Logger) (re
 	return nil, nil
 }
 
-func TestNewValidatesWorkflowStates(t *testing.T) {
+func TestNewDoesNotValidateWorkflowStates(t *testing.T) {
 	t.Parallel()
 
+	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		var request struct {
-			Query     string         `json:"query"`
-			Variables map[string]any `json:"variables"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("Decode() error = %v", err)
-		}
-		if !strings.Contains(request.Query, "ProjectTeamStates") {
-			t.Fatalf("unexpected query: %s", request.Query)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"projects": map[string]any{
-					"nodes": []map[string]any{
-						{
-							"id": "project-1",
-							"teams": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":   "team-1",
-										"name": "Product",
-										"states": map[string]any{
-											"nodes": []map[string]any{
-												{"name": "Todo"},
-												{"name": "In Progress"},
-												{"name": "Review"},
-												{"name": "Merge"},
-												{"name": "Done"},
-												{"name": "Refine"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		})
+		requests++
+		t.Fatalf("New() unexpectedly issued request to %s", r.URL.Path)
 	}))
 	defer server.Close()
 
-	client, err := New(domain.ServiceConfig{
-		Tracker: domain.TrackerConfig{
-			Kind:           "linear",
-			Endpoint:       server.URL,
-			APIKey:         "token",
-			ProjectSlug:    "project-1",
-			ActiveStates:   []string{"Todo", "In Progress"},
-			TerminalStates: []string{"Done"},
-		},
-		Repo: domain.RepoConfig{
-			PublishStates: []string{"Review"},
-			MergeStates:   []string{"Merge"},
-		},
-		Codex: domain.CodexConfig{
-			Command: "codex app-server",
-		},
-	})
+	client, err := New(testLinearClientConfig(server.URL))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	if client == nil {
 		t.Fatal("New() returned nil client")
 	}
-	if got := client.WatchedProjectID(); got != "project-1" {
-		t.Fatalf("WatchedProjectID() = %q, want %q", got, "project-1")
+	if requests != 0 {
+		t.Fatalf("request count = %d, want 0", requests)
+	}
+	if got := client.WatchedProjectIDs(); len(got) != 0 {
+		t.Fatalf("WatchedProjectIDs() = %v, want no validated projects before explicit validation", got)
 	}
 }
 
-func TestNewFailsWhenWorkflowStateMissing(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"projects": map[string]any{
-					"nodes": []map[string]any{
-						{
-							"id": "project-1",
-							"teams": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":   "team-1",
-										"name": "Product",
-										"states": map[string]any{
-											"nodes": []map[string]any{
-												{"name": "Todo"},
-												{"name": "In Progress"},
-												{"name": "Review"},
-												{"name": "Merge"},
-												{"name": "Done"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		})
-	}))
-	defer server.Close()
-
-	_, err := New(domain.ServiceConfig{
-		Tracker: domain.TrackerConfig{
-			Kind:           "linear",
-			Endpoint:       server.URL,
-			APIKey:         "token",
-			ProjectSlug:    "project-1",
-			ActiveStates:   []string{"Todo", "In Progress"},
-			TerminalStates: []string{"Done"},
-		},
-		Repo: domain.RepoConfig{
-			PublishStates: []string{"Review"},
-			MergeStates:   []string{"Merge"},
-		},
-		Codex: domain.CodexConfig{
-			Command: "codex app-server",
-		},
-	})
-	if !errors.Is(err, ErrMissingWorkflowState) {
-		t.Fatalf("New() error = %v, want ErrMissingWorkflowState", err)
-	}
-	if !strings.Contains(err.Error(), "Refine") {
-		t.Fatalf("New() error = %q, want missing Refine state", err)
-	}
-}
-
-func TestNewTracksMultipleWatchedProjects(t *testing.T) {
+func TestValidateWorkflowStatesPopulatesWatchedProjects(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,10 +140,127 @@ func TestNewTracksMultipleWatchedProjects(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := New(domain.ServiceConfig{
+	cfg := testLinearClientConfig(server.URL)
+	cfg.Targets = []domain.TargetConfig{
+		{ProjectSlug: "project-1"},
+		{ProjectSlug: "project-2"},
+	}
+
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := client.ValidateWorkflowStates(context.Background(), cfg); err != nil {
+		t.Fatalf("ValidateWorkflowStates() error = %v", err)
+	}
+
+	got := client.WatchedProjectIDs()
+	if len(got) != 2 || got[0] != "project-1-id" || got[1] != "project-2-id" {
+		t.Fatalf("WatchedProjectIDs() = %v, want [project-1-id project-2-id]", got)
+	}
+}
+
+func TestValidateWorkflowStatesFailsWhenWorkflowStateMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Product",
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Done"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := testLinearClientConfig(server.URL)
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	err = client.ValidateWorkflowStates(context.Background(), cfg)
+	if !errors.Is(err, ErrMissingWorkflowState) {
+		t.Fatalf("ValidateWorkflowStates() error = %v, want ErrMissingWorkflowState", err)
+	}
+	if !strings.Contains(err.Error(), "Refine") {
+		t.Fatalf("ValidateWorkflowStates() error = %q, want missing Refine state", err)
+	}
+}
+
+func TestValidateWorkflowStatesHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	cfg := testLinearClientConfig(server.URL)
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = client.ValidateWorkflowStates(ctx, cfg)
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrAPIRequest) {
+		t.Fatalf("ValidateWorkflowStates() error = %v, want ErrAPIRequest", err)
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("ValidateWorkflowStates() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("ValidateWorkflowStates() took %s, want under 1s", elapsed)
+	}
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("validation request did not reach server")
+	}
+}
+
+func testLinearClientConfig(endpoint string) domain.ServiceConfig {
+	return domain.ServiceConfig{
 		Tracker: domain.TrackerConfig{
 			Kind:           "linear",
-			Endpoint:       server.URL,
+			Endpoint:       endpoint,
 			APIKey:         "token",
 			ProjectSlug:    "project-1",
 			ActiveStates:   []string{"Todo", "In Progress"},
@@ -264,21 +270,9 @@ func TestNewTracksMultipleWatchedProjects(t *testing.T) {
 			PublishStates: []string{"Review"},
 			MergeStates:   []string{"Merge"},
 		},
-		Targets: []domain.TargetConfig{
-			{ProjectSlug: "project-1"},
-			{ProjectSlug: "project-2"},
-		},
 		Codex: domain.CodexConfig{
 			Command: "codex app-server",
 		},
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	got := client.WatchedProjectIDs()
-	if len(got) != 2 || got[0] != "project-1-id" || got[1] != "project-2-id" {
-		t.Fatalf("WatchedProjectIDs() = %v, want [project-1-id project-2-id]", got)
 	}
 }
 

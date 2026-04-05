@@ -66,6 +66,9 @@ func LoadResumeSession(ctx context.Context, workflowPath string, threadID string
 	if err != nil {
 		return ResumeSession{}, err
 	}
+	if err := trackerClient.ValidateWorkflowStates(ctx, cfg); err != nil {
+		return ResumeSession{}, err
+	}
 
 	issue, err := trackerClient.FindIssueByCodexThreadID(ctx, threadID)
 	if err != nil {

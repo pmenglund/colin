@@ -54,7 +54,7 @@ func TestServiceRunsRealIssueWorkflowEndToEnd(t *testing.T) {
 	workflowPath := realE2EWorkflowPath(t)
 	t.Logf("using workflow=%s", workflowPath)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	svc, err := New(logger, workflowPath)
+	svc, err := New(context.Background(), logger, workflowPath)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
