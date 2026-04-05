@@ -37,6 +37,7 @@ type trackerStub struct {
 	schedulingMetadataHook  func(*trackerStub)
 	issuesByID              []domain.Issue
 	issuesByIDCalls         int
+	updatedStates           []string
 	fetchIssueByIDCalls     int
 	rateLimits              domain.RateLimitSnapshot
 	issueComments           []string
@@ -115,7 +116,8 @@ func (s *trackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.
 	return domain.Issue{}, nil
 }
 
-func (s *trackerStub) UpdateIssueState(context.Context, string, string) error {
+func (s *trackerStub) UpdateIssueState(_ context.Context, issueID string, state string) error {
+	s.updatedStates = append(s.updatedStates, issueID+":"+state)
 	return nil
 }
 

@@ -1810,6 +1810,12 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.CodexThreadID, _ = stringValue(metadataMap["codex_thread_id"])
 	metadata.ProgressRootCommentID, _ = stringValue(metadataMap["progress_root_comment_id"])
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
+	metadata.PendingReviewCommentID, _ = stringValue(metadataMap["pending_review_comment_id"])
+	metadata.PendingReviewThreadID, _ = stringValue(metadataMap["pending_review_thread_id"])
+	metadata.PendingReviewReactionID, _ = stringValue(metadataMap["pending_review_reaction_id"])
+	metadata.PendingReviewReactor, _ = stringValue(metadataMap["pending_review_reactor"])
+	metadata.QueuedReviewFollowUps = pendingReviewFollowUpsValue(metadataMap["queued_review_follow_ups"])
+	metadata.ReviewReactionWatermarks = stringMapValue(metadataMap["review_reaction_watermarks"])
 	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
 		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
 	}
@@ -1848,6 +1854,11 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	if value, _ := stringValue(metadataMap["paused_at"]); strings.TrimSpace(value) != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 			metadata.PausedAt = &parsed
+		}
+	}
+	if value, _ := stringValue(metadataMap["pending_review_requested_at"]); strings.TrimSpace(value) != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			metadata.PendingReviewRequestedAt = &parsed
 		}
 	}
 	if value, _ := stringValue(metadataMap["updated_at"]); strings.TrimSpace(value) != "" {
@@ -1909,35 +1920,44 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
-		"codex_thread_id":           strings.TrimSpace(metadata.CodexThreadID),
-		"progress_root_comment_id":  strings.TrimSpace(metadata.ProgressRootCommentID),
-		"actual_branch_name":        strings.TrimSpace(metadata.ActualBranchName),
-		"exec_plan_decision":        strings.TrimSpace(string(metadata.ExecPlanDecision)),
-		"review_publish_directive":  strings.TrimSpace(string(metadata.ReviewPublishDirective)),
-		"last_run_type":             strings.TrimSpace(string(metadata.LastRunType)),
-		"last_outcome":              strings.TrimSpace(string(metadata.LastOutcome)),
-		"last_summary_comment_id":   strings.TrimSpace(metadata.LastSummaryCommentID),
-		"colin_comment_ids":         stringSliceAny(metadata.ColinCommentIDs),
-		"pull_request_number":       metadata.PullRequestNumber,
-		"pull_request_url":          strings.TrimSpace(metadata.PullRequestURL),
-		"pull_request_state":        strings.TrimSpace(metadata.PullRequestState),
-		"pull_request_head_ref":     strings.TrimSpace(metadata.PullRequestHeadRef),
-		"pull_request_base_ref":     strings.TrimSpace(metadata.PullRequestBaseRef),
-		"pull_request_backend":      strings.TrimSpace(metadata.PullRequestBackend),
-		"pull_request_repo_owner":   strings.TrimSpace(metadata.PullRequestRepoOwner),
-		"pull_request_repo_name":    strings.TrimSpace(metadata.PullRequestRepoName),
-		"loop_failure_fingerprint":  strings.TrimSpace(metadata.LoopFailureFingerprint),
-		"loop_failure_count":        metadata.LoopFailureCount,
-		"paused_run_type":           strings.TrimSpace(metadata.PausedRunType),
-		"paused_state":              strings.TrimSpace(metadata.PausedState),
-		"paused_reason":             strings.TrimSpace(metadata.PausedReason),
-		"slack_channel_id":          strings.TrimSpace(metadata.SlackChannelID),
-		"slack_message_ts":          strings.TrimSpace(metadata.SlackMessageTS),
-		"slack_permalink":           strings.TrimSpace(metadata.SlackPermalink),
-		"slack_summary_fingerprint": strings.TrimSpace(metadata.SlackSummaryFingerprint),
+		"codex_thread_id":            strings.TrimSpace(metadata.CodexThreadID),
+		"progress_root_comment_id":   strings.TrimSpace(metadata.ProgressRootCommentID),
+		"actual_branch_name":         strings.TrimSpace(metadata.ActualBranchName),
+		"pending_review_comment_id":  strings.TrimSpace(metadata.PendingReviewCommentID),
+		"pending_review_thread_id":   strings.TrimSpace(metadata.PendingReviewThreadID),
+		"pending_review_reaction_id": strings.TrimSpace(metadata.PendingReviewReactionID),
+		"pending_review_reactor":     strings.TrimSpace(metadata.PendingReviewReactor),
+		"queued_review_follow_ups":   pendingReviewFollowUpsAny(metadata.QueuedReviewFollowUps),
+		"review_reaction_watermarks": stringMapAny(metadata.ReviewReactionWatermarks),
+		"exec_plan_decision":         strings.TrimSpace(string(metadata.ExecPlanDecision)),
+		"review_publish_directive":   strings.TrimSpace(string(metadata.ReviewPublishDirective)),
+		"last_run_type":              strings.TrimSpace(string(metadata.LastRunType)),
+		"last_outcome":               strings.TrimSpace(string(metadata.LastOutcome)),
+		"last_summary_comment_id":    strings.TrimSpace(metadata.LastSummaryCommentID),
+		"colin_comment_ids":          stringSliceAny(metadata.ColinCommentIDs),
+		"pull_request_number":        metadata.PullRequestNumber,
+		"pull_request_url":           strings.TrimSpace(metadata.PullRequestURL),
+		"pull_request_state":         strings.TrimSpace(metadata.PullRequestState),
+		"pull_request_head_ref":      strings.TrimSpace(metadata.PullRequestHeadRef),
+		"pull_request_base_ref":      strings.TrimSpace(metadata.PullRequestBaseRef),
+		"pull_request_backend":       strings.TrimSpace(metadata.PullRequestBackend),
+		"pull_request_repo_owner":    strings.TrimSpace(metadata.PullRequestRepoOwner),
+		"pull_request_repo_name":     strings.TrimSpace(metadata.PullRequestRepoName),
+		"loop_failure_fingerprint":   strings.TrimSpace(metadata.LoopFailureFingerprint),
+		"loop_failure_count":         metadata.LoopFailureCount,
+		"paused_run_type":            strings.TrimSpace(metadata.PausedRunType),
+		"paused_state":               strings.TrimSpace(metadata.PausedState),
+		"paused_reason":              strings.TrimSpace(metadata.PausedReason),
+		"slack_channel_id":           strings.TrimSpace(metadata.SlackChannelID),
+		"slack_message_ts":           strings.TrimSpace(metadata.SlackMessageTS),
+		"slack_permalink":            strings.TrimSpace(metadata.SlackPermalink),
+		"slack_summary_fingerprint":  strings.TrimSpace(metadata.SlackSummaryFingerprint),
 	}
 	if metadata.PausedAt != nil {
 		value["paused_at"] = metadata.PausedAt.UTC().Format(time.RFC3339)
+	}
+	if metadata.PendingReviewRequestedAt != nil {
+		value["pending_review_requested_at"] = metadata.PendingReviewRequestedAt.UTC().Format(time.RFC3339)
 	}
 	if metadata.UpdatedAt != nil {
 		value["updated_at"] = metadata.UpdatedAt.UTC().Format(time.RFC3339)
@@ -2134,6 +2154,79 @@ func pullRequestAttachmentKey(pr domain.PullRequestRef) string {
 		strings.ToLower(strings.TrimSpace(pr.RepositoryOwner)) + "|" +
 		strings.ToLower(strings.TrimSpace(pr.RepositoryName)) + "|" +
 		strconv.Itoa(pr.Number)
+}
+
+func pendingReviewFollowUpsValue(value any) []domain.PendingReviewFollowUp {
+	nodes, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]domain.PendingReviewFollowUp, 0, len(nodes))
+	for _, node := range nodes {
+		item, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		followUp := domain.PendingReviewFollowUp{}
+		followUp.ThreadID, _ = stringValue(item["thread_id"])
+		followUp.CommentID, _ = stringValue(item["comment_id"])
+		followUp.ReactionID, _ = stringValue(item["reaction_id"])
+		followUp.Reactor, _ = stringValue(item["reactor"])
+		if value, _ := stringValue(item["requested_at"]); strings.TrimSpace(value) != "" {
+			if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+				followUp.RequestedAt = &parsed
+			}
+		}
+		out = append(out, followUp)
+	}
+	return out
+}
+
+func pendingReviewFollowUpsAny(items []domain.PendingReviewFollowUp) []any {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		entry := map[string]any{
+			"thread_id":   strings.TrimSpace(item.ThreadID),
+			"comment_id":  strings.TrimSpace(item.CommentID),
+			"reaction_id": strings.TrimSpace(item.ReactionID),
+			"reactor":     strings.TrimSpace(item.Reactor),
+		}
+		if item.RequestedAt != nil {
+			entry["requested_at"] = item.RequestedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func stringMapValue(value any) map[string]string {
+	node, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(node))
+	for key, raw := range node {
+		text, ok := stringValue(raw)
+		if !ok {
+			continue
+		}
+		out[key] = text
+	}
+	return out
+}
+
+func stringMapAny(values map[string]string) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func stringSliceValue(value any) []string {

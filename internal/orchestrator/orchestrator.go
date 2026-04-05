@@ -232,8 +232,24 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	} else {
 		o.logger.Debug("background state-count refresh skipped to preserve Linear reserve", o.linearBudgetLogArgs(backgroundDecision)...)
 	}
+	var reviewFollowUpIssues []domain.Issue
+	trackedIssues, reviewFollowUpIssues = o.syncGitHubReviewFollowUps(ctx, trackedIssues, now)
 	o.syncCodexReviewLabels(ctx, trackedIssues)
 	o.syncSlackIssues(ctx, trackedIssues)
+	for _, issue := range reviewFollowUpIssues {
+		if !o.hasGlobalSlots() {
+			break
+		}
+		issue, ready := o.prepareReviewIssue(ctx, issue, now)
+		if !ready {
+			continue
+		}
+		if !o.shouldDispatch(issue) {
+			continue
+		}
+		o.dispatch(ctx, issue, nil, nil)
+		dispatched++
+	}
 	args = []any{
 		"candidate_count", len(issues),
 		"eligible_count", eligible,

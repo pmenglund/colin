@@ -16,6 +16,12 @@ type gitHubWebhookEnvelope struct {
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
+	Reaction *struct {
+		Content string `json:"content"`
+		User    *struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"reaction"`
 	PullRequest *struct {
 		Number int `json:"number"`
 	} `json:"pull_request"`
@@ -23,7 +29,12 @@ type gitHubWebhookEnvelope struct {
 		PullRequest *struct{} `json:"pull_request"`
 	} `json:"issue"`
 	Comment *struct {
+		ID             int64  `json:"id"`
+		Body           string `json:"body"`
 		PullRequestURL string `json:"pull_request_url"`
+		User           *struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"comment"`
 }
 
@@ -159,6 +170,12 @@ func gitHubWebhookEventFromRequest(r *http.Request, envelope gitHubWebhookEnvelo
 		Action:             strings.TrimSpace(envelope.Action),
 		RepositoryFullName: strings.TrimSpace(envelope.Repository.FullName),
 	}
+	if envelope.Reaction != nil {
+		event.ReactionContent = strings.TrimSpace(envelope.Reaction.Content)
+		if envelope.Reaction.User != nil {
+			event.ReactionUserLogin = strings.TrimSpace(envelope.Reaction.User.Login)
+		}
+	}
 	if envelope.PullRequest != nil {
 		event.PullRequestNumber = envelope.PullRequest.Number
 		event.HasPullRequest = true
@@ -166,11 +183,42 @@ func gitHubWebhookEventFromRequest(r *http.Request, envelope gitHubWebhookEnvelo
 	if envelope.Issue != nil && envelope.Issue.PullRequest != nil {
 		event.HasPullRequest = true
 	}
+	if envelope.Comment != nil {
+		event.CommentID = envelope.Comment.ID
+		event.CommentBody = strings.TrimSpace(envelope.Comment.Body)
+		if envelope.Comment.User != nil {
+			event.CommentAuthorLogin = strings.TrimSpace(envelope.Comment.User.Login)
+		}
+		if event.PullRequestNumber == 0 {
+			event.PullRequestNumber = pullRequestNumberFromAPIURL(envelope.Comment.PullRequestURL)
+		}
+	}
 	if envelope.Comment != nil && strings.TrimSpace(envelope.Comment.PullRequestURL) != "" {
 		event.HasPullRequest = true
 	}
 	event.Relevant = shouldTriggerGitHubWebhook(event)
 	return event
+}
+
+func pullRequestNumberFromAPIURL(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	raw = strings.TrimRight(raw, "/")
+	idx := strings.LastIndex(raw, "/")
+	if idx < 0 || idx == len(raw)-1 {
+		return 0
+	}
+	value := raw[idx+1:]
+	number := 0
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		number = number*10 + int(ch-'0')
+	}
+	return number
 }
 
 func shouldTriggerGitHubWebhook(event GitHubWebhookEvent) bool {
@@ -186,8 +234,6 @@ func shouldTriggerGitHubWebhook(event GitHubWebhookEvent) bool {
 		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "created", "edited", "deleted")
 	case "pull_request_review_thread":
 		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "resolved", "unresolved")
-	case "reaction":
-		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "created", "deleted")
 	default:
 		return false
 	}

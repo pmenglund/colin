@@ -227,27 +227,34 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		return nil
 	}
 	return map[string]any{
-		"attachment_id":             value.AttachmentID,
-		"url":                       value.URL,
-		"actual_branch_name":        value.ActualBranchName,
-		"exec_plan_decision":        value.ExecPlanDecision,
-		"review_publish_directive":  value.ReviewPublishDirective,
-		"last_run_type":             value.LastRunType,
-		"last_outcome":              value.LastOutcome,
-		"last_summary_comment_id":   value.LastSummaryCommentID,
-		"pull_request_number":       value.PullRequestNumber,
-		"pull_request_url":          value.PullRequestURL,
-		"pull_request_state":        value.PullRequestState,
-		"pull_request_head_ref":     value.PullRequestHeadRef,
-		"pull_request_base_ref":     value.PullRequestBaseRef,
-		"pull_request_backend":      value.PullRequestBackend,
-		"pull_request_repo_owner":   value.PullRequestRepoOwner,
-		"pull_request_repo_name":    value.PullRequestRepoName,
-		"slack_channel_id":          value.SlackChannelID,
-		"slack_message_ts":          value.SlackMessageTS,
-		"slack_permalink":           value.SlackPermalink,
-		"slack_summary_fingerprint": value.SlackSummaryFingerprint,
-		"updated_at":                derefTime(value.UpdatedAt),
+		"attachment_id":               value.AttachmentID,
+		"url":                         value.URL,
+		"actual_branch_name":          value.ActualBranchName,
+		"pending_review_comment_id":   value.PendingReviewCommentID,
+		"pending_review_thread_id":    value.PendingReviewThreadID,
+		"pending_review_reaction_id":  value.PendingReviewReactionID,
+		"pending_review_reactor":      value.PendingReviewReactor,
+		"pending_review_requested_at": derefTime(value.PendingReviewRequestedAt),
+		"queued_review_follow_ups":    pendingReviewFollowUpsToMaps(value.QueuedReviewFollowUps),
+		"review_reaction_watermarks":  value.ReviewReactionWatermarks,
+		"exec_plan_decision":          value.ExecPlanDecision,
+		"review_publish_directive":    value.ReviewPublishDirective,
+		"last_run_type":               value.LastRunType,
+		"last_outcome":                value.LastOutcome,
+		"last_summary_comment_id":     value.LastSummaryCommentID,
+		"pull_request_number":         value.PullRequestNumber,
+		"pull_request_url":            value.PullRequestURL,
+		"pull_request_state":          value.PullRequestState,
+		"pull_request_head_ref":       value.PullRequestHeadRef,
+		"pull_request_base_ref":       value.PullRequestBaseRef,
+		"pull_request_backend":        value.PullRequestBackend,
+		"pull_request_repo_owner":     value.PullRequestRepoOwner,
+		"pull_request_repo_name":      value.PullRequestRepoName,
+		"slack_channel_id":            value.SlackChannelID,
+		"slack_message_ts":            value.SlackMessageTS,
+		"slack_permalink":             value.SlackPermalink,
+		"slack_summary_fingerprint":   value.SlackSummaryFingerprint,
+		"updated_at":                  derefTime(value.UpdatedAt),
 	}
 }
 
@@ -261,6 +268,20 @@ func execPlanToMap(value *domain.ExecPlan) any {
 		"body":          value.Body,
 		"updated_at":    derefTime(value.UpdatedAt),
 	}
+}
+
+func pendingReviewFollowUpsToMaps(values []domain.PendingReviewFollowUp) []map[string]any {
+	out := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, map[string]any{
+			"thread_id":    value.ThreadID,
+			"comment_id":   value.CommentID,
+			"reaction_id":  value.ReactionID,
+			"reactor":      value.Reactor,
+			"requested_at": derefTime(value.RequestedAt),
+		})
+	}
+	return out
 }
 
 func cloneStrings(values []string) []string {

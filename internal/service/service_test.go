@@ -917,7 +917,7 @@ Work on {{ .issue.identifier }}.
 	if result.SigningSecretEnvVar != GitHubWebhookSigningSecretEnvVar {
 		t.Fatalf("SigningSecretEnvVar = %q, want %q", result.SigningSecretEnvVar, GitHubWebhookSigningSecretEnvVar)
 	}
-	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread,reaction" {
+	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread" {
 		t.Fatalf("Events = %q", got)
 	}
 }
@@ -1521,16 +1521,6 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 			watchedRepo: "",
 			want:        false,
 		},
-		{
-			name: "missing pull request context",
-			event: app.GitHubWebhookEvent{
-				Event:              "reaction",
-				Action:             "created",
-				RepositoryFullName: "acme/widgets",
-			},
-			watchedRepo: "acme/widgets",
-			want:        false,
-		},
 	}
 
 	for _, tc := range cases {
@@ -1846,6 +1836,10 @@ func (s *serviceGitHubStub) ReviewThreadComments(context.Context, string, string
 
 func (s *serviceGitHubStub) PullRequestReactions(context.Context, string, string, int, string) (repohost.ReactionPage, error) {
 	return repohost.ReactionPage{}, nil
+}
+
+func (s *serviceGitHubStub) PullRequestReviewCommentReactions(context.Context, string, string, int64, int) (repoops.GitHubReviewCommentReactionPage, error) {
+	return repoops.GitHubReviewCommentReactionPage{}, nil
 }
 
 func (s *serviceGitHubStub) ReplyToReviewThread(context.Context, string, string) error {
