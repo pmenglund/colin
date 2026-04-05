@@ -176,6 +176,9 @@ func (s *Service) Snapshot(ctx context.Context) (domain.Snapshot, error) {
 	if err != nil {
 		return domain.Snapshot{}, err
 	}
+	runtime := s.currentRuntime()
+	snapshot.WorkflowPath = runtime.Config.WorkflowPath
+	snapshot.Targets = snapshotTargets(runtime.Config)
 	snapshot.SlackSocketMode = s.currentSlackSocketModeStatus()
 	snapshot.Webhooks = s.currentWebhookStatuses()
 	return snapshot, nil
@@ -518,6 +521,22 @@ func hasEnabledPort(value *int) bool {
 	return value != nil && *value > 0
 }
 
+func snapshotTargets(cfg domain.ServiceConfig) []domain.SnapshotTarget {
+	if len(cfg.Targets) == 0 {
+		return nil
+	}
+	targets := make([]domain.SnapshotTarget, 0, len(cfg.Targets))
+	for _, target := range cfg.Targets {
+		targets = append(targets, domain.SnapshotTarget{
+			Name:        strings.TrimSpace(target.Name),
+			ProjectSlug: strings.TrimSpace(target.ProjectSlug),
+			RepoURL:     strings.TrimSpace(target.RepoURL),
+			BaseRef:     strings.TrimSpace(target.BaseRef),
+		})
+	}
+	return targets
+}
+
 func (s *Service) currentRuntime() orchestrator.Runtime {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
@@ -536,7 +555,7 @@ func intPtr(value int) *int {
 
 func (s *Service) newDashboardHandler() (http.Handler, error) {
 	provider := func(snapshotCtx context.Context) (domain.Snapshot, error) {
-		return s.orch.Snapshot(snapshotCtx)
+		return s.Snapshot(snapshotCtx)
 	}
 	issueProvider := func(snapshotCtx context.Context, issueID string) (domain.Issue, error) {
 		runtime := s.currentRuntime()

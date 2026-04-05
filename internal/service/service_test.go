@@ -671,6 +671,53 @@ func TestSnapshotIncludesSlackSocketModeStatus(t *testing.T) {
 	}
 }
 
+func TestSnapshotIncludesWorkflowPathAndTargets(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				WorkflowPath: "/tmp/colin/WORKFLOW.md",
+				Targets: []domain.TargetConfig{
+					{
+						Name:        "api",
+						ProjectSlug: "api-project",
+						RepoURL:     "git@github.com:bothnia/api.git",
+						BaseRef:     "main",
+					},
+					{
+						Name:        "web",
+						ProjectSlug: "web-project",
+						RepoURL:     "git@github.com:bothnia/web.git",
+						BaseRef:     "trunk",
+					},
+				},
+			},
+		},
+		orch: orchestrator.New(orchestrator.Runtime{
+			Tracker: &serviceTrackerStub{},
+		}, slog.New(slog.NewTextHandler(io.Discard, nil))),
+	}
+
+	snapshot, err := svc.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.WorkflowPath != "/tmp/colin/WORKFLOW.md" {
+		t.Fatalf("Snapshot().WorkflowPath = %q, want %q", snapshot.WorkflowPath, "/tmp/colin/WORKFLOW.md")
+	}
+	if len(snapshot.Targets) != 2 {
+		t.Fatalf("len(Snapshot().Targets) = %d, want 2", len(snapshot.Targets))
+	}
+	if got := snapshot.Targets[0]; got.Name != "api" || got.ProjectSlug != "api-project" || got.RepoURL != "git@github.com:bothnia/api.git" || got.BaseRef != "main" {
+		t.Fatalf("Snapshot().Targets[0] = %#v", got)
+	}
+	if got := snapshot.Targets[1]; got.Name != "web" || got.ProjectSlug != "web-project" || got.RepoURL != "git@github.com:bothnia/web.git" || got.BaseRef != "trunk" {
+		t.Fatalf("Snapshot().Targets[1] = %#v", got)
+	}
+}
+
 func TestSetupLinearWebhookCreatesManagedWebhook(t *testing.T) {
 	t.Parallel()
 

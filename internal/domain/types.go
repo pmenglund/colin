@@ -631,6 +631,8 @@ type StateIssueSummary struct {
 type Snapshot struct {
 	GeneratedAt       time.Time                      `json:"generated_at"`
 	ShutdownRequested bool                           `json:"shutdown_requested"`
+	WorkflowPath      string                         `json:"workflow_path,omitempty"`
+	Targets           []SnapshotTarget               `json:"targets,omitempty"`
 	SlackSocketMode   SlackSocketModeStatus          `json:"slack_socket_mode"`
 	Webhooks          map[string]WebhookStatus       `json:"webhooks,omitempty"`
 	Running           []SnapshotRunning              `json:"running"`
@@ -642,6 +644,14 @@ type Snapshot struct {
 	StateIssues       map[string][]StateIssueSummary `json:"state_issues,omitempty"`
 	PausedIssueStates map[string]PausedStateSummary  `json:"paused_issue_states,omitempty"`
 	Tracked           map[string]struct{}            `json:"-"`
+}
+
+// SnapshotTarget is one configured workflow target rendered in status surfaces.
+type SnapshotTarget struct {
+	Name        string `json:"name"`
+	ProjectSlug string `json:"project_slug"`
+	RepoURL     string `json:"repo_url"`
+	BaseRef     string `json:"base_ref"`
 }
 
 // SnapshotRunning is the per-running-issue row included in a Snapshot.
