@@ -449,7 +449,7 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		"attempt", state.entry.Attempt,
 	)
 	o.postRetryFiredReply(ctx, issueID, state)
-	issues, err := o.runtime.Tracker.FetchCandidateIssues(ctx)
+	issues, err := o.runtime.Tracker.FetchCandidateIssueSnapshots(ctx)
 	if err != nil {
 		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt+1, "retry poll failed", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment, state.notifyLinear)
 		return
@@ -470,7 +470,12 @@ func (o *Orchestrator) handleRetry(ctx context.Context, issueID string) {
 		o.scheduleRetry(issueID, issue.Identifier, state.entry.Attempt+1, "no available orchestrator slots", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment, state.notifyLinear)
 		return
 	}
-	prepared, ready := o.prepareReviewIssue(ctx, *issue, time.Now().UTC())
+	detailed, err := o.runtime.Tracker.FetchIssueByID(ctx, issue.ID)
+	if err != nil {
+		o.scheduleRetry(issueID, state.entry.Identifier, state.entry.Attempt+1, "retry detail fetch failed", backoff(o.runtime.Config.Agent.MaxRetryBackoff, state.entry.Attempt+1), state.comment, state.notifyLinear)
+		return
+	}
+	prepared, ready := o.prepareReviewIssue(ctx, detailed, time.Now().UTC())
 	if !ready {
 		delete(o.claimed, issueID)
 		return

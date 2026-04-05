@@ -189,7 +189,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	dispatchDecision := o.linearBudgetDecision(now, linearRequestDispatch)
 	if dispatchDecision.Allowed {
 		var err error
-		issues, err = o.runtime.Tracker.FetchCandidateIssues(ctx)
+		issues, err = o.runtime.Tracker.FetchCandidateIssueSnapshots(ctx)
 		if err != nil {
 			o.logger.Error("candidate fetch failed", "error", err)
 			return
@@ -202,7 +202,18 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	dispatched := 0
 	eligible := 0
 	for _, issue := range issues {
-		issue, ready := o.prepareReviewIssue(ctx, issue, now)
+		if !o.shouldDispatch(issue) {
+			continue
+		}
+		if !o.hasGlobalSlots() {
+			break
+		}
+		detailed, err := o.runtime.Tracker.FetchIssueByID(ctx, issue.ID)
+		if err != nil {
+			o.logger.Warn("candidate detail fetch failed", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+			continue
+		}
+		issue, ready := o.prepareReviewIssue(ctx, detailed, now)
 		if !ready {
 			continue
 		}
@@ -211,9 +222,6 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			continue
 		}
 		eligible++
-		if !o.hasGlobalSlots() {
-			break
-		}
 		o.dispatch(ctx, issue, nil, nil)
 		dispatched++
 	}
@@ -296,7 +304,7 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 		return nil
 	}
 
-	issues, err := o.runtime.Tracker.FetchIssuesByStates(ctx, stateNames)
+	issues, err := o.runtime.Tracker.FetchIssueSnapshotsByStates(ctx, stateNames)
 	if err != nil {
 		o.logger.Warn("issue state count refresh failed", "error", err)
 		return nil
@@ -335,7 +343,42 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 	o.issueStates = counts
 	o.stateIssues = stateIssues
 	o.pausedIssueStates = paused
+	issues = o.hydrateSchedulingMetadata(ctx, issues)
 	return issues
+}
+
+func (o *Orchestrator) hydrateSchedulingMetadata(ctx context.Context, issues []domain.Issue) []domain.Issue {
+	if len(issues) == 0 || o.runtime.Tracker == nil {
+		return issues
+	}
+	issueIDs := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.ID) == "" {
+			continue
+		}
+		issueIDs = append(issueIDs, issue.ID)
+	}
+	if len(issueIDs) == 0 {
+		return issues
+	}
+	metadataByIssueID, err := o.runtime.Tracker.FetchIssueSchedulingMetadataByIDs(ctx, issueIDs)
+	if err != nil {
+		o.logger.Warn("issue scheduling metadata refresh failed", "error", err)
+		return issues
+	}
+	if len(metadataByIssueID) == 0 {
+		return issues
+	}
+	hydrated := append([]domain.Issue(nil), issues...)
+	for i := range hydrated {
+		metadata, ok := metadataByIssueID[hydrated[i].ID]
+		if !ok {
+			continue
+		}
+		metadataCopy := metadata
+		hydrated[i].ColinMetadata = &metadataCopy
+	}
+	return hydrated
 }
 
 func (o *Orchestrator) syncCodexReviewLabels(ctx context.Context, issues []domain.Issue) {

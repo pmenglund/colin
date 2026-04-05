@@ -1856,13 +1856,17 @@ func (s *serviceGitHubStub) ResolveReviewThread(context.Context, string) error {
 	return nil
 }
 
-func (s *serviceTrackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+func (s *serviceTrackerStub) FetchCandidateIssueSnapshots(context.Context) ([]domain.Issue, error) {
 	return nil, nil
 }
 
-func (s *serviceTrackerStub) FetchIssuesByStates(_ context.Context, stateNames []string) ([]domain.Issue, error) {
+func (s *serviceTrackerStub) FetchIssueSnapshotsByStates(_ context.Context, stateNames []string) ([]domain.Issue, error) {
 	s.stateNames = append([]string(nil), stateNames...)
 	return append([]domain.Issue(nil), s.issuesByState...), nil
+}
+
+func (s *serviceTrackerStub) FetchIssueSchedulingMetadataByIDs(context.Context, []string) (map[string]domain.ColinMetadata, error) {
+	return map[string]domain.ColinMetadata{}, nil
 }
 
 func (s *serviceTrackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
