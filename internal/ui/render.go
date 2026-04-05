@@ -517,11 +517,9 @@ func renderStateIssueList(state string, issues []domain.StateIssueSummary) g.Nod
 
 	slug := stateSlug(state)
 	return h.Div(
-		h.Class("table-wrap"),
-		h.Class("state-issues-table-wrap"),
+		h.Class("table-wrap state-issues-table-wrap"),
 		h.Table(
-			h.Class("table"),
-			h.Class("state-issues-table"),
+			h.Class("table state-issues-table"),
 			h.THead(
 				h.Tr(
 					h.Th(g.Text("Issue ID")),
@@ -771,10 +769,10 @@ func renderRateLimitRows(testID string, rows []rateLimitProgressRow) g.Node {
 				h.Class("rate-limit-progress-meta"),
 				h.Span(h.Class("rate-limit-progress-window"), g.Text(row.Label)),
 				h.Span(h.Class("rate-limit-progress-used"), g.Text(row.UsedLabel)),
-				renderRateLimitDetail(row.Detail),
 				h.Span(h.Class("rate-limit-progress-reset"), g.Text("resets in "+row.ResetIn)),
 			),
 			h.Div(append(g.Group{h.Class(barClass)}, barNodes...)...),
+			renderRateLimitDetail(row.Detail),
 		))
 	}
 
@@ -836,9 +834,9 @@ func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]rateLi
 			continue
 		}
 		displayName := rateLimitDisplayName(name)
-		detail := fmt.Sprintf("%s of %s remaining", formatInt(remaining), formatInt(limitValue))
+		detail := ""
 		if nextAllowedAt, ok := rateLimitNextAllowed(limit); ok && nextAllowedAt.After(now) {
-			detail = fmt.Sprintf("%s next request in %s", detail, formatDuration(nextAllowedAt.Sub(now)))
+			detail = fmt.Sprintf("next request in %s", formatDuration(nextAllowedAt.Sub(now)))
 		}
 		usedPercent := 100 - int(math.Round((float64(remaining)/float64(limitValue))*100))
 		if usedPercent < 0 {

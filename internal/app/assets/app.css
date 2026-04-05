@@ -301,7 +301,9 @@ a {
 }
 
 .rate-limit-progress-detail {
+  display: block;
   color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .rate-limit-progress-reset {
@@ -459,6 +461,13 @@ a {
 
 .state-issues-table-wrap {
   margin-top: 0.85rem;
+}
+
+.state-issues-table,
+.state-issues-table th,
+.state-issues-table td,
+.state-issues-table td a {
+  font-size: 0.78rem !important;
 }
 
 .state-issues-table th,
