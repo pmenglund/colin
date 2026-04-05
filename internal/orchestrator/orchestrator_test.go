@@ -1687,6 +1687,61 @@ func TestHandleWorkerExitSchedulesContinuationRetry(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerExitUpdatesDashboardIssueStateCountsImmediately(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Ship review handoff", State: "In Progress"}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress"}},
+			Repo:    domain.RepoConfig{PublishStates: []string{"Review"}},
+			Agent:   domain.AgentConfig{MaxRetryBackoff: 5 * time.Minute},
+		}},
+		running: map[string]*runningEntry{
+			"1": {issue: issue, identifier: issue.Identifier, startedAt: time.Now().Add(-2 * time.Second)},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		issueStates: map[string]int{
+			"In Progress": 1,
+			"Review":      0,
+		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"In Progress": {
+				{ID: "1", Identifier: "ABC-1", Title: "Ship review handoff"},
+			},
+		},
+		eventCh: make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Ship review handoff", State: "Review"},
+			RunType: codex.RunTypeCoding,
+			Status:  "succeeded",
+		},
+	})
+
+	if got := orch.issueStates["In Progress"]; got != 0 {
+		t.Fatalf("issueStates[In Progress] = %d, want 0", got)
+	}
+	if got := orch.issueStates["Review"]; got != 1 {
+		t.Fatalf("issueStates[Review] = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["In Progress"]); got != 0 {
+		t.Fatalf("len(stateIssues[In Progress]) = %d, want 0", got)
+	}
+	if got := len(orch.stateIssues["Review"]); got != 1 {
+		t.Fatalf("len(stateIssues[Review]) = %d, want 1", got)
+	}
+	if got := orch.stateIssues["Review"][0].Identifier; got != "ABC-1" {
+		t.Fatalf("stateIssues[Review][0].Identifier = %q, want ABC-1", got)
+	}
+}
+
 func TestHandleRetryDropsClaimedIssueAfterShutdownRequest(t *testing.T) {
 	t.Parallel()
 

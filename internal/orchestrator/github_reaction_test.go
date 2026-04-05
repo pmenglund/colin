@@ -77,6 +77,15 @@ func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
 		claimed:   map[string]struct{}{},
 		retrying:  map[string]*retryState{},
 		completed: map[string]string{"issue-1": "Review"},
+		issueStates: map[string]int{
+			"Review": 1,
+			"Todo":   0,
+		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Review": {
+				{ID: "issue-1", Identifier: "COLIN-123", Title: "Address review feedback"},
+			},
+		},
 	}
 
 	now := time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC)
@@ -126,6 +135,18 @@ func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
 	}
 	if _, ok := orch.completed["issue-1"]; ok {
 		t.Fatal("completed review state was not cleared after moving the issue back to Todo")
+	}
+	if got := orch.issueStates["Review"]; got != 0 {
+		t.Fatalf("issueStates[Review] = %d, want 0", got)
+	}
+	if got := orch.issueStates["Todo"]; got != 1 {
+		t.Fatalf("issueStates[Todo] = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Review"]); got != 0 {
+		t.Fatalf("len(stateIssues[Review]) = %d, want 0", got)
+	}
+	if got := len(orch.stateIssues["Todo"]); got != 1 {
+		t.Fatalf("len(stateIssues[Todo]) = %d, want 1", got)
 	}
 }
 

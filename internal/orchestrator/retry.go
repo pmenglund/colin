@@ -108,6 +108,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	delete(o.running, event.issueID)
 	o.totalTokens.SecondsRunning += time.Since(entry.startedAt).Seconds()
 	event.result.Issue = mergeRunningIssueContext(entry.issue, event.result.Issue)
+	o.applyObservedDashboardIssueTransition(event.result.Issue, entry.issue.State, event.result.Issue.State)
 	if len(entry.outputLog) > 0 {
 		issue := event.result.Issue
 		event.result.Issue = o.persistIssueOutputMetadata(ctx, issue, entry.outputLog)

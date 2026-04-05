@@ -138,12 +138,14 @@ func (o *Orchestrator) startPendingReviewFollowUp(ctx context.Context, issue dom
 	if !hasPendingReviewFollowUp(issue) || o.runtime.Tracker == nil {
 		return issue, false
 	}
+	previousState := issue.State
 	targetState := targetedReviewFollowUpState(o.runtime.Config.Tracker.ActiveStates)
 	if err := o.runtime.Tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
 		o.logger.Warn("failed to move issue for github review follow-up", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", targetState, "error", err)
 		return issue, false
 	}
 	issue.State = targetState
+	o.applyObservedDashboardIssueTransition(issue, previousState, issue.State)
 	now := time.Now().UTC()
 	issue.UpdatedAt = &now
 	delete(o.completed, issue.ID)
