@@ -418,6 +418,49 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	}
 }
 
+func TestModelRefreshRendersWorkflowFileAndTargets(t *testing.T) {
+	t.Parallel()
+
+	source := fakeSource{
+		snapshot: domain.Snapshot{
+			WorkflowPath: "/tmp/colin/WORKFLOW.md",
+			Targets: []domain.SnapshotTarget{
+				{
+					Name:        "api",
+					ProjectSlug: "api-project",
+					RepoURL:     "git@github.com:bothnia/api.git",
+					BaseRef:     "main",
+				},
+				{
+					Name:        "web",
+					ProjectSlug: "web-project",
+					RepoURL:     "git@github.com:bothnia/web.git",
+					BaseRef:     "trunk",
+				},
+			},
+		},
+	}
+	msg := refreshRuntime(context.Background(), source)()
+	m := newModel(context.Background(), source, nil, nil, nil)
+	m.width = 120
+
+	next, _ := m.Update(msg)
+	view := stripANSI(next.(model).View().Content)
+	for _, want := range []string{
+		"  Workflow",
+		"  file        /tmp/colin/WORKFLOW.md",
+		"name  project      base   repo",
+		"api   api-project  main",
+		"git@github.com:bothnia/api.git",
+		"web   web-project  trunk",
+		"git@github.com:bothnia/web.git",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want %q", view, want)
+		}
+	}
+}
+
 func TestModelRefreshFallsBackToLocalDashboardWhenTailnetMissing(t *testing.T) {
 	t.Parallel()
 

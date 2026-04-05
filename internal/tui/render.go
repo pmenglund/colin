@@ -39,9 +39,15 @@ func renderOverviewView(m model) string {
 		renderURLLine("linear hook", m.setup.LinearWebhookURL),
 		renderURLLine("github hook", m.setup.GitHubWebhookURL),
 		"",
+		labelStyle.Render("Workflow"),
+		renderWorkflowPathLine(m.snapshot.WorkflowPath),
+	}
+	lines = append(lines, renderTargetTable(m.snapshot.Targets, maxInt(m.width, defaultWidth))...)
+	lines = append(lines,
+		"",
 		labelStyle.Render("Integrations"),
 		renderSlackSocketModeLine(m.snapshot.SlackSocketMode),
-	}
+	)
 	lines = append(lines, renderWebhookStatusLines(m.snapshot.Webhooks)...)
 
 	if m.refreshErr != nil {
@@ -151,6 +157,60 @@ func renderURLLine(label string, value string) string {
 		return name + " " + subtleStyle.Render("not available")
 	}
 	return name + " " + healthyURLStyle.Render(value)
+}
+
+func renderWorkflowPathLine(path string) string {
+	name := subtleStyle.Render(padRight("file", 11))
+	if strings.TrimSpace(path) == "" {
+		return name + " " + subtleStyle.Render("not available")
+	}
+	return name + " " + healthyURLStyle.Render(path)
+}
+
+func renderTargetTable(targets []domain.SnapshotTarget, width int) []string {
+	if len(targets) == 0 {
+		return []string{subtleStyle.Render("No targets configured.")}
+	}
+
+	const (
+		nameMaxWidth    = 18
+		projectMaxWidth = 20
+		baseMaxWidth    = 12
+	)
+
+	nameWidth := len("name")
+	projectWidth := len("project")
+	baseWidth := len("base")
+	for _, target := range targets {
+		nameWidth = minInt(maxInt(nameWidth, len([]rune(strings.TrimSpace(target.Name)))), nameMaxWidth)
+		projectWidth = minInt(maxInt(projectWidth, len([]rune(strings.TrimSpace(target.ProjectSlug)))), projectMaxWidth)
+		baseWidth = minInt(maxInt(baseWidth, len([]rune(strings.TrimSpace(target.BaseRef)))), baseMaxWidth)
+	}
+
+	repoHeader := "repo"
+	repoWidth := maxInt(width-nameWidth-projectWidth-baseWidth-10, len(repoHeader))
+	renderRow := func(name string, project string, base string, repo string) string {
+		cols := []string{
+			padRight(truncateRunes(name, nameWidth), nameWidth),
+			padRight(truncateRunes(project, projectWidth), projectWidth),
+			padRight(truncateRunes(base, baseWidth), baseWidth),
+			truncateRunes(repo, repoWidth),
+		}
+		return strings.Join(cols, "  ")
+	}
+
+	lines := []string{
+		subtleStyle.Render(renderRow("name", "project", "base", repoHeader)),
+	}
+	for _, target := range targets {
+		lines = append(lines, renderRow(
+			strings.TrimSpace(target.Name),
+			strings.TrimSpace(target.ProjectSlug),
+			strings.TrimSpace(target.BaseRef),
+			strings.TrimSpace(target.RepoURL),
+		))
+	}
+	return lines
 }
 
 func renderSlackSocketModeLine(status domain.SlackSocketModeStatus) string {
