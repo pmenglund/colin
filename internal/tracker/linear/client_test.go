@@ -3107,11 +3107,16 @@ func TestFetchIssueByIDExtractsAttachedPullRequests(t *testing.T) {
 							},
 							{
 								"id":    "attachment-2",
-								"title": "PR 14",
-								"url":   "attachment://acme/widgets#14",
+								"title": "PR 11 in console repo",
+								"url":   "attachment://acme/console#11",
 							},
 							{
 								"id":    "attachment-3",
+								"title": "Duplicate PR 11",
+								"url":   "attachment://acme/widgets#11",
+							},
+							{
+								"id":    "attachment-4",
 								"title": "Metadata",
 								"url":   "https://colin.example.test/root/linear/issues/issue-1/metadata",
 							},
@@ -3151,8 +3156,17 @@ func TestFetchIssueByIDExtractsAttachedPullRequests(t *testing.T) {
 	if issue.AttachedPullRequests[0].RepositoryName != "widgets" {
 		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want widgets", issue.AttachedPullRequests[0].RepositoryName)
 	}
-	if issue.AttachedPullRequests[1].Number != 14 {
-		t.Fatalf("AttachedPullRequests[1].Number = %d, want 14", issue.AttachedPullRequests[1].Number)
+	if issue.AttachedPullRequests[1].Number != 11 {
+		t.Fatalf("AttachedPullRequests[1].Number = %d, want 11", issue.AttachedPullRequests[1].Number)
+	}
+	if issue.AttachedPullRequests[1].Backend != "attachmenttest" {
+		t.Fatalf("AttachedPullRequests[1].Backend = %q, want attachmenttest", issue.AttachedPullRequests[1].Backend)
+	}
+	if issue.AttachedPullRequests[1].RepositoryOwner != "acme" {
+		t.Fatalf("AttachedPullRequests[1].RepositoryOwner = %q, want acme", issue.AttachedPullRequests[1].RepositoryOwner)
+	}
+	if issue.AttachedPullRequests[1].RepositoryName != "console" {
+		t.Fatalf("AttachedPullRequests[1].RepositoryName = %q, want console", issue.AttachedPullRequests[1].RepositoryName)
 	}
 }
 

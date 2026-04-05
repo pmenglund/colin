@@ -217,6 +217,8 @@ func pullRequestToMap(value *domain.PullRequestRef) any {
 		"head_ref":         value.HeadRef,
 		"base_ref":         value.BaseRef,
 		"backend":          value.Backend,
+		"owner":            value.RepositoryOwner,
+		"repository":       value.RepositoryName,
 		"repository_owner": value.RepositoryOwner,
 		"repository_name":  value.RepositoryName,
 	}
