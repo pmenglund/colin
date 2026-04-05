@@ -42,7 +42,8 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 		options = append(options, service.WithServerPortOverride(opts.port))
 	}
 
-	logger := service.NewDefaultLogger(opts.verbose)
+	interactive := runtimeIsInteractiveTerminal(cmd.InOrStdin(), cmd.OutOrStdout())
+	logger := newRuntimeLogger(cmd.ErrOrStderr(), interactive, opts.verbose)
 	ctx, stop := signalContext(cmd.Context())
 	defer stop()
 
@@ -65,7 +66,7 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 		return 0
 	}
 
-	if runtimeIsInteractiveTerminal(cmd.InOrStdin(), cmd.OutOrStdout()) {
+	if interactive {
 		if err := runRuntimeTUI(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), svc, runErrCh, svc.RequestShutdownDrain, stop); err != nil {
 			logger.Error("service exited abnormally", "error", err)
 			return 1
@@ -88,6 +89,13 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 	}
 
 	return 0
+}
+
+func newRuntimeLogger(errOut io.Writer, interactive bool, verbose bool) *slog.Logger {
+	if interactive && !verbose {
+		return service.NewDefaultLoggerForWriter(io.Discard, verbose)
+	}
+	return service.NewDefaultLoggerForWriter(errOut, verbose)
 }
 
 func runSetupTailscale(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
