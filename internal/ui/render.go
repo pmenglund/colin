@@ -129,10 +129,7 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 						h.Data("testid", "issue-metadata-output"),
 						h.H3(g.Text("Codex output")),
 						h.P(g.Text("Captured output for the latest Colin run on this issue.")),
-						h.Div(
-							h.Class("worker-output-list"),
-							renderOutputEntries(metadataOutput(metadata)),
-						),
+						WorkerOutputList(issue.Identifier, metadataOutput(metadata)),
 					),
 				),
 				h.Footer(
@@ -990,15 +987,74 @@ func renderContextWindowUsage(entry domain.SnapshotRunning) g.Node {
 }
 
 func workerOutput(entry domain.SnapshotRunning) g.Node {
+	loadPath := domain.ColinCodexOutputPath(entry.IssueID)
+	eventsPath := domain.ColinCodexOutputEventsPath(entry.IssueID)
 	return h.Details(
 		h.ID("worker-output-details-"+entry.Identifier),
 		h.Class("worker-output"),
 		g.Attr("data-preserve-open", "true"),
+		g.Attr("data-codex-output-panel", "true"),
+		g.Attr("data-codex-output-issue-id", entry.IssueID),
+		g.Attr("data-codex-output-load-url", loadPath),
+		g.Attr("data-codex-output-events-url", eventsPath),
+		g.Attr("data-codex-output-loaded", "false"),
+		g.Attr("data-codex-output-cursor", ""),
 		h.Summary(g.Text("Codex output")),
+		workerOutputPlaceholder(entry.Identifier),
+	)
+}
+
+// WorkerOutputList renders the dashboard or metadata output list container.
+func WorkerOutputList(identifier string, log []domain.OutputLog) g.Node {
+	return h.Div(
+		h.Class("worker-output-list"),
+		h.Data("testid", "worker-output-"+identifier),
+		g.Attr("data-codex-output-body", "true"),
+		g.Attr("data-codex-output-cursor", outputCursor(log)),
+		renderOutputEntries(log),
+	)
+}
+
+// WorkerOutputEntry renders one output entry node.
+func WorkerOutputEntry(item domain.OutputLog) g.Node {
+	message := strings.TrimSpace(item.Message)
+	if message == "" {
+		message = item.Event
+	}
+	timestamp := item.Timestamp.UTC().Format(time.RFC3339)
+	entryChildren := g.Group{
 		h.Div(
-			h.Class("worker-output-list"),
-			h.Data("testid", "worker-output-"+entry.Identifier),
-			renderOutputEntries(entry.OutputLog),
+			h.Class("worker-output-meta"),
+			h.Span(
+				h.Class("worker-output-time"),
+				g.Attr("data-local-time", "true"),
+				g.Attr("data-timestamp", timestamp),
+				g.Text(item.Timestamp.UTC().Format("15:04:05 MST")),
+			),
+			h.Span(h.Class(outputEventBadgeClass(item.Event)), g.Text(item.Event)),
+		),
+	}
+	if outputMessageAddsDetail(item.Event, message) {
+		entryChildren = append(entryChildren, h.Pre(
+			h.Class("mockup-code"),
+			g.Text(message),
+		))
+	}
+	return h.Div(
+		h.Class("worker-output-entry"),
+		entryChildren,
+	)
+}
+
+func workerOutputPlaceholder(identifier string) g.Node {
+	return h.Div(
+		h.Class("worker-output-list"),
+		h.Data("testid", "worker-output-"+identifier),
+		g.Attr("data-codex-output-body", "true"),
+		g.Attr("data-codex-output-cursor", ""),
+		h.Pre(
+			h.Class("mockup-code"),
+			g.Text("Open to load Codex output."),
 		),
 	)
 }
@@ -1013,37 +1069,18 @@ func renderOutputEntries(log []domain.OutputLog) g.Node {
 
 	entries := make(g.Group, 0, len(log))
 	for i := len(log) - 1; i >= 0; i-- {
-		item := log[i]
-		message := strings.TrimSpace(item.Message)
-		if message == "" {
-			message = item.Event
-		}
-		timestamp := item.Timestamp.UTC().Format(time.RFC3339)
-		entryChildren := g.Group{
-			h.Div(
-				h.Class("worker-output-meta"),
-				h.Span(
-					h.Class("worker-output-time"),
-					g.Attr("data-local-time", "true"),
-					g.Attr("data-timestamp", timestamp),
-					g.Text(item.Timestamp.UTC().Format("15:04:05 MST")),
-				),
-				h.Span(h.Class(outputEventBadgeClass(item.Event)), g.Text(item.Event)),
-			),
-		}
-		if outputMessageAddsDetail(item.Event, message) {
-			entryChildren = append(entryChildren, h.Pre(
-				h.Class("mockup-code"),
-				g.Text(message),
-			))
-		}
-		entries = append(entries, h.Div(
-			h.Class("worker-output-entry"),
-			entryChildren,
-		))
+		entries = append(entries, WorkerOutputEntry(log[i]))
 	}
 
 	return entries
+}
+
+func outputCursor(log []domain.OutputLog) string {
+	if len(log) == 0 {
+		return ""
+	}
+	item := log[len(log)-1]
+	return item.Timestamp.UTC().Format(time.RFC3339Nano) + "|" + item.Event + "|" + item.Message
 }
 
 func outputEventBadgeClass(eventName string) string {

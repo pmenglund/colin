@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +236,12 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
 			t.Fatalf("missing shutdown alert: %s", text)
 		}
+		if !strings.Contains(text, `data-codex-output-load-url="/api/v1/issues/issue-1/codex-output"`) {
+			t.Fatalf("missing codex output load url: %s", text)
+		}
+		if !strings.Contains(text, `Open to load Codex output.`) {
+			t.Fatalf("missing codex output placeholder: %s", text)
+		}
 	})
 
 	t.Run("fragment", func(t *testing.T) {
@@ -339,6 +346,114 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(snapshotEvent, `"sequence":8`) {
 			t.Fatalf("snapshot event = %q, want updated sequence", snapshotEvent)
+		}
+	})
+
+	t.Run("codex output fragment api", func(t *testing.T) {
+		resp, err := http.Get(server.URL + "/api/v1/issues/issue-1/codex-output")
+		if err != nil {
+			t.Fatalf("GET codex output fragment error = %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		text := string(body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		for _, want := range []string{
+			`data-testid="worker-output-COLIN-93"`,
+			`data-codex-output-body="true"`,
+			`data-codex-output-cursor="2026-03-28T12:34:54Z|turn_completed|refresh complete"`,
+			`refresh complete`,
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("codex output fragment missing %q: %s", want, text)
+			}
+		}
+	})
+
+	t.Run("codex output events api", func(t *testing.T) {
+		updates := make(chan domain.SnapshotUpdate, 1)
+		currentLog := []domain.OutputLog{{
+			Timestamp: time.Date(2026, 3, 28, 12, 34, 54, 0, time.UTC),
+			Event:     "turn_completed",
+			Message:   "refresh complete",
+		}}
+		handler, err := NewUIHandler(func(context.Context) (domain.Snapshot, error) {
+			return domain.Snapshot{
+				GeneratedAt: time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC),
+				Counts:      map[string]int{"running": 1},
+				Running: []domain.SnapshotRunning{{
+					IssueID:    "issue-1",
+					Identifier: "COLIN-93",
+					Title:      "Add dashboard",
+					State:      "In Progress",
+					OutputLog:  append([]domain.OutputLog(nil), currentLog...),
+				}},
+			}, nil
+		}, func(context.Context, string) (domain.Issue, error) {
+			return domain.Issue{
+				ID:         "issue-1",
+				Identifier: "COLIN-93",
+				Title:      "Add dashboard",
+				State:      "In Progress",
+			}, nil
+		}, nil, nil, func(context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error) {
+			return domain.SnapshotUpdate{
+				Sequence:    7,
+				GeneratedAt: time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC),
+			}, updates, nil
+		})
+		if err != nil {
+			t.Fatalf("NewUIHandler() error = %v", err)
+		}
+		outputServer := httptest.NewServer(handler)
+		defer outputServer.Close()
+
+		req, err := http.NewRequest(http.MethodGet, outputServer.URL+"/api/v1/issues/issue-1/codex-output/events?after="+url.QueryEscape(outputCursor(currentLog[0])), nil)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET codex output events error = %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 200: %s", resp.StatusCode, string(body))
+		}
+		if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+			t.Fatalf("Content-Type = %q, want text/event-stream", got)
+		}
+
+		reader := bufio.NewReader(resp.Body)
+		readyEvent := readSSEEvent(t, reader)
+		if !strings.Contains(readyEvent, "event: ready") {
+			t.Fatalf("ready event = %q, want ready event", readyEvent)
+		}
+		if strings.Contains(readyEvent, "<html") {
+			t.Fatalf("ready event should not contain full page html: %q", readyEvent)
+		}
+
+		currentLog = append(currentLog, domain.OutputLog{
+			Timestamp: time.Date(2026, 3, 28, 12, 34, 57, 0, time.UTC),
+			Event:     "other_message",
+			Message:   "streamed follow-up",
+		})
+		updates <- domain.SnapshotUpdate{
+			Sequence:    8,
+			GeneratedAt: time.Date(2026, 3, 28, 12, 34, 57, 0, time.UTC),
+		}
+		outputEvent := readSSEEvent(t, reader)
+		if !strings.Contains(outputEvent, "event: output_entry") {
+			t.Fatalf("output event = %q, want output_entry", outputEvent)
+		}
+		if !strings.Contains(outputEvent, "streamed follow-up") {
+			t.Fatalf("output event = %q, want streamed follow-up entry", outputEvent)
+		}
+		if !strings.Contains(outputEvent, `"cursor":"2026-03-28T12:34:57Z|other_message|streamed follow-up"`) {
+			t.Fatalf("output event = %q, want updated cursor", outputEvent)
 		}
 	})
 
