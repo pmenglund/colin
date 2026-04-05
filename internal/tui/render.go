@@ -246,15 +246,30 @@ func renderLogLine(entry domain.BufferedLogEntry) string {
 		levelStyle = debugStyle
 	}
 
+	fields := make([]string, 0, len(entry.Fields))
+	for _, field := range entry.Fields {
+		fields = append(fields, sanitizeLogText(field))
+	}
+
 	line := []string{
 		logTimestampStyle.Render(entry.Timestamp.Local().Format("15:04:05")),
 		levelStyle.Render(strings.ToUpper(entry.Level)),
-		entry.Message,
+		sanitizeLogText(entry.Message),
 	}
-	if len(entry.Fields) > 0 {
-		line = append(line, logFieldStyle.Render(strings.Join(entry.Fields, " ")))
+	if len(fields) > 0 {
+		line = append(line, logFieldStyle.Render(strings.Join(fields, " ")))
 	}
 	return strings.Join(line, "  ")
+}
+
+func sanitizeLogText(value string) string {
+	replacer := strings.NewReplacer(
+		"\r\n", `\n`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+	)
+	return replacer.Replace(value)
 }
 
 func renderSelectedLogDetails(m model) string {
