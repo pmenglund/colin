@@ -16,6 +16,10 @@ func TestLoadResumeSessionPreparesWorkspaceAndUsesDefaultCLICommand(t *testing.T
 	t.Parallel()
 
 	server := newResumeTestLinearServer(t, func(w http.ResponseWriter, request map[string]any) {
+		projectIDs, ok := request["projectIDs"].([]any)
+		if !ok || len(projectIDs) != 1 || projectIDs[0] != "project-1" {
+			t.Fatalf("IssuesByCodexThreadID projectIDs = %#v, want [project-1]", request["projectIDs"])
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{
