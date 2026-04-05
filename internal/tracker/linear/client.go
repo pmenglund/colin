@@ -46,6 +46,7 @@ func (e *AmbiguousCodexThreadError) Error() string {
 
 const (
 	defaultEndpoint              = "https://api.linear.app/graphql"
+	linearIssueBatchSize         = 250
 	colinMetadataAttachmentTitle = "Colin metadata"
 	colinMetadataURLPrefix       = "https://colin.invalid/linear/issues/"
 	colinMetadataURLSuffix       = "/metadata"
@@ -271,29 +272,35 @@ query IssueSchedulingMetadata($ids: [ID!]!) {
   }
 }
 `
-	resp, err := c.doQuery(ctx, query, map[string]any{"ids": issueIDs})
-	if err != nil {
-		return nil, err
-	}
-	nodes, ok := nestedSlice(resp, "data", "issues", "nodes")
-	if !ok {
-		return nil, ErrUnknownPayload
-	}
-	metadataByIssueID := make(map[string]domain.ColinMetadata, len(nodes))
-	for _, node := range nodes {
-		issueID, _ := stringValue(node["id"])
-		if strings.TrimSpace(issueID) == "" {
-			continue
+	metadataByIssueID := make(map[string]domain.ColinMetadata, len(issueIDs))
+	for start := 0; start < len(issueIDs); start += linearIssueBatchSize {
+		end := start + linearIssueBatchSize
+		if end > len(issueIDs) {
+			end = len(issueIDs)
 		}
-		attachments, ok := nestedSlice(node, "attachments", "nodes")
+		resp, err := c.doQuery(ctx, query, map[string]any{"ids": issueIDs[start:end]})
+		if err != nil {
+			return nil, err
+		}
+		nodes, ok := nestedSlice(resp, "data", "issues", "nodes")
 		if !ok {
-			continue
+			return nil, ErrUnknownPayload
 		}
-		metadata, ok := extractColinMetadataFromAttachments(attachments)
-		if !ok {
-			continue
+		for _, node := range nodes {
+			issueID, _ := stringValue(node["id"])
+			if strings.TrimSpace(issueID) == "" {
+				continue
+			}
+			attachments, ok := nestedSlice(node, "attachments", "nodes")
+			if !ok {
+				continue
+			}
+			metadata, ok := extractColinMetadataFromAttachments(attachments)
+			if !ok {
+				continue
+			}
+			metadataByIssueID[issueID] = metadata
 		}
-		metadataByIssueID[issueID] = metadata
 	}
 	return metadataByIssueID, nil
 }

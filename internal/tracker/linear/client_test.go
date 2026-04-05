@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -2938,6 +2939,82 @@ func TestFetchIssueSchedulingMetadataByIDsBackfillsSlackStateFromOlderDuplicateM
 	}
 	if metadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743723180123456" {
 		t.Fatalf("SlackPermalink = %q, want backfilled slack permalink", metadata.SlackPermalink)
+	}
+}
+
+func TestFetchIssueSchedulingMetadataByIDsBatchesBeyondFirst250Issues(t *testing.T) {
+	t.Parallel()
+
+	const totalIssues = 251
+	requestSizes := make([]int, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		rawIDs, ok := request.Variables["ids"].([]any)
+		if !ok {
+			t.Fatalf("ids variable type = %T, want []any", request.Variables["ids"])
+		}
+		requestSizes = append(requestSizes, len(rawIDs))
+		nodes := make([]map[string]any, 0, len(rawIDs))
+		for _, rawID := range rawIDs {
+			issueID, ok := rawID.(string)
+			if !ok {
+				t.Fatalf("issue id type = %T, want string", rawID)
+			}
+			nodes = append(nodes, map[string]any{
+				"id": issueID,
+				"attachments": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id":    "attachment-" + issueID,
+							"title": "Colin metadata",
+							"url":   "https://colin.example.test/linear/issues/" + issueID + "/metadata",
+							"metadata": map[string]any{
+								"progress_root_comment_id": "comment-" + issueID,
+							},
+						},
+					},
+				},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"nodes": nodes,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	issueIDs := make([]string, 0, totalIssues)
+	for i := 0; i < totalIssues; i++ {
+		issueIDs = append(issueIDs, fmt.Sprintf("issue-%03d", i))
+	}
+
+	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
+
+	metadataByIssueID, err := client.FetchIssueSchedulingMetadataByIDs(context.Background(), issueIDs)
+	if err != nil {
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() error = %v", err)
+	}
+	if got := len(requestSizes); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+	if requestSizes[0] != 250 || requestSizes[1] != 1 {
+		t.Fatalf("request sizes = %#v, want [250 1]", requestSizes)
+	}
+	if got := len(metadataByIssueID); got != totalIssues {
+		t.Fatalf("metadataByIssueID length = %d, want %d", got, totalIssues)
+	}
+	if metadataByIssueID["issue-250"].ProgressRootCommentID != "comment-issue-250" {
+		t.Fatalf("ProgressRootCommentID for tail issue = %q, want %q", metadataByIssueID["issue-250"].ProgressRootCommentID, "comment-issue-250")
 	}
 }
 
