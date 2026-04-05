@@ -105,8 +105,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, deps commandD
 
 func newRootCmd(stdin io.Reader, stdout, stderr io.Writer, deps commandDeps) *cobra.Command {
 	opts := &rootOptions{
-		workflowPath: "WORKFLOW.md",
-		port:         -1,
+		port: -1,
 	}
 
 	cmd := &cobra.Command{
@@ -117,25 +116,30 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer, deps commandDeps) *co
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 		Args:              maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolvedWorkflowPath := workflow.Loader{}.ResolvePath(opts.workflowPath)
+			resolvedWorkflowPath := opts.resolvedWorkflowPath()
 			if shouldRunConfig(resolvedWorkflowPath) {
 				if !isInteractiveCommand(cmd, deps) {
-					cmd.PrintErrln(missingWorkflowMessage(resolvedWorkflowPath, opts.workflowPath))
+					cmd.PrintErrln(missingWorkflowMessage(resolvedWorkflowPath))
 					return exitCode(1)
 				}
 				cmd.Printf("%s was not found. Starting first-run setup.\n", resolvedWorkflowPath)
 				if code := deps.runConfig(cmd, configOptions{
-					workflowPath: opts.workflowPath,
+					workflowPath: resolvedWorkflowPath,
 					autoStart:    true,
 				}); code != 0 {
 					return exitCode(code)
 				}
 			}
-			return exitCode(deps.runRoot(cmd, *opts))
+			effectiveOpts := *opts
+			effectiveOpts.workflowPath = resolvedWorkflowPath
+			return exitCode(deps.runRoot(cmd, effectiveOpts))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
 	cmd.PersistentFlags().StringVar(&opts.workflowPath, "workflow", opts.workflowPath, "path to workflow file")
+	if flag := cmd.PersistentFlags().Lookup("workflow"); flag != nil {
+		flag.DefValue = "$" + workflow.WorkflowPathEnvVar + " or " + workflow.DefaultPath
+	}
 	cmd.Flags().IntVar(&opts.port, "port", opts.port, "dashboard port override; uses the workflow file setting when unset")
 	if flag := cmd.Flags().Lookup("port"); flag != nil {
 		flag.DefValue = "workflow file setting"
@@ -235,10 +239,10 @@ func isTerminalStream(stream any) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-func missingWorkflowMessage(resolvedWorkflowPath string, configuredWorkflowPath string) string {
-	commandPath := configuredWorkflowPath
-	if commandPath == "" {
-		commandPath = resolvedWorkflowPath
-	}
-	return fmt.Sprintf("workflow file not found: %s. Run `colin --workflow %s config` from an interactive terminal to create it.", resolvedWorkflowPath, commandPath)
+func (o rootOptions) resolvedWorkflowPath() string {
+	return workflow.Loader{}.ResolvePath(o.workflowPath)
+}
+
+func missingWorkflowMessage(resolvedWorkflowPath string) string {
+	return fmt.Sprintf("workflow file not found: %s. Run `colin --workflow %s config` from an interactive terminal to create it.", resolvedWorkflowPath, resolvedWorkflowPath)
 }

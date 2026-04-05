@@ -25,7 +25,7 @@ func newConfigCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, 
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runConfig(cmd, configOptions{workflowPath: opts.workflowPath}))
+			return exitCode(deps.runConfig(cmd, configOptions{workflowPath: opts.resolvedWorkflowPath()}))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)

@@ -44,7 +44,7 @@ func newSetupRepoCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOption
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupRepo(cmd, opts.workflowPath))
+			return exitCode(deps.runSetupRepo(cmd, opts.resolvedWorkflowPath()))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -63,7 +63,7 @@ func newSetupGitHubCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOpti
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupGitHub(cmd, opts.workflowPath))
+			return exitCode(deps.runSetupGitHub(cmd, opts.resolvedWorkflowPath()))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -83,7 +83,7 @@ func newSetupSlackCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptio
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupSlack(cmd, opts.workflowPath))
+			return exitCode(deps.runSetupSlack(cmd, opts.resolvedWorkflowPath()))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -101,7 +101,7 @@ func newSetupGitHubTokenCmd(stdin io.Reader, stdout, stderr io.Writer, opts *roo
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupGitHub(cmd, opts.workflowPath))
+			return exitCode(deps.runSetupGitHub(cmd, opts.resolvedWorkflowPath()))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -119,7 +119,7 @@ func newSetupGitHubWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *r
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupGitHubWebhook(cmd, opts.workflowPath))
+			return exitCode(deps.runSetupGitHubWebhook(cmd, opts.resolvedWorkflowPath()))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -139,7 +139,7 @@ func newSetupTailscaleCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootO
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupTailscale(cmd, opts.workflowPath, jsonOutput))
+			return exitCode(deps.runSetupTailscale(cmd, opts.resolvedWorkflowPath(), jsonOutput))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -161,7 +161,7 @@ func newSetupLinearCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOpti
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupLinearWebhook(cmd, opts.workflowPath, webhookName))
+			return exitCode(deps.runSetupLinearWebhook(cmd, opts.resolvedWorkflowPath(), webhookName))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -185,7 +185,7 @@ func newSetupLinearWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *r
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupLinearWebhook(cmd, opts.workflowPath, webhookName))
+			return exitCode(deps.runSetupLinearWebhook(cmd, opts.resolvedWorkflowPath(), webhookName))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
@@ -204,7 +204,7 @@ func newSetupLinearAppCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootO
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupLinearApp(cmd, opts.workflowPath))
+			return exitCode(deps.runSetupLinearApp(cmd, opts.resolvedWorkflowPath()))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)

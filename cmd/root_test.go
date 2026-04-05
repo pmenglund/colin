@@ -16,6 +16,7 @@ import (
 	"github.com/pmenglund/colin/internal/bootstrap"
 	"github.com/pmenglund/colin/internal/clioutput"
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/workflow"
 )
 
 func emptyInput() *strings.Reader {
@@ -133,6 +134,9 @@ func TestRunHelp(t *testing.T) {
 	}
 	if !strings.Contains(got, "--workflow") {
 		t.Fatalf("help output = %q, want to mention workflow flag", got)
+	}
+	if !strings.Contains(got, "COLIN_WORKFLOW") {
+		t.Fatalf("help output = %q, want to mention COLIN_WORKFLOW", got)
 	}
 	if !strings.Contains(got, "uses the workflow file setting when unset") {
 		t.Fatalf("help output = %q, want updated port flag help", got)
@@ -281,6 +285,90 @@ func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 	}
 	if gotWorkflow != "WORKFLOW.md" {
 		t.Fatalf("workflow path = %q, want %q", gotWorkflow, "WORKFLOW.md")
+	}
+}
+
+func TestRunUsesWorkflowEnvVarWhenFlagUnset(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	workflowPath := filepath.Join(tempDir, "from-env.md")
+	t.Setenv(workflow.WorkflowPathEnvVar, workflowPath)
+	if err := os.WriteFile(workflowPath, []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			gotWorkflow = opts.workflowPath
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+		isInteractive: func(*cobra.Command) bool {
+			return true
+		},
+	}
+
+	if code := run(nil, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run() exit code = %d, want 0", code)
+	}
+	if gotWorkflow != workflowPath {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, workflowPath)
+	}
+}
+
+func TestRunPrefersWorkflowFlagOverEnvVar(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv(workflow.WorkflowPathEnvVar, filepath.Join(tempDir, "from-env.md"))
+
+	customPath := filepath.Join(tempDir, "custom.md")
+	if err := os.WriteFile(customPath, []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotWorkflow string
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			gotWorkflow = opts.workflowPath
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			t.Fatal("runConfig should not be called")
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+	}
+
+	if code := run([]string{"--workflow", customPath}, emptyInput(), &stdout, &stderr, deps); code != 0 {
+		t.Fatalf("run(--workflow) exit code = %d, want 0", code)
+	}
+	if gotWorkflow != customPath {
+		t.Fatalf("workflow path = %q, want %q", gotWorkflow, customPath)
 	}
 }
 
@@ -1017,6 +1105,95 @@ func TestRunConfigCommandWritesWorkflow(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "Workflow file: WORKFLOW.md") {
 		t.Fatalf("stdout = %q, want workflow summary", got)
+	}
+}
+
+func TestRunConfigCommandUsesWorkflowEnvVar(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	customPath := filepath.Join(tempDir, "from-env.md")
+	t.Setenv(workflow.WorkflowPathEnvVar, customPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := strings.NewReader(strings.Join([]string{
+		"project-1",
+		"git@github.com:acme/repo.git",
+		"main",
+		"",
+		"8888",
+		"n",
+		"y",
+		"",
+	}, "\n"))
+
+	if code := run([]string{"config"}, input, &stdout, &stderr, defaultCommandDeps()); code != 0 {
+		t.Fatalf("run(config) exit code = %d, want 0, stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	if _, err := os.Stat(customPath); err != nil {
+		t.Fatalf("Stat(%q) error = %v", customPath, err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "Workflow file: "+customPath) {
+		t.Fatalf("stdout = %q, want workflow summary for env-selected path", got)
+	}
+}
+
+func TestRunWithMissingWorkflowFromEnvFailsClearlyWhenNonInteractive(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	customPath := filepath.Join(tempDir, "from-env.md")
+	t.Setenv(workflow.WorkflowPathEnvVar, customPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var rootCalls int
+	var configCalls int
+
+	deps := commandDeps{
+		runRoot: func(cmd *cobra.Command, opts rootOptions) int {
+			rootCalls++
+			return 0
+		},
+		runConfig: func(cmd *cobra.Command, opts configOptions) int {
+			configCalls++
+			return 0
+		},
+		runSetupTailscale: func(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
+			t.Fatal("runSetupTailscale should not be called")
+			return 0
+		},
+		runSetupLinearWebhook: func(cmd *cobra.Command, workflowPath string, webhookName string) int {
+			t.Fatal("runSetupLinearWebhook should not be called")
+			return 0
+		},
+		isInteractive: func(*cobra.Command) bool {
+			return false
+		},
+	}
+
+	if code := run(nil, emptyInput(), &stdout, &stderr, deps); code != 1 {
+		t.Fatalf("run(missing env workflow non-interactive) exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if configCalls != 0 {
+		t.Fatalf("runConfig calls = %d, want 0", configCalls)
+	}
+	if rootCalls != 0 {
+		t.Fatalf("runRoot calls = %d, want 0", rootCalls)
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "workflow file not found: "+customPath) {
+		t.Fatalf("stderr = %q, want missing workflow message", got)
+	}
+	if !strings.Contains(got, "colin --workflow "+customPath+" config") {
+		t.Fatalf("stderr = %q, want env-selected config hint", got)
 	}
 }
 

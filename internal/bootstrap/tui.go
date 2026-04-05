@@ -878,7 +878,7 @@ func (m tuiModel) render() string {
 func (m tuiModel) renderIntro() string {
 	lines := []string{
 		tuiTitleStyle.Render("Colin config"),
-		tuiSubtitleStyle.Render("Bubble Tea setup wizard for WORKFLOW.md"),
+		tuiSubtitleStyle.Render(fmt.Sprintf("Bubble Tea setup wizard for %s", m.workflowPath)),
 		"",
 		tuiLabelStyle.Render("Prerequisites"),
 		fmt.Sprintf("- LINEAR_API_KEY available: %s", yesNo(m.hasLinearAPIKey())),

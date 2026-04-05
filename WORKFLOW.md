@@ -34,10 +34,12 @@ repo:
   merge_method: squash
   branch_template: colin/{{.issue.title}}
 
+# Replace this example target with your own Linear project slug, repository URL,
+# and base branch before running Colin.
 targets:
-  - name: colin
-    project_slug: 0ece25450f8d
-    repo_url: git@github.com:pmenglund/colin.git
+  - name: example-target
+    project_slug: your-linear-project-slug
+    repo_url: git@github.com:your-org/your-repo.git
     base_ref: main
 
 hooks:
@@ -74,10 +76,11 @@ server:
 
 # Optional: enable Slack issue summaries for tracked issues.
 # Add `signing_secret: $SLACK_SIGNING_SECRET` if you also want the Slack App Home view.
-slack:
-  app_token: $SLACK_APP_TOKEN
-  bot_token: $SLACK_BOT_TOKEN
-  channel_id: C0AR6SU8ZUH
+# slack:
+#   app_token: $SLACK_APP_TOKEN
+#   bot_token: $SLACK_BOT_TOKEN
+#   channel_id: C0123456789
+#   signing_secret: $SLACK_SIGNING_SECRET
 ---
 
 You are working on Linear issue {{.issue.identifier}}: {{.issue.title}}.

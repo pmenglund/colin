@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,6 +26,34 @@ Work on {{.issue.identifier}}
 	}
 	if body != "Work on {{.issue.identifier}}" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestResolvePathUsesDefaultWhenUnset(t *testing.T) {
+	t.Setenv(WorkflowPathEnvVar, "")
+
+	got := Loader{}.ResolvePath("")
+	want := filepath.Join(".", DefaultPath)
+	if got != want {
+		t.Fatalf("ResolvePath(\"\") = %q, want %q", got, want)
+	}
+}
+
+func TestResolvePathUsesEnvWhenExplicitPathMissing(t *testing.T) {
+	t.Setenv(WorkflowPathEnvVar, "/tmp/colin-workflow.md")
+
+	got := Loader{}.ResolvePath("")
+	if got != "/tmp/colin-workflow.md" {
+		t.Fatalf("ResolvePath(\"\") = %q, want %q", got, "/tmp/colin-workflow.md")
+	}
+}
+
+func TestResolvePathPrefersExplicitPathOverEnv(t *testing.T) {
+	t.Setenv(WorkflowPathEnvVar, "/tmp/from-env.md")
+
+	got := Loader{}.ResolvePath("/tmp/from-flag.md")
+	if got != "/tmp/from-flag.md" {
+		t.Fatalf("ResolvePath(explicit) = %q, want %q", got, "/tmp/from-flag.md")
 	}
 }
 

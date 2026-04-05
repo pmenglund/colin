@@ -28,7 +28,7 @@ func newResumeCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, 
 		Args:          exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return exitCode(deps.runResume(cmd, resumeOptions{
-				workflowPath: opts.workflowPath,
+				workflowPath: opts.resolvedWorkflowPath(),
 				threadID:     args[0],
 			}))
 		},

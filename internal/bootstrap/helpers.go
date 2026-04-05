@@ -25,10 +25,7 @@ type resolvedOptions struct {
 }
 
 func resolveOptions(opts Options) (resolvedOptions, error) {
-	workflowPath := strings.TrimSpace(opts.WorkflowPath)
-	if workflowPath == "" {
-		workflowPath = "WORKFLOW.md"
-	}
+	workflowPath := workflow.Loader{}.ResolvePath(opts.WorkflowPath)
 
 	workingDir := strings.TrimSpace(opts.WorkingDir)
 	if workingDir == "" {

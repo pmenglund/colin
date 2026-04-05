@@ -1,5 +1,6 @@
 .colin
 .key.pem
+.WORKFLOW.md
 colin
 dist/
 e2e/playwright/node_modules/**

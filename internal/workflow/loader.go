@@ -22,15 +22,24 @@ var (
 	ErrTemplateRenderError       = errors.New("template_render_error")
 )
 
+const (
+	DefaultPath        = "WORKFLOW.md"
+	WorkflowPathEnvVar = "COLIN_WORKFLOW"
+)
+
 // Loader resolves and parses workflow files from disk.
 type Loader struct{}
 
-// ResolvePath chooses the explicit workflow path when provided or defaults to ./WORKFLOW.md.
+// ResolvePath chooses the explicit workflow path when provided, otherwise
+// falls back to $COLIN_WORKFLOW, then to ./WORKFLOW.md.
 func (Loader) ResolvePath(explicit string) string {
-	if strings.TrimSpace(explicit) != "" {
-		return explicit
+	if value := strings.TrimSpace(explicit); value != "" {
+		return value
 	}
-	return filepath.Join(".", "WORKFLOW.md")
+	if value := strings.TrimSpace(os.Getenv(WorkflowPathEnvVar)); value != "" {
+		return value
+	}
+	return filepath.Join(".", DefaultPath)
 }
 
 // Load reads and parses a workflow file from disk.

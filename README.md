@@ -96,7 +96,9 @@ The workflow-authoring command is:
 colin config
 ```
 
-If the selected workflow file is missing and Colin is running in an interactive terminal, Colin starts the same first-run setup automatically instead of failing immediately. This applies both to the default `WORKFLOW.md` and to custom paths passed with `--workflow`.
+By default Colin uses `WORKFLOW.md`. Set `COLIN_WORKFLOW=/path/to/workflow.md` when you want a shell-level default, and use `--workflow` when you need a one-off override.
+
+If the selected workflow file is missing and Colin is running in an interactive terminal, Colin starts the same first-run setup automatically instead of failing immediately. This applies to the default `WORKFLOW.md`, to paths from `COLIN_WORKFLOW`, and to custom paths passed with `--workflow`.
 
 In an interactive terminal, `colin config` launches a Bubble Tea wizard that:
 
@@ -185,6 +187,7 @@ These docs assume `colin` is installed on your `PATH`.
 Useful flags:
 
 - `colin --verbose` restores the structured service log stream in the terminal.
+- `COLIN_WORKFLOW=/path/to/WORKFLOW.md colin` sets the default workflow file for the current shell.
 - `colin --workflow /path/to/WORKFLOW.md` points Colin at a different workflow file.
 - `colin --port 9999` overrides the dashboard port.
 - `colin --workflow /path/to/WORKFLOW.md config` generates or refreshes a workflow file at a custom path.
