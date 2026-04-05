@@ -856,7 +856,15 @@ func (s *Service) applyUIBaseURLResolver(runtime orchestrator.Runtime) {
 
 // NewDefaultLogger returns the repo-default structured logger.
 func NewDefaultLogger(verbose bool) *slog.Logger {
-	return newLogger(os.Stderr, verbose)
+	return NewDefaultLoggerForWriter(os.Stderr, verbose)
+}
+
+// NewDefaultLoggerForWriter returns the repo-default structured logger writing to w.
+func NewDefaultLoggerForWriter(w io.Writer, verbose bool) *slog.Logger {
+	if w == nil {
+		w = io.Discard
+	}
+	return newLogger(w, verbose)
 }
 
 func wrapLogger(logger *slog.Logger, buffer *logbuffer.Buffer) *slog.Logger {

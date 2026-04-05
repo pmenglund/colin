@@ -3,8 +3,10 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -87,6 +89,71 @@ func TestRunRootUsesRuntimeTUIWhenInteractiveAndNotVerbose(t *testing.T) {
 	}
 }
 
+func TestRunRootSuppressesStructuredLogsDuringInteractiveTUI(t *testing.T) {
+	restore := patchRunRootSeams(t)
+	defer restore()
+
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetIn(bytes.NewBuffer(nil))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(&stderr)
+
+	var serviceLogger *slog.Logger
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+		serviceLogger = logger
+		return fakeRuntimeService{
+			run: func(ctx context.Context) error {
+				serviceLogger.Error("candidate fetch failed", "error", "timeout")
+				<-ctx.Done()
+				return nil
+			},
+		}, nil
+	}
+	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return true }
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
+		stop()
+		return <-serviceErrCh
+	}
+
+	if code := runRoot(cmd, rootOptions{workflowPath: "WORKFLOW.md"}); code != 0 {
+		t.Fatalf("runRoot() exit code = %d, want 0", code)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want no structured logs during interactive TUI", got)
+	}
+}
+
+func TestRunRootReportsStartupFailureDuringInteractiveTUISetup(t *testing.T) {
+	restore := patchRunRootSeams(t)
+	defer restore()
+
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetIn(bytes.NewBuffer(nil))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(&stderr)
+
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+		return nil, errors.New("bad workflow")
+	}
+	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return true }
+
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
+		t.Fatal("runRuntimeTUI should not be called when startup fails")
+		return nil
+	}
+
+	if code := runRoot(cmd, rootOptions{workflowPath: "WORKFLOW.md"}); code != 1 {
+		t.Fatalf("runRoot() exit code = %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "\"msg\":\"startup failed\"") || !strings.Contains(got, "bad workflow") {
+		t.Fatalf("stderr = %q, want visible startup failure", got)
+	}
+}
+
 func TestRunRootSkipsRuntimeTUIWhenVerbose(t *testing.T) {
 	restore := patchRunRootSeams(t)
 	defer restore()
@@ -116,12 +183,15 @@ func TestRunRootSkipsRuntimeTUIWhenNonInteractive(t *testing.T) {
 	defer restore()
 
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetIn(bytes.NewBuffer(nil))
 	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
 
 	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+		logger.Error("candidate fetch failed", "error", "timeout")
 		return fakeRuntimeService{run: func(context.Context) error { return nil }}, nil
 	}
 	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return false }
@@ -136,6 +206,9 @@ func TestRunRootSkipsRuntimeTUIWhenNonInteractive(t *testing.T) {
 	}
 	if got := stdout.String(); got != "Colin is running.\n" {
 		t.Fatalf("stdout = %q, want %q", got, "Colin is running.\n")
+	}
+	if got := stderr.String(); !strings.Contains(got, "\"msg\":\"candidate fetch failed\"") {
+		t.Fatalf("stderr = %q, want structured error log", got)
 	}
 }
 

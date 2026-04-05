@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/pmenglund/colin/internal/clioutput"
@@ -36,13 +37,57 @@ var (
 	runtimeIsInteractiveTerminal = isInteractiveTerminal
 )
 
+type runtimeLogger struct {
+	logger *slog.Logger
+	gate   *outputGate
+}
+
+func (r runtimeLogger) suppressTerminalOutput() {
+	if r.gate != nil {
+		r.gate.SetEnabled(false)
+	}
+}
+
+func (r runtimeLogger) restoreTerminalOutput() {
+	if r.gate != nil {
+		r.gate.SetEnabled(true)
+	}
+}
+
+type outputGate struct {
+	writer  io.Writer
+	enabled atomic.Bool
+}
+
+func newOutputGate(writer io.Writer) *outputGate {
+	if writer == nil {
+		writer = io.Discard
+	}
+	gate := &outputGate{writer: writer}
+	gate.enabled.Store(true)
+	return gate
+}
+
+func (g *outputGate) SetEnabled(enabled bool) {
+	g.enabled.Store(enabled)
+}
+
+func (g *outputGate) Write(p []byte) (int, error) {
+	if !g.enabled.Load() {
+		return len(p), nil
+	}
+	return g.writer.Write(p)
+}
+
 func runRoot(cmd *cobra.Command, opts rootOptions) int {
 	var options []service.Option
 	if opts.port >= 0 {
 		options = append(options, service.WithServerPortOverride(opts.port))
 	}
 
-	logger := service.NewDefaultLogger(opts.verbose)
+	interactive := runtimeIsInteractiveTerminal(cmd.InOrStdin(), cmd.OutOrStdout())
+	runtimeLogger := newRuntimeLogger(cmd.ErrOrStderr(), interactive, opts.verbose)
+	logger := runtimeLogger.logger
 	ctx, stop := signalContext(cmd.Context())
 	defer stop()
 
@@ -52,6 +97,7 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 		return 1
 	}
 
+	runtimeLogger.suppressTerminalOutput()
 	runErrCh := make(chan error, 1)
 	go func() {
 		runErrCh <- svc.Run(ctx)
@@ -65,8 +111,9 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 		return 0
 	}
 
-	if runtimeIsInteractiveTerminal(cmd.InOrStdin(), cmd.OutOrStdout()) {
+	if interactive {
 		if err := runRuntimeTUI(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), svc, runErrCh, svc.RequestShutdownDrain, stop); err != nil {
+			runtimeLogger.restoreTerminalOutput()
 			logger.Error("service exited abnormally", "error", err)
 			return 1
 		}
@@ -88,6 +135,17 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 	}
 
 	return 0
+}
+
+func newRuntimeLogger(errOut io.Writer, interactive bool, verbose bool) runtimeLogger {
+	if interactive && !verbose {
+		gate := newOutputGate(errOut)
+		return runtimeLogger{
+			logger: service.NewDefaultLoggerForWriter(gate, verbose),
+			gate:   gate,
+		}
+	}
+	return runtimeLogger{logger: service.NewDefaultLoggerForWriter(errOut, verbose)}
 }
 
 func runSetupTailscale(cmd *cobra.Command, workflowPath string, jsonOutput bool) int {
