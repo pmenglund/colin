@@ -143,7 +143,7 @@ Work on {{ .issue.identifier }}.
 	if root == nil {
 		t.Fatal("expected top-level Linear progress comment")
 	}
-	if !strings.HasPrefix(root.Body, "[colin] ") {
+	if !strings.HasPrefix(root.Body, "[colin]") {
 		t.Fatalf("root comment body = %q, want [colin] prefix", root.Body)
 	}
 	if !strings.Contains(root.Body, "Workspace: `"+workspacePath+"`") {
@@ -162,7 +162,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatal("expected Linear progress replies")
 	}
 	for _, comment := range linear.Comments() {
-		if !strings.HasPrefix(comment.Body, "[colin] ") {
+		if !strings.HasPrefix(comment.Body, "[colin]") {
 			t.Fatalf("comment body = %q, want [colin] prefix", comment.Body)
 		}
 		if strings.Contains(comment.Body, "Colin scheduled retry attempt") {

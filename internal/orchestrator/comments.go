@@ -269,6 +269,9 @@ func colinCommentBody(body string) string {
 	if strings.HasPrefix(strings.ToLower(body), "[colin]") {
 		return body
 	}
+	if strings.HasPrefix(body, "#") {
+		return "[colin]\n" + body
+	}
 	return "[colin] " + body
 }
 

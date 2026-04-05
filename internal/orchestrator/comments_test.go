@@ -31,6 +31,16 @@ func TestColinCommentBodyDoesNotDoublePrefix(t *testing.T) {
 	}
 }
 
+func TestColinCommentBodyPlacesHeadingOnNewLine(t *testing.T) {
+	t.Parallel()
+
+	got := colinCommentBody("## Why\n\nInteractive sessions render markdown headings.")
+	want := "[colin]\n## Why\n\nInteractive sessions render markdown headings."
+	if got != want {
+		t.Fatalf("colinCommentBody() = %q, want %q", got, want)
+	}
+}
+
 func TestRootCommentBodyOmitsRedundantIssueAndState(t *testing.T) {
 	t.Parallel()
 

@@ -1992,7 +1992,7 @@ func TestPostRunSummaryPreservesMultilineEvidence(t *testing.T) {
 	if len(tracker.commentReplies) != 1 {
 		t.Fatalf("commentReplies length = %d, want 1", len(tracker.commentReplies))
 	}
-	if got := tracker.commentReplies[0]; got != "[colin] "+summary {
+	if got := tracker.commentReplies[0]; got != "[colin]\n"+summary {
 		t.Fatalf("summary comment = %q", got)
 	}
 }
