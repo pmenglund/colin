@@ -342,7 +342,6 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 			runningPanel(snapshot),
 			retryingPanel(snapshot),
 			rateLimitsPanel(snapshot),
-			apiPanel(snapshot),
 		),
 	)
 }
@@ -378,7 +377,14 @@ func toolbar(snapshot domain.Snapshot) g.Node {
 		h.Div(
 			h.Class("toolbar-actions"),
 			h.Span(h.Class("badge badge-success"), h.Data("testid", "refresh-status"), g.Attr("data-refresh-status", "live"), g.Attr("data-generated-at", generatedAt), g.Attr("aria-live", "polite"), g.Attr("title", "Last successful update at "+generatedAt), g.Text("Live data")),
-			h.Span(h.Class("badge badge-accent"), h.Data("testid", "snapshot-generated"), g.Text(generatedAt)),
+			h.Span(
+				h.Class("badge badge-accent"),
+				h.Data("testid", "snapshot-age"),
+				g.Attr("data-data-age", "true"),
+				g.Attr("data-generated-at", generatedAt),
+				g.Attr("title", "Snapshot generated at "+generatedAt),
+				g.Text("0s old"),
+			),
 			h.Button(
 				h.Type("button"),
 				h.Class("btn"),
@@ -399,7 +405,7 @@ func statsGrid(snapshot domain.Snapshot) g.Node {
 		statCard("Running", strconv.Itoa(snapshot.Counts["running"]), "active issue workspaces"),
 		statCard("Retrying", strconv.Itoa(snapshot.Counts["retrying"]), "queued follow-up attempts"),
 		statCard("Total Tokens", formatInt(snapshot.CodexTotals.TotalTokens), "aggregate across active runs"),
-		statCard("Run Seconds", formatInt(int64(snapshot.CodexTotals.SecondsRunning)), "combined wall clock"),
+		statCard("Runtime", formatRuntimeSeconds(snapshot.CodexTotals.SecondsRunning), "combined wall clock"),
 	)
 }
 
@@ -701,7 +707,7 @@ func retryingPanel(snapshot domain.Snapshot) g.Node {
 }
 
 func rateLimitsPanel(snapshot domain.Snapshot) g.Node {
-	codexLimits, linearLines := rateLimitRows(snapshot.GeneratedAt, snapshot.RateLimits)
+	codexLimits, linearLimits := rateLimitRows(snapshot.GeneratedAt, snapshot.RateLimits)
 
 	return h.Section(
 		h.Class("table-card"),
@@ -709,18 +715,9 @@ func rateLimitsPanel(snapshot domain.Snapshot) g.Node {
 		h.P(g.Text("Latest limits reported by Codex and Linear.")),
 		h.Div(
 			h.Class("rate-limit-grid"),
-			rateLimitBox("Codex", renderCodexRateLimitRows(codexLimits)),
-			rateLimitBox("Linear", renderRateLimitLines("rate-limits-linear", linearLines)),
+			rateLimitBox("Codex", renderRateLimitRows("rate-limits-codex", codexLimits)),
+			rateLimitBox("Linear", renderRateLimitRows("rate-limits-linear", linearLimits)),
 		),
-	)
-}
-
-func apiPanel(snapshot domain.Snapshot) g.Node {
-	return h.Section(
-		h.Class("alert"),
-		h.H3(g.Text("API snapshot")),
-		h.P(g.Text("Use the JSON endpoint for scripts or debugging outside the browser.")),
-		h.Pre(h.Class("mockup-code"), g.Text(fmt.Sprintf("{\"generated_at\":\"%s\",\"running\":%d,\"retrying\":%d}", snapshot.GeneratedAt.Format(time.RFC3339), snapshot.Counts["running"], snapshot.Counts["retrying"]))),
 	)
 }
 
@@ -732,17 +729,19 @@ func rateLimitBox(title string, content g.Node) g.Node {
 	)
 }
 
-type codexRateLimitRow struct {
-	Bucket      string
-	Window      string
+type rateLimitProgressRow struct {
+	TestIDPart  string
+	AriaLabel   string
+	Label       string
 	UsedLabel   string
 	UsedPercent *int
 	ResetIn     string
+	Detail      string
 }
 
-func renderCodexRateLimitRows(rows []codexRateLimitRow) g.Node {
+func renderRateLimitRows(testID string, rows []rateLimitProgressRow) g.Node {
 	if len(rows) == 0 {
-		return renderRateLimitLines("rate-limits-codex", nil)
+		return renderRateLimitLines(testID, nil)
 	}
 
 	items := make(g.Group, 0, len(rows))
@@ -750,7 +749,7 @@ func renderCodexRateLimitRows(rows []codexRateLimitRow) g.Node {
 		barClass := "rate-limit-progress-bar"
 		barNodes := g.Group{
 			g.Attr("role", "progressbar"),
-			g.Attr("aria-label", "Codex "+row.Window+" window used"),
+			g.Attr("aria-label", row.AriaLabel),
 			g.Attr("aria-valuemin", "0"),
 			g.Attr("aria-valuemax", "100"),
 			g.Attr("aria-valuetext", row.UsedLabel),
@@ -767,11 +766,12 @@ func renderCodexRateLimitRows(rows []codexRateLimitRow) g.Node {
 
 		items = append(items, h.Div(
 			h.Class("rate-limit-progress-row"),
-			h.Data("testid", "rate-limit-codex-"+row.Bucket),
+			h.Data("testid", testID+"-"+row.TestIDPart),
 			h.Div(
 				h.Class("rate-limit-progress-meta"),
-				h.Span(h.Class("rate-limit-progress-window"), g.Text(row.Window)),
+				h.Span(h.Class("rate-limit-progress-window"), g.Text(row.Label)),
 				h.Span(h.Class("rate-limit-progress-used"), g.Text(row.UsedLabel)),
+				renderRateLimitDetail(row.Detail),
 				h.Span(h.Class("rate-limit-progress-reset"), g.Text("resets in "+row.ResetIn)),
 			),
 			h.Div(append(g.Group{h.Class(barClass)}, barNodes...)...),
@@ -780,9 +780,16 @@ func renderCodexRateLimitRows(rows []codexRateLimitRow) g.Node {
 
 	return h.Div(
 		h.Class("rate-limit-progress-list"),
-		h.Data("testid", "rate-limits-codex"),
+		h.Data("testid", testID),
 		items,
 	)
+}
+
+func renderRateLimitDetail(detail string) g.Node {
+	if strings.TrimSpace(detail) == "" {
+		return nil
+	}
+	return h.Span(h.Class("rate-limit-progress-detail"), g.Text(detail))
 }
 
 func renderRateLimitLines(testID string, lines []string) g.Node {
@@ -793,22 +800,24 @@ func renderRateLimitLines(testID string, lines []string) g.Node {
 	)
 }
 
-func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]codexRateLimitRow, []string) {
+func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]rateLimitProgressRow, []rateLimitProgressRow) {
 	if len(rateLimits) == 0 {
 		return nil, nil
 	}
 
-	codexRows := make([]codexRateLimitRow, 0, 2)
+	codexRows := make([]rateLimitProgressRow, 0, 2)
 	for _, name := range []string{"primary", "secondary"} {
 		limit, ok := rateLimits[name]
 		if !ok {
 			continue
 		}
-		row := codexRateLimitRow{
-			Bucket:    name,
-			Window:    rateLimitWindow(limit.WindowDurationMinutes),
-			UsedLabel: "usage unavailable",
-			ResetIn:   rateLimitResetDuration(now, limit.ResetsAt),
+		window := rateLimitWindow(limit.WindowDurationMinutes)
+		row := rateLimitProgressRow{
+			TestIDPart: name,
+			AriaLabel:  "Codex " + window + " window used",
+			Label:      window,
+			UsedLabel:  "usage unavailable",
+			ResetIn:    rateLimitResetDuration(now, limit.ResetsAt),
 		}
 		if usedPercent, ok := rateLimitUsedPercent(limit.UsedPercent); ok {
 			row.UsedPercent = intPtr(usedPercent)
@@ -816,27 +825,41 @@ func rateLimitRows(now time.Time, rateLimits domain.RateLimitSnapshot) ([]codexR
 		}
 		codexRows = append(codexRows, row)
 	}
-	var linearRows []string
+
+	linearRows := make([]rateLimitProgressRow, 0, len(rateLimits))
 	for name, limit := range rateLimits {
 		if name == "primary" || name == "secondary" {
 			continue
 		}
 		remaining, limitValue, ok := rateLimitRemaining(limit)
-		if !ok {
+		if !ok || limitValue <= 0 {
 			continue
 		}
-		line := fmt.Sprintf(
-			"resets in %s, %d of %d remaining",
-			rateLimitResetDuration(now, limit.ResetsAt),
-			remaining,
-			limitValue,
-		)
+		displayName := rateLimitDisplayName(name)
+		detail := fmt.Sprintf("%s of %s remaining", formatInt(remaining), formatInt(limitValue))
 		if nextAllowedAt, ok := rateLimitNextAllowed(limit); ok && nextAllowedAt.After(now) {
-			line = fmt.Sprintf("%s next request in %s", line, formatDuration(nextAllowedAt.Sub(now)))
+			detail = fmt.Sprintf("%s next request in %s", detail, formatDuration(nextAllowedAt.Sub(now)))
 		}
-		linearRows = append(linearRows, line)
+		usedPercent := 100 - int(math.Round((float64(remaining)/float64(limitValue))*100))
+		if usedPercent < 0 {
+			usedPercent = 0
+		}
+		if usedPercent > 100 {
+			usedPercent = 100
+		}
+		linearRows = append(linearRows, rateLimitProgressRow{
+			TestIDPart:  name,
+			AriaLabel:   "Linear " + strings.ToLower(displayName) + " used",
+			Label:       displayName,
+			UsedLabel:   fmt.Sprintf("%d%% used", usedPercent),
+			UsedPercent: intPtr(usedPercent),
+			ResetIn:     rateLimitResetDuration(now, limit.ResetsAt),
+			Detail:      detail,
+		})
 	}
-	sort.Strings(linearRows)
+	sort.Slice(linearRows, func(i, j int) bool {
+		return linearRows[i].Label < linearRows[j].Label
+	})
 	return codexRows, linearRows
 }
 
@@ -1059,7 +1082,32 @@ func stateBadgeClass(state string) string {
 }
 
 func formatInt(value int64) string {
-	return strconv.FormatInt(value, 10)
+	formatted := strconv.FormatInt(value, 10)
+	start := 0
+	if strings.HasPrefix(formatted, "-") {
+		start = 1
+	}
+	digits := len(formatted) - start
+	if digits <= 3 {
+		return formatted
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(formatted) + ((digits - 1) / 3))
+	if start == 1 {
+		builder.WriteByte('-')
+	}
+
+	prefix := digits % 3
+	if prefix == 0 {
+		prefix = 3
+	}
+	builder.WriteString(formatted[start : start+prefix])
+	for i := start + prefix; i < len(formatted); i += 3 {
+		builder.WriteByte(',')
+		builder.WriteString(formatted[i : i+3])
+	}
+	return builder.String()
 }
 
 func formatCompactTokens(value int64) string {
@@ -1110,6 +1158,13 @@ func formatDuration(value time.Duration) string {
 		value = 0
 	}
 	return value.Round(time.Second).String()
+}
+
+func formatRuntimeSeconds(value float64) string {
+	if value <= 0 {
+		return "0m"
+	}
+	return formatCompactDuration(time.Duration(math.Round(value)) * time.Second)
 }
 
 func rateLimitResetDuration(now time.Time, value *time.Time) string {
@@ -1172,6 +1227,15 @@ func formatCompactDuration(value time.Duration) string {
 		return "0m"
 	}
 	return strings.Join(parts, "")
+}
+
+func rateLimitDisplayName(name string) string {
+	label := strings.TrimSpace(strings.TrimPrefix(name, "linear_"))
+	label = strings.ReplaceAll(label, "_", " ")
+	if label == "" {
+		return "Unknown"
+	}
+	return strings.ToUpper(label[:1]) + label[1:]
 }
 
 func fallback(value, otherwise string) string {
