@@ -877,11 +877,14 @@ func TestCodexMetadataWithResultStoresPullRequestIdentity(t *testing.T) {
 	}
 
 	metadata := codexMetadataWithResult(issue, RunTypeReviewPublish, metadataOutcomeReady, "", repoops.Result{
-		PRNumber:  14,
-		PRURL:     "https://github.com/pmenglund/colin/pull/14",
-		PRState:   "OPEN",
-		PRHeadRef: "pmenglund/colin-112",
-		PRBaseRef: "main",
+		PRNumber:   14,
+		PRURL:      "https://github.com/pmenglund/colin/pull/14",
+		PRState:    "OPEN",
+		PRHeadRef:  "pmenglund/colin-112",
+		PRBaseRef:  "main",
+		PRBackend:  "github",
+		PROwner:    "pmenglund",
+		PRRepoName: "colin",
 	})
 
 	if metadata.PullRequestNumber != 14 {
@@ -895,6 +898,15 @@ func TestCodexMetadataWithResultStoresPullRequestIdentity(t *testing.T) {
 	}
 	if metadata.PullRequestBaseRef != "main" {
 		t.Fatalf("PullRequestBaseRef = %q, want main", metadata.PullRequestBaseRef)
+	}
+	if metadata.PullRequestBackend != "github" {
+		t.Fatalf("PullRequestBackend = %q, want github", metadata.PullRequestBackend)
+	}
+	if metadata.PullRequestRepoOwner != "pmenglund" {
+		t.Fatalf("PullRequestRepoOwner = %q, want pmenglund", metadata.PullRequestRepoOwner)
+	}
+	if metadata.PullRequestRepoName != "colin" {
+		t.Fatalf("PullRequestRepoName = %q, want colin", metadata.PullRequestRepoName)
 	}
 	if metadata.ReviewPublishDirective != domain.ReviewPublishDirectiveSkip {
 		t.Fatalf("ReviewPublishDirective = %q, want %q", metadata.ReviewPublishDirective, domain.ReviewPublishDirectiveSkip)
@@ -985,7 +997,7 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 		resolvedMergeState:  "Merged",
 		resolveMergeStateOK: true,
 	}
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
 		Number:      19,
 		URL:         "https://github.com/pmenglund/colin/pull/19",
@@ -1082,7 +1094,7 @@ func TestRunnerKeepsMergeConflictInMergeWhenRepairNeedsFreshCodexApproval(t *tes
 		},
 	}
 	tracker := &stubTracker{}
-	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
 		Number:      19,
 		URL:         "https://github.com/pmenglund/colin/pull/19",

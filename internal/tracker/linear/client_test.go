@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,12 +14,61 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/tracker"
 )
 
 func init() {
 	builtin.Register()
+}
+
+func mustTestRepoAdapter(t *testing.T) repohost.Adapter {
+	t.Helper()
+
+	adapter, err := repohost.Lookup("github")
+	if err != nil {
+		t.Fatalf("repohost.Lookup() error = %v", err)
+	}
+	return adapter
+}
+
+type fakeAttachmentAdapter struct {
+	kind repohost.HostKind
+}
+
+func (a fakeAttachmentAdapter) Kind() repohost.HostKind { return a.kind }
+func (a fakeAttachmentAdapter) DisplayName() string     { return "Attachment Test" }
+func (a fakeAttachmentAdapter) CurrentToken() string    { return "" }
+func (a fakeAttachmentAdapter) IsValidToken(string) bool {
+	return true
+}
+func (a fakeAttachmentAdapter) RecommendedEnvVar() string    { return "ATTACHMENT_TEST_TOKEN" }
+func (a fakeAttachmentAdapter) ValidateTokenMessage() string { return "" }
+func (a fakeAttachmentAdapter) ParseRepositoryURL(raw string) (repohost.Repository, error) {
+	return repohost.Repository{}, repohost.ErrUnsupportedRepositoryURL
+}
+func (a fakeAttachmentAdapter) ParsePullRequestURL(raw string) (string, string, int, bool) {
+	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "attachment://"))
+	parts := strings.SplitN(raw, "/", 2)
+	if len(parts) != 2 {
+		return "", "", 0, false
+	}
+	prParts := strings.SplitN(parts[1], "#", 2)
+	if len(prParts) != 2 {
+		return "", "", 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(prParts[1]))
+	if err != nil || number <= 0 {
+		return "", "", 0, false
+	}
+	owner := strings.TrimSpace(parts[0])
+	repo := strings.TrimSpace(prParts[0])
+	return owner, repo, number, true
+}
+func (a fakeAttachmentAdapter) RenderSetupInstructions(repohost.Repository, string) string { return "" }
+func (a fakeAttachmentAdapter) NewClient(domain.ServiceConfig, *slog.Logger) (repohost.Client, error) {
+	return nil, nil
 }
 
 func TestNewValidatesWorkflowStates(t *testing.T) {
@@ -2586,7 +2636,14 @@ func TestFetchIssueByIDIncludesLatestHumanReviewFeedback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
+	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Review"},
+		client:             &http.Client{Timeout: 5 * time.Second},
+	}
 
 	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
@@ -2674,7 +2731,14 @@ func TestFetchIssueByIDDedupesRepliesReturnedAtMultipleLevels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
+	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Review"},
+		client:             &http.Client{Timeout: 5 * time.Second},
+	}
 
 	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
@@ -2761,7 +2825,14 @@ func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t 
 	}))
 	defer server.Close()
 
-	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
+	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Review"},
+		client:             &http.Client{Timeout: 5 * time.Second},
+	}
 
 	metadataByIssueID, err := client.FetchIssueSchedulingMetadataByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {
@@ -3038,12 +3109,12 @@ func TestFetchIssueByIDExtractsAttachedPullRequests(t *testing.T) {
 							{
 								"id":    "attachment-1",
 								"title": "PR 11",
-								"url":   "https://github.com/pmenglund/colin/pull/11",
+								"url":   "attachment://acme/widgets#11",
 							},
 							{
 								"id":    "attachment-2",
 								"title": "PR 14",
-								"url":   "https://github.com/pmenglund/colin/pull/14",
+								"url":   "attachment://acme/widgets#14",
 							},
 							{
 								"id":    "attachment-3",
@@ -3060,7 +3131,12 @@ func TestFetchIssueByIDExtractsAttachedPullRequests(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
+	client := &Client{
+		repoAdapter: fakeAttachmentAdapter{kind: "attachmenttest"},
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+	}
 
 	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
@@ -3072,8 +3148,81 @@ func TestFetchIssueByIDExtractsAttachedPullRequests(t *testing.T) {
 	if issue.AttachedPullRequests[0].Number != 11 {
 		t.Fatalf("AttachedPullRequests[0].Number = %d, want 11", issue.AttachedPullRequests[0].Number)
 	}
+	if issue.AttachedPullRequests[0].Backend != "attachmenttest" {
+		t.Fatalf("AttachedPullRequests[0].Backend = %q, want attachmenttest", issue.AttachedPullRequests[0].Backend)
+	}
+	if issue.AttachedPullRequests[0].RepositoryOwner != "acme" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryOwner = %q, want acme", issue.AttachedPullRequests[0].RepositoryOwner)
+	}
+	if issue.AttachedPullRequests[0].RepositoryName != "widgets" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want widgets", issue.AttachedPullRequests[0].RepositoryName)
+	}
 	if issue.AttachedPullRequests[1].Number != 14 {
 		t.Fatalf("AttachedPullRequests[1].Number = %d, want 14", issue.AttachedPullRequests[1].Number)
+	}
+}
+
+func TestNormalizeIssueParsesAttachedPullRequestsWithConfiguredBackend(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{repoAdapter: fakeAttachmentAdapter{kind: "attachmenttest"}}
+	issue, err := client.normalizeIssue(map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-177",
+		"title":      "Normalize pull request attachments",
+		"state":      map[string]any{"name": "Review"},
+		"attachments": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"id":  "attachment-1",
+					"url": "attachment://acme/widgets#17",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeIssue() error = %v", err)
+	}
+	if len(issue.AttachedPullRequests) != 1 {
+		t.Fatalf("len(issue.AttachedPullRequests) = %d, want 1", len(issue.AttachedPullRequests))
+	}
+	got := issue.AttachedPullRequests[0]
+	if got.Backend != "attachmenttest" {
+		t.Fatalf("AttachedPullRequests[0].Backend = %q, want %q", got.Backend, "attachmenttest")
+	}
+	if got.RepositoryOwner != "acme" || got.RepositoryName != "widgets" || got.Number != 17 {
+		t.Fatalf("AttachedPullRequests[0] = %+v, want acme/widgets#17", got)
+	}
+}
+
+func TestNormalizeIssueDedupesAttachedPullRequestsByBackendAndRepository(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{repoAdapter: fakeAttachmentAdapter{kind: "attachmenttest"}}
+	issue, err := client.normalizeIssue(map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-177",
+		"title":      "Keep repository-specific PR references distinct",
+		"state":      map[string]any{"name": "Review"},
+		"attachments": map[string]any{
+			"nodes": []any{
+				map[string]any{"id": "attachment-1", "url": "attachment://acme/widgets#17"},
+				map[string]any{"id": "attachment-2", "url": "attachment://acme/widgets#17"},
+				map[string]any{"id": "attachment-3", "url": "attachment://acme/console#17"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeIssue() error = %v", err)
+	}
+	if len(issue.AttachedPullRequests) != 2 {
+		t.Fatalf("len(issue.AttachedPullRequests) = %d, want 2", len(issue.AttachedPullRequests))
+	}
+	if issue.AttachedPullRequests[0].RepositoryName != "widgets" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want widgets", issue.AttachedPullRequests[0].RepositoryName)
+	}
+	if issue.AttachedPullRequests[1].RepositoryName != "console" {
+		t.Fatalf("AttachedPullRequests[1].RepositoryName = %q, want console", issue.AttachedPullRequests[1].RepositoryName)
 	}
 }
 

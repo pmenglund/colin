@@ -20,7 +20,6 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/repohost"
-	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/tracker"
 )
 
@@ -85,6 +84,7 @@ type Client struct {
 	projectsByID       map[string]string
 	watchedProjectIDs  []string
 	active             []string
+	repoAdapter        repohost.Adapter
 	client             *http.Client
 	uiBaseURL          string
 	uiBaseURLResolver  func(context.Context) string
@@ -99,9 +99,14 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	if err := config.ValidateDispatch(cfg); err != nil {
 		return nil, err
 	}
+	repoAdapter, err := repohost.Lookup(cfg.Repo.Backend)
+	if err != nil {
+		return nil, err
+	}
 	client := newAPIClient(cfg.Tracker.Endpoint, cfg.Tracker.APIKey)
 	client.primaryProjectSlug = cfg.Tracker.ProjectSlug
 	client.active = slices.Clone(config.CandidateStates(cfg))
+	client.repoAdapter = repoAdapter
 	client.uiBaseURL = uiBaseURL(cfg.Server)
 	projectIDs, err := client.validateWorkflowStates(context.Background(), cfg)
 	if err != nil {
@@ -420,7 +425,7 @@ query IssueByID($id: String!) {
 	if !ok {
 		return domain.Issue{}, ErrUnknownPayload
 	}
-	return normalizeIssueDetail(node)
+	return c.normalizeIssue(node)
 }
 
 // FindIssueByCodexThreadID returns the watched issue whose Colin metadata stores the supplied Codex thread id.
@@ -522,7 +527,7 @@ query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
 			return domain.Issue{}, ErrUnknownPayload
 		}
 		for _, node := range nodes {
-			issue, err := normalizeIssueDetail(node)
+			issue, err := c.normalizeIssue(node)
 			if err != nil {
 				return domain.Issue{}, err
 			}
@@ -1420,7 +1425,7 @@ func normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
 	return issue, nil
 }
 
-func normalizeIssueDetail(node map[string]any) (domain.Issue, error) {
+func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
 	issue, err := normalizeIssueSnapshot(node)
 	if err != nil {
 		return domain.Issue{}, err
@@ -1430,7 +1435,7 @@ func normalizeIssueDetail(node map[string]any) (domain.Issue, error) {
 	}
 	issue.ColinMetadata = extractColinMetadata(node)
 	issue.ExecPlan, issue.ExecPlanCount = extractExecPlan(node)
-	issue.AttachedPullRequests = extractAttachedPullRequests(node)
+	issue.AttachedPullRequests = c.extractAttachedPullRequests(node)
 	if start, end, ok := latestReviewCycleWindow(node); ok && strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
 		issue.ReviewCycle = &domain.ReviewCycle{
 			EnteredReviewAt:  start,
@@ -1816,6 +1821,9 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.PullRequestState, _ = stringValue(metadataMap["pull_request_state"])
 	metadata.PullRequestHeadRef, _ = stringValue(metadataMap["pull_request_head_ref"])
 	metadata.PullRequestBaseRef, _ = stringValue(metadataMap["pull_request_base_ref"])
+	metadata.PullRequestBackend, _ = stringValue(metadataMap["pull_request_backend"])
+	metadata.PullRequestRepoOwner, _ = stringValue(metadataMap["pull_request_repo_owner"])
+	metadata.PullRequestRepoName, _ = stringValue(metadataMap["pull_request_repo_name"])
 	metadata.LoopFailureFingerprint, _ = stringValue(metadataMap["loop_failure_fingerprint"])
 	if value, ok := intValue(metadataMap["loop_failure_count"]); ok {
 		metadata.LoopFailureCount = value
@@ -1905,6 +1913,9 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		"pull_request_state":        strings.TrimSpace(metadata.PullRequestState),
 		"pull_request_head_ref":     strings.TrimSpace(metadata.PullRequestHeadRef),
 		"pull_request_base_ref":     strings.TrimSpace(metadata.PullRequestBaseRef),
+		"pull_request_backend":      strings.TrimSpace(metadata.PullRequestBackend),
+		"pull_request_repo_owner":   strings.TrimSpace(metadata.PullRequestRepoOwner),
+		"pull_request_repo_name":    strings.TrimSpace(metadata.PullRequestRepoName),
 		"loop_failure_fingerprint":  strings.TrimSpace(metadata.LoopFailureFingerprint),
 		"loop_failure_count":        metadata.LoopFailureCount,
 		"paused_run_type":           strings.TrimSpace(metadata.PausedRunType),
@@ -2062,47 +2073,57 @@ func isColinMetadataURL(value string) bool {
 	return ok
 }
 
-func extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
+func (c *Client) extractAttachedPullRequests(node map[string]any) []domain.PullRequestRef {
 	attachments, ok := nestedSlice(node, "attachments", "nodes")
 	if !ok {
 		return nil
 	}
-	return extractAttachedPullRequestsFromAttachments(attachments)
+	return c.extractAttachedPullRequestsFromAttachments(attachments)
 }
 
-func extractAttachedPullRequestsFromAttachments(attachments []map[string]any) []domain.PullRequestRef {
-	seen := make(map[int]struct{}, len(attachments))
+func (c *Client) extractAttachedPullRequestsFromAttachments(attachments []map[string]any) []domain.PullRequestRef {
+	seen := make(map[string]struct{}, len(attachments))
 	prs := make([]domain.PullRequestRef, 0, len(attachments))
 	for _, attachment := range attachments {
 		urlValue, _ := stringValue(attachment["url"])
-		pr, ok := parseGitHubPullRequestAttachment(urlValue)
+		pr, ok := c.parsePullRequestAttachment(urlValue)
 		if !ok {
 			continue
 		}
-		if _, exists := seen[pr.Number]; exists {
+		key := pullRequestAttachmentKey(pr)
+		if _, exists := seen[key]; exists {
 			continue
 		}
-		seen[pr.Number] = struct{}{}
+		seen[key] = struct{}{}
 		prs = append(prs, pr)
 	}
 	return prs
 }
 
-func parseGitHubPullRequestAttachment(rawURL string) (domain.PullRequestRef, bool) {
-	builtin.Register()
-	adapter, err := repohost.Lookup(string(repohost.HostKindGitHub))
-	if err != nil {
+func (c *Client) parsePullRequestAttachment(rawURL string) (domain.PullRequestRef, bool) {
+	if c == nil || c.repoAdapter == nil {
 		return domain.PullRequestRef{}, false
 	}
-	owner, repo, number, ok := adapter.ParsePullRequestURL(strings.TrimSpace(rawURL))
+	rawURL = strings.TrimSpace(rawURL)
+	owner, repo, number, ok := c.repoAdapter.ParsePullRequestURL(rawURL)
 	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" || number <= 0 {
 		return domain.PullRequestRef{}, false
 	}
 
 	return domain.PullRequestRef{
-		Number: number,
-		URL:    strings.TrimSpace(rawURL),
+		Number:          number,
+		URL:             rawURL,
+		Backend:         string(c.repoAdapter.Kind()),
+		RepositoryOwner: strings.TrimSpace(owner),
+		RepositoryName:  strings.TrimSpace(repo),
 	}, true
+}
+
+func pullRequestAttachmentKey(pr domain.PullRequestRef) string {
+	return strings.ToLower(strings.TrimSpace(pr.Backend)) + "|" +
+		strings.ToLower(strings.TrimSpace(pr.RepositoryOwner)) + "|" +
+		strings.ToLower(strings.TrimSpace(pr.RepositoryName)) + "|" +
+		strconv.Itoa(pr.Number)
 }
 
 func stringSliceValue(value any) []string {

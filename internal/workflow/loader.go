@@ -211,11 +211,14 @@ func pullRequestToMap(value *domain.PullRequestRef) any {
 		return nil
 	}
 	return map[string]any{
-		"number":   value.Number,
-		"url":      value.URL,
-		"state":    value.State,
-		"head_ref": value.HeadRef,
-		"base_ref": value.BaseRef,
+		"number":           value.Number,
+		"url":              value.URL,
+		"state":            value.State,
+		"head_ref":         value.HeadRef,
+		"base_ref":         value.BaseRef,
+		"backend":          value.Backend,
+		"repository_owner": value.RepositoryOwner,
+		"repository_name":  value.RepositoryName,
 	}
 }
 
@@ -237,6 +240,9 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"pull_request_state":        value.PullRequestState,
 		"pull_request_head_ref":     value.PullRequestHeadRef,
 		"pull_request_base_ref":     value.PullRequestBaseRef,
+		"pull_request_backend":      value.PullRequestBackend,
+		"pull_request_repo_owner":   value.PullRequestRepoOwner,
+		"pull_request_repo_name":    value.PullRequestRepoName,
 		"slack_channel_id":          value.SlackChannelID,
 		"slack_message_ts":          value.SlackMessageTS,
 		"slack_permalink":           value.SlackPermalink,

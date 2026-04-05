@@ -52,7 +52,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			Root: filepath.Join(os.TempDir(), "symphony_workspaces"),
 		},
 		Repo: domain.RepoConfig{
-			Backend:               string(repohost.HostKindGitHub),
+			Backend:               repohost.NormalizeBackend(""),
 			PublishStates:         []string{"Review"},
 			MergeStates:           []string{"Merge"},
 			RemoteName:            "origin",
@@ -189,7 +189,7 @@ func applyTargetsConfig(cfg *domain.ServiceConfig, raw domain.WorkflowConfig) er
 		}
 		if strings.TrimSpace(cfg.Tracker.ProjectSlug) != "" {
 			targets = append(targets, domain.TargetConfig{
-				Key:         deriveTargetKey(cfg.Tracker.ProjectSlug, cfg.Workspace.RepoURL),
+				Key:         deriveTargetKey(cfg.Repo.Backend, cfg.Tracker.ProjectSlug, cfg.Workspace.RepoURL),
 				Name:        cfg.Tracker.ProjectSlug,
 				ProjectSlug: cfg.Tracker.ProjectSlug,
 				RepoURL:     cfg.Workspace.RepoURL,
@@ -242,7 +242,7 @@ func normalizeTargetConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTargetC
 		name = projectSlug
 	}
 	return domain.TargetConfig{
-		Key:         deriveTargetKey(projectSlug, repoURL),
+		Key:         deriveTargetKey(cfg.Repo.Backend, projectSlug, repoURL),
 		Name:        name,
 		ProjectSlug: projectSlug,
 		RepoURL:     repoURL,
@@ -250,10 +250,10 @@ func normalizeTargetConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTargetC
 	}, nil
 }
 
-func deriveTargetKey(projectSlug string, repoURL string) string {
+func deriveTargetKey(backend string, projectSlug string, repoURL string) string {
 	projectSlug = strings.ToLower(strings.TrimSpace(projectSlug))
 	repoName := strings.ToLower(strings.TrimSpace(repoURL))
-	if adapter, err := repohost.Lookup(string(repohost.HostKindGitHub)); err == nil {
+	if adapter, err := repohost.Lookup(backend); err == nil {
 		if parsed, err := adapter.ParseRepositoryURL(repoURL); err == nil {
 			repoName = strings.ToLower(strings.TrimSpace(parsed.Name))
 		}

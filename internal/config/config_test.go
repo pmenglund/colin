@@ -2,12 +2,15 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/workflow"
 	"gopkg.in/yaml.v3"
@@ -30,6 +33,67 @@ func workflowDefinition(t *testing.T, raw map[string]any) domain.WorkflowDefinit
 	}
 	return def
 }
+
+type fakeConfigAdapter struct{}
+
+func (fakeConfigAdapter) Kind() repohost.HostKind { return "configtest" }
+func (fakeConfigAdapter) DisplayName() string     { return "Config Test" }
+func (fakeConfigAdapter) CurrentToken() string    { return "" }
+func (fakeConfigAdapter) IsValidToken(string) bool {
+	return true
+}
+func (fakeConfigAdapter) RecommendedEnvVar() string    { return "CONFIGTEST_TOKEN" }
+func (fakeConfigAdapter) ValidateTokenMessage() string { return "" }
+func (fakeConfigAdapter) RenderSetupInstructions(repohost.Repository, string) string {
+	return ""
+}
+func (fakeConfigAdapter) NewClient(domain.ServiceConfig, *slog.Logger) (repohost.Client, error) {
+	return nil, nil
+}
+func (fakeConfigAdapter) ParsePullRequestURL(string) (string, string, int, bool) {
+	return "", "", 0, false
+}
+func (fakeConfigAdapter) ParseRepositoryURL(raw string) (repohost.Repository, error) {
+	if strings.TrimSpace(raw) != "configtest://scm/acme/widgets" {
+		return repohost.Repository{}, repohost.ErrUnsupportedRepositoryURL
+	}
+	return repohost.Repository{
+		Host:  "configtest.example",
+		Owner: "acme",
+		Name:  "widgets",
+		URL:   raw,
+	}, nil
+}
+
+type fakeConfigClient struct{}
+
+func (fakeConfigClient) ValidateAuth(context.Context) error { return nil }
+func (fakeConfigClient) PullRequestByHead(context.Context, string, string, string, string) (*repohost.PullRequest, error) {
+	return nil, nil
+}
+func (fakeConfigClient) PullRequestByNumber(context.Context, string, string, int) (*repohost.PullRequest, error) {
+	return nil, nil
+}
+func (fakeConfigClient) CreatePullRequest(context.Context, string, string, repohost.CreatePullRequestInput) (*repohost.PullRequest, error) {
+	return nil, nil
+}
+func (fakeConfigClient) MergePullRequest(context.Context, string, string, int, string) error {
+	return nil
+}
+func (fakeConfigClient) BranchExists(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (fakeConfigClient) ReviewThreads(context.Context, string, string, int, string) (repohost.ReviewThreadPage, error) {
+	return repohost.ReviewThreadPage{}, nil
+}
+func (fakeConfigClient) ReviewThreadComments(context.Context, string, string) (repohost.ReviewThreadCommentPage, error) {
+	return repohost.ReviewThreadCommentPage{}, nil
+}
+func (fakeConfigClient) PullRequestReactions(context.Context, string, string, int, string) (repohost.ReactionPage, error) {
+	return repohost.ReactionPage{}, nil
+}
+func (fakeConfigClient) ReplyToReviewThread(context.Context, string, string) error { return nil }
+func (fakeConfigClient) ResolveReviewThread(context.Context, string) error         { return nil }
 
 func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token-from-env")
@@ -401,6 +465,38 @@ func TestBuildNormalizesExplicitTargets(t *testing.T) {
 	}
 	if cfg.Targets[1].ProjectSlug != "project-2" || cfg.Targets[1].RepoURL != "git@github.com:acme/web.git" || cfg.Targets[1].BaseRef != "trunk" {
 		t.Fatalf("cfg.Targets[1] = %+v", cfg.Targets[1])
+	}
+}
+
+func TestBuildDerivesTargetKeyWithConfiguredRepoBackend(t *testing.T) {
+	repohost.Register(fakeConfigAdapter{})
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":    "linear",
+			"api_key": "token",
+		},
+		"repo": map[string]any{
+			"backend": "configtest",
+		},
+		"targets": []map[string]any{
+			{
+				"project_slug": "project-1",
+				"repo_url":     "configtest://scm/acme/widgets",
+				"base_ref":     "main",
+			},
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(cfg.Targets) != 1 {
+		t.Fatalf("len(cfg.Targets) = %d, want 1", len(cfg.Targets))
+	}
+	if got := cfg.Targets[0].Key; got != "project-1-widgets" {
+		t.Fatalf("cfg.Targets[0].Key = %q, want %q", got, "project-1-widgets")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/repoops/fakes"
 	"github.com/pmenglund/colin/internal/workspace"
@@ -157,15 +158,15 @@ func TestPrepareReviewIssueDoesNotWaitWhenReviewContextHasNoPullRequest(t *testi
 
 func TestPrepareReviewIssueStartsImmediatelyWhenTrackedPullRequestHasNoUnresolvedThreads(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://example.test/pr/11",
 		State:       "OPEN",
 		HeadRefName: "colin-123",
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := &trackerStub{}
 	orch := &Orchestrator{
@@ -227,19 +228,19 @@ func TestPrepareReviewIssueStartsImmediatelyWhenTrackedPullRequestHasNoUnresolve
 
 func TestPrepareReviewIssueInjectsUnresolvedThreadsWhenTrackedPullRequestHasThem(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://example.test/pr/11",
 		State:       "OPEN",
 		HeadRefName: "colin-123",
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			reviewSyncThreadNode("thread-1", "reviewer", "Please fix this."),
 		},
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := &trackerStub{}
 
@@ -316,16 +317,16 @@ func TestPrepareReviewIssueInjectsUnresolvedThreadsWhenTrackedPullRequestHasThem
 
 func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
-	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
 		Number:      11,
 		URL:         "https://example.test/pr/11",
 		State:       "OPEN",
 		HeadRefName: "colin-123",
 		BaseRefName: "symphony",
 	}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
-	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
-		Threads: []repoops.GitHubReviewThread{
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
 			{
 				ID:               "thread-1",
 				IsResolved:       false,
@@ -333,8 +334,8 @@ func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testi
 				ViewerCanReply:   true,
 				ViewerCanResolve: true,
 				Path:             "internal/foo.go",
-				Comments: repoops.GitHubReviewCommentConnection{
-					Comments: []repoops.GitHubReviewComment{
+				Comments: repohost.ReviewCommentConnection{
+					Comments: []repohost.ReviewComment{
 						{ID: "comment-1", Body: "Please fix this.", AuthorLogin: "reviewer"},
 					},
 				},
@@ -411,7 +412,7 @@ func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testi
 	}
 }
 
-func setupReviewSyncTestRuntime(t *testing.T) (domain.ServiceConfig, *fakes.FakeGitHubClient) {
+func setupReviewSyncTestRuntime(t *testing.T) (domain.ServiceConfig, *fakes.FakeRepoHostClient) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -442,7 +443,7 @@ func setupReviewSyncTestRuntime(t *testing.T) (domain.ServiceConfig, *fakes.Fake
 		Hooks: domain.HookConfig{
 			AfterCreate: "git remote set-url origin https://github.com/pmenglund/colin.git",
 		},
-	}, &fakes.FakeGitHubClient{}
+	}, &fakes.FakeRepoHostClient{}
 }
 
 func reviewSyncRunCmd(t *testing.T, cwd string, name string, args ...string) string {
@@ -470,11 +471,11 @@ func reviewSyncWriteFile(t *testing.T, path string, content string) {
 	}
 }
 
-func reviewSyncThreadNode(id, author, body string) repoops.GitHubReviewThread {
+func reviewSyncThreadNode(id, author, body string) repohost.ReviewThread {
 	createdAt := time.Date(2026, time.March, 28, 18, 0, 0, 0, time.UTC)
 	line := 42
 	startLine := 40
-	return repoops.GitHubReviewThread{
+	return repohost.ReviewThread{
 		ID:               id,
 		IsResolved:       false,
 		IsOutdated:       false,
@@ -483,8 +484,8 @@ func reviewSyncThreadNode(id, author, body string) repoops.GitHubReviewThread {
 		Path:             "internal/foo.go",
 		Line:             &line,
 		StartLine:        &startLine,
-		Comments: repoops.GitHubReviewCommentConnection{
-			Comments: []repoops.GitHubReviewComment{
+		Comments: repohost.ReviewCommentConnection{
+			Comments: []repohost.ReviewComment{
 				{
 					ID:          "comment-1",
 					Body:        body,
