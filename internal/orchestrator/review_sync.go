@@ -112,11 +112,37 @@ func hasIssueReviewSyncPullRequestSignal(issue domain.Issue) bool {
 			return true
 		}
 	}
-	return len(issue.AttachedPullRequests) == 1
+	if len(issue.AttachedPullRequests) == 0 {
+		return false
+	}
+
+	seen := make(map[string]struct{}, len(issue.AttachedPullRequests))
+	for _, pr := range issue.AttachedPullRequests {
+		if !hasReviewSyncPullRequest(pr) {
+			continue
+		}
+
+		key := reviewSyncPullRequestRepositoryKey(pr)
+		if _, ok := seen[key]; ok {
+			return false
+		}
+		seen[key] = struct{}{}
+	}
+
+	return len(seen) > 0
 }
 
 func hasReviewSyncPullRequest(pr domain.PullRequestRef) bool {
 	return pr.Number > 0 || strings.TrimSpace(pr.URL) != ""
+}
+
+func reviewSyncPullRequestRepositoryKey(pr domain.PullRequestRef) string {
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(pr.Backend)),
+		strings.ToLower(strings.TrimSpace(pr.Owner)),
+		strings.ToLower(strings.TrimSpace(pr.Repository)),
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func nextReviewSyncPoll(now, firstObserved time.Time, timedOut bool) time.Time {

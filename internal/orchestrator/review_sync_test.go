@@ -63,14 +63,51 @@ func TestNeedsReviewSyncRequiresConcretePullRequestSignal(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "multiple attached prs are ambiguous",
+			name: "cross-repo attached prs remain concrete",
 			issue: domain.Issue{
 				State:       "Todo",
 				ReviewCycle: reviewCycle,
 				BranchName:  &branch,
 				AttachedPullRequests: []domain.PullRequestRef{
-					{Number: 11, URL: "https://github.com/pmenglund/colin/pull/11"},
-					{Number: 12, URL: "https://github.com/pmenglund/colin/pull/12"},
+					{
+						Backend:    "github",
+						Owner:      "pmenglund",
+						Repository: "colin",
+						Number:     11,
+						URL:        "https://github.com/pmenglund/colin/pull/11",
+					},
+					{
+						Backend:    "github",
+						Owner:      "pmenglund",
+						Repository: "sibling",
+						Number:     11,
+						URL:        "https://github.com/pmenglund/sibling/pull/11",
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "multiple attached prs in the same repo are ambiguous",
+			issue: domain.Issue{
+				State:       "Todo",
+				ReviewCycle: reviewCycle,
+				BranchName:  &branch,
+				AttachedPullRequests: []domain.PullRequestRef{
+					{
+						Backend:    "github",
+						Owner:      "pmenglund",
+						Repository: "colin",
+						Number:     11,
+						URL:        "https://github.com/pmenglund/colin/pull/11",
+					},
+					{
+						Backend:    "github",
+						Owner:      "pmenglund",
+						Repository: "colin",
+						Number:     12,
+						URL:        "https://github.com/pmenglund/colin/pull/12",
+					},
 				},
 			},
 			want: false,
@@ -81,6 +118,99 @@ func TestNeedsReviewSyncRequiresConcretePullRequestSignal(t *testing.T) {
 		if got := needsReviewSync(tt.issue); got != tt.want {
 			t.Fatalf("%s: needsReviewSync() = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestPrepareReviewIssueAcceptsCrossRepoAttachedPullRequestsWhenWorkspaceRepoDisambiguates(t *testing.T) {
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	fakeGitHub.PullRequestByNumberCalls(func(_ context.Context, owner, repo string, number int) (*repoops.GitHubPullRequest, error) {
+		if owner != "pmenglund" || repo != "colin" || number != 11 {
+			t.Fatalf("PullRequestByNumber() args = %q %q %d, want pmenglund colin 11", owner, repo, number)
+		}
+		return &repoops.GitHubPullRequest{
+			Number:      11,
+			URL:         "https://github.com/pmenglund/colin/pull/11",
+			State:       "OPEN",
+			HeadRefName: "colin-123",
+			BaseRefName: "main",
+		}, nil
+	})
+	fakeGitHub.PullRequestReactionsReturns(repoops.GitHubReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{}, nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		reviewSync: map[string]*reviewSyncState{
+			"1": {
+				firstObserved: time.Now().UTC().Add(-time.Minute),
+				comment:       &commentThreadState{RootCommentID: "root"},
+			},
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	branch := "colin-123"
+	now := time.Date(2026, time.March, 30, 19, 0, 0, 0, time.UTC)
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "COLIN-123",
+		Title:      "Resume coding with cross-repo attachments",
+		State:      "Todo",
+		BranchName: &branch,
+		ReviewCycle: &domain.ReviewCycle{
+			EnteredReviewAt:  now.Add(-2 * time.Hour),
+			ReturnedToTodoAt: now.Add(-time.Hour),
+		},
+		AttachedPullRequests: []domain.PullRequestRef{
+			{
+				Backend:    "github",
+				Owner:      "pmenglund",
+				Repository: "colin",
+				Number:     11,
+				URL:        "https://github.com/pmenglund/colin/pull/11",
+			},
+			{
+				Backend:    "github",
+				Owner:      "pmenglund",
+				Repository: "sibling",
+				Number:     11,
+				URL:        "https://github.com/pmenglund/sibling/pull/11",
+			},
+		},
+	}
+
+	prepared, ready := orch.prepareReviewIssue(context.Background(), issue, now)
+
+	if !ready {
+		t.Fatalf("prepareReviewIssue() ready = false, want true")
+	}
+	if prepared.PullRequest == nil {
+		t.Fatal("PullRequest = nil, want resolved attached PR")
+	}
+	if prepared.PullRequest.Owner != "" || prepared.PullRequest.Repository != "" {
+		t.Fatalf("prepared.PullRequest identity = %+v, want review context PR payload", prepared.PullRequest)
+	}
+	if prepared.PullRequest.Number != 11 {
+		t.Fatalf("prepared.PullRequest.Number = %d, want 11", prepared.PullRequest.Number)
+	}
+	if got := fakeGitHub.PullRequestByNumberCallCount(); got != 1 {
+		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", got)
+	}
+	if _, ok := orch.reviewSync[issue.ID]; ok {
+		t.Fatal("reviewSync state was not cleared after successful PR resolution")
+	}
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length = %d, want 0", got)
 	}
 }
 
