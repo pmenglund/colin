@@ -140,6 +140,10 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		}
 		event.result.Issue = o.syncSlackIssue(ctx, event.result.Issue)
 		if o.shouldRetrySameStateHandoff(entry, event.result) {
+			delay := reviewSyncSlowPollInterval
+			if event.result.RetryDelay > 0 {
+				delay = event.result.RetryDelay
+			}
 			o.logger.Info(
 				"handoff automation is waiting in the same state; scheduling silent retry",
 				"issue_id", event.issueID,
@@ -147,7 +151,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 				"run_type", event.result.RunType,
 				"current_state", event.result.Issue.State,
 			)
-			o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "waiting for external handoff follow-up to complete", reviewSyncSlowPollInterval, entry.comment, false)
+			o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "waiting for external handoff follow-up to complete", delay, entry.comment, false)
 			return
 		}
 		o.logger.Info(

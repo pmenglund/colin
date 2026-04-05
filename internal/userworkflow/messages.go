@@ -134,6 +134,26 @@ func MergeFailure(pr domain.PullRequestRef, branch string, baseRef string, reaso
 	return strings.Join(lines, "\n")
 }
 
+func MergeRetrying(pr domain.PullRequestRef, branch string, baseRef string, reason string, recoverySummary string) string {
+	lines := []string{"Keeping issue in `Merge` while Colin retries merge automation automatically."}
+	lines = appendPullRequest(lines, &pr)
+	if branch = strings.TrimSpace(branch); branch != "" {
+		lines = append(lines, fmt.Sprintf("- Branch: `%s`", branch))
+	}
+	if baseRef = strings.TrimSpace(baseRef); baseRef != "" {
+		lines = append(lines, fmt.Sprintf("- Base ref: `%s`", baseRef))
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		lines = append(lines, fmt.Sprintf("- Retry reason: %s", reason))
+	}
+	if recoverySummary = strings.TrimSpace(recoverySummary); recoverySummary != "" {
+		lines = append(lines, "", "Codex repair summary:", "", recoverySummary)
+	}
+	lines = append(lines, "- What Colin is doing next: retrying merge automation automatically after a short backoff.")
+	lines = append(lines, "- What you should do: leave the issue in `Merge` unless Colin later returns it to `Review`.")
+	return strings.Join(lines, "\n")
+}
+
 func MergeRecoveryFailure(pr domain.PullRequestRef, branch string, baseRef string, mergeErr error, reason string, reviewState string, recoveryOutput string) string {
 	lines := []string{
 		fmt.Sprintf("Colin hit a merge conflict, tried to repair it automatically, and then moved the issue back to `%s`.", reviewState),
@@ -155,6 +175,32 @@ func MergeRecoveryFailure(pr domain.PullRequestRef, branch string, baseRef strin
 	}
 	if recoveryOutput = strings.TrimSpace(recoveryOutput); recoveryOutput != "" {
 		lines = append(lines, "", "Codex recovery output:", "", recoveryOutput)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func MergeRecoveryValidationFailure(pr domain.PullRequestRef, branch string, baseRef string, reviewState string, reason string, recoverySummary string, evidence []string, mergeErr error) string {
+	lines := []string{
+		fmt.Sprintf("Colin moved the issue back to `%s` because Codex reported the merge recovery as ready, but Colin could not verify that the branch was actually updated for merge retry.", reviewState),
+	}
+	lines = appendPullRequest(lines, &pr)
+	if branch = strings.TrimSpace(branch); branch != "" {
+		lines = append(lines, fmt.Sprintf("- Branch: `%s`", branch))
+	}
+	if mergeErr != nil {
+		lines = append(lines, fmt.Sprintf("- Original merge error: %s", strings.TrimSpace(mergeErr.Error())))
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		lines = append(lines, fmt.Sprintf("- Validation blocker: %s", reason))
+	}
+	lines = append(lines, evidence...)
+	if recoverySummary = strings.TrimSpace(recoverySummary); recoverySummary != "" {
+		lines = append(lines, "", "Codex recovery summary:", "", recoverySummary)
+	}
+	lines = append(lines, "- What Colin is doing next: stopping merge automation until the branch is updated for real.")
+	lines = append(lines, mergeHumanAction(pr.Number, baseRef, reviewState))
+	if pr.Number > 0 && strings.TrimSpace(baseRef) != "" {
+		lines = append(lines, fmt.Sprintf("- Suggested command: `gh pr checkout %d && git fetch origin %s && git merge origin/%s`", pr.Number, baseRef, baseRef))
 	}
 	return strings.Join(lines, "\n")
 }

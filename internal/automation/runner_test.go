@@ -1098,6 +1098,153 @@ func TestHandleMergeFailureReturnsIssueToReview(t *testing.T) {
 	}
 }
 
+func TestRunnerKeepsMergeInMergeWhileGitHubMergeabilitySettles(t *testing.T) {
+	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
+	branch := "pmenglund/colin-124-internal-log-buffer"
+	prepareRunnerMergeBranch(t, tempDir, repoURL, branch, "symphony")
+
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+			RemoteName:    "origin",
+			MergeMethod:   "merge",
+		},
+	}
+	tracker := &stubTracker{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.MergePullRequestReturns(errors.New("X Pull request pmenglund/colin#19 is not mergeable: mergeability is still being calculated."))
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+
+	runner := newRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-124",
+		Title:      "internal log buffer",
+		State:      "Merge",
+		BranchName: testStringPtr(branch),
+	}, nil, nil)
+
+	if result.Status != "blocked" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "blocked", result.Err)
+	}
+	if result.Issue.State != "Merge" {
+		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Merge")
+	}
+	if result.RetryDelay != 30*time.Second {
+		t.Fatalf("result.RetryDelay = %s, want %s", result.RetryDelay, 30*time.Second)
+	}
+	if tracker.updatedState != "" {
+		t.Fatalf("updated state = %q, want empty", tracker.updatedState)
+	}
+	if !strings.Contains(result.Summary, "retrying merge automation automatically after a short backoff") {
+		t.Fatalf("result.Summary = %q, want automatic retry guidance", result.Summary)
+	}
+	if got := fakeGitHub.MergePullRequestCallCount(); got != 1 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 1", got)
+	}
+}
+
+func TestRunnerReturnsMergeIssueToReviewAfterTransientRetryLimit(t *testing.T) {
+	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
+	branch := "pmenglund/colin-124-internal-log-buffer"
+	prepareRunnerMergeBranch(t, tempDir, repoURL, branch, "symphony")
+
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+			RemoteName:    "origin",
+			MergeMethod:   "merge",
+		},
+	}
+	tracker := &stubTracker{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.MergePullRequestReturns(errors.New("X Pull request pmenglund/colin#19 is not mergeable: mergeability is still being calculated."))
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+
+	runner := newRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	attempt := maxAutomaticMergeRetries
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-124",
+		Title:      "internal log buffer",
+		State:      "Merge",
+		BranchName: testStringPtr(branch),
+	}, &attempt, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Review" {
+		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Review")
+	}
+	if tracker.updatedState != "Review" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	}
+	if result.RetryDelay != 0 {
+		t.Fatalf("result.RetryDelay = %s, want 0", result.RetryDelay)
+	}
+}
+
 func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	tempDir := t.TempDir()
 	repoURL := createRunnerGitOrigin(t, tempDir)
@@ -1196,6 +1343,90 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	}
 	if !strings.Contains(promptLog, outcomeReadyForMergeRetry) {
 		t.Fatalf("prompt log = %q, want merge retry outcome marker", promptLog)
+	}
+}
+
+func TestRunnerReturnsIssueToReviewWhenRecoveryDoesNotActuallyUpdateBranch(t *testing.T) {
+	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
+	branch := "pmenglund/colin-124-internal-log-buffer"
+	prepareRunnerMergeConflict(t, tempDir, repoURL, branch, "symphony")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_MERGE_RECOVERY_NOOP=1 %q -test.run=TestHelperProcessFakeCodex --",
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+			RemoteName:    "origin",
+			MergeMethod:   "merge",
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns: 1,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       5 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      5 * time.Second,
+		},
+	}
+	tracker := &stubTracker{}
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(&repohost.PullRequest{
+		Number:      19,
+		URL:         "https://github.com/pmenglund/colin/pull/19",
+		State:       "OPEN",
+		HeadRefName: branch,
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.MergePullRequestReturns(errors.New("X Pull request pmenglund/colin#19 is not mergeable: the merge commit cannot be cleanly created."))
+
+	runner := newRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-124",
+		Title:      "internal log buffer",
+		State:      "Merge",
+		BranchName: testStringPtr(branch),
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Issue.State != "Review" {
+		t.Fatalf("result.Issue.State = %q, want %q", result.Issue.State, "Review")
+	}
+	if tracker.updatedState != "Review" {
+		t.Fatalf("updated state = %q, want %q", tracker.updatedState, "Review")
+	}
+	if !strings.Contains(result.Summary, "could not verify that the branch was actually updated for merge retry") {
+		t.Fatalf("result.Summary = %q, want recovery validation failure note", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Branch head before recovery") {
+		t.Fatalf("result.Summary = %q, want branch head evidence", result.Summary)
+	}
+	if got := fakeGitHub.MergePullRequestCallCount(); got != 1 {
+		t.Fatalf("MergePullRequestCallCount() = %d, want 1", got)
 	}
 }
 
@@ -2894,6 +3125,9 @@ func runFakeMergeRecovery(cwd string, prompt string) error {
 	if cwd == "" {
 		return errors.New("missing merge recovery cwd")
 	}
+	if os.Getenv("COLIN_FAKE_CODEX_MERGE_RECOVERY_NOOP") == "1" {
+		return nil
+	}
 	baseRef := extractPromptField(prompt, "- Base ref:")
 	if baseRef == "" {
 		baseRef = "symphony"
@@ -2975,7 +3209,7 @@ func createRunnerGitOrigin(t *testing.T, tempDir string) string {
 	return remotePath
 }
 
-func prepareRunnerMergeConflict(t *testing.T, tempDir string, remotePath string, branch string, baseRef string) {
+func prepareRunnerMergeBranch(t *testing.T, tempDir string, remotePath string, branch string, baseRef string) {
 	t.Helper()
 
 	authorPath := filepath.Join(tempDir, "author")
@@ -2990,7 +3224,14 @@ func prepareRunnerMergeConflict(t *testing.T, tempDir string, remotePath string,
 	runRunnerCmd(t, authorPath, "git", "add", "README.md")
 	runRunnerCmd(t, authorPath, "git", "commit", "-m", "feature change")
 	runRunnerCmd(t, authorPath, "git", "push", "-u", "origin", branch)
+}
 
+func prepareRunnerMergeConflict(t *testing.T, tempDir string, remotePath string, branch string, baseRef string) {
+	t.Helper()
+
+	prepareRunnerMergeBranch(t, tempDir, remotePath, branch, baseRef)
+
+	authorPath := filepath.Join(tempDir, "author")
 	runRunnerCmd(t, authorPath, "git", "checkout", baseRef)
 	if err := os.WriteFile(filepath.Join(authorPath, "README.md"), []byte("base branch text\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)

@@ -306,6 +306,125 @@ func TestMergePullRequestDoesNotRetryWhenRefreshStillReportsNotMergeable(t *test
 	}
 }
 
+func TestMergePullRequestClassifiesTransientMergeabilityFailures(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	mergeErr := errors.New("PUT https://api.github.com/repos/acme/widgets/pulls/11/merge: 405 Pull Request is not mergeable []")
+	fakeGitHub.MergePullRequestReturns(mergeErr)
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.MergePullRequest(context.Background(), workspacePath, repoops.Result{
+		BaseRef:  "symphony",
+		PRNumber: 11,
+		PRURL:    "https://github.com/pmenglund/colin/pull/11",
+		PRState:  "OPEN",
+	})
+	if !errors.Is(err, mergeErr) {
+		t.Fatalf("MergePullRequest() error = %v, want wrapped %v", err, mergeErr)
+	}
+	if !repoops.IsMergeFailureKind(err, repoops.MergeFailureKindTransient) {
+		t.Fatalf("MergePullRequest() error kind = %v, want %q", err, repoops.MergeFailureKindTransient)
+	}
+}
+
+func TestMergePullRequestClassifiesBaseAdvancedFailures(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	mergeErr := errors.New("PUT https://api.github.com/repos/acme/widgets/pulls/11/merge: 405 Pull Request is not mergeable []")
+	fakeGitHub.MergePullRequestReturns(mergeErr)
+	fakeGitHub.PullRequestByNumberReturns(testPullRequestWithMergeable(11, "OPEN", "colin-93", false), nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.MergePullRequest(context.Background(), workspacePath, repoops.Result{
+		BaseRef:  "symphony",
+		BaseSHA:  "deadbeef",
+		PRNumber: 11,
+		PRURL:    "https://github.com/pmenglund/colin/pull/11",
+		PRState:  "OPEN",
+	})
+	if !errors.Is(err, mergeErr) {
+		t.Fatalf("MergePullRequest() error = %v, want wrapped %v", err, mergeErr)
+	}
+	if !repoops.IsMergeFailureKind(err, repoops.MergeFailureKindBaseAdvanced) {
+		t.Fatalf("MergePullRequest() error kind = %v, want %q", err, repoops.MergeFailureKindBaseAdvanced)
+	}
+}
+
+func TestValidateMergeRecoveryDetectsUnchangedBranchHead(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	writeFile(t, filepath.Join(workspacePath, "FEATURE.md"), "feature\n")
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
+	before, err := manager.Publish(context.Background(), issue, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	validation, err := manager.ValidateMergeRecovery(context.Background(), workspacePath, before, before)
+	if err != nil {
+		t.Fatalf("ValidateMergeRecovery() error = %v", err)
+	}
+	if validation.Valid() {
+		t.Fatalf("validation = %+v, want invalid unchanged recovery", validation)
+	}
+	if validation.HeadChanged {
+		t.Fatalf("validation.HeadChanged = true, want false")
+	}
+}
+
+func TestValidateMergeRecoveryAcceptsUpdatedBranchContainingExpectedBase(t *testing.T) {
+	workspacePath, remotePath := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	issue := domain.Issue{Identifier: "COLIN-93", Title: "Add merge automation"}
+
+	writeFile(t, filepath.Join(workspacePath, "FEATURE.md"), "feature\n")
+	before, err := manager.Publish(context.Background(), issue, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	baseClonePath := filepath.Join(filepath.Dir(remotePath), "base-clone")
+	runCmd(t, "", "git", "clone", remotePath, baseClonePath)
+	configureGitIdentity(t, baseClonePath, "Test User", "test@example.com")
+	runCmd(t, baseClonePath, "git", "checkout", "symphony")
+	writeFile(t, filepath.Join(baseClonePath, "BASE.txt"), "base\n")
+	runCmd(t, baseClonePath, "git", "add", "BASE.txt")
+	runCmd(t, baseClonePath, "git", "commit", "-m", "base change")
+	runCmd(t, baseClonePath, "git", "push", "origin", "symphony")
+
+	runCmd(t, workspacePath, "git", "fetch", "origin", "symphony")
+	runCmd(t, workspacePath, "git", "merge", "origin/symphony")
+	runCmd(t, workspacePath, "git", "push", "origin", "colin-93")
+
+	after, err := manager.Publish(context.Background(), issue, workspacePath)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	validation, err := manager.ValidateMergeRecovery(context.Background(), workspacePath, before, after)
+	if err != nil {
+		t.Fatalf("ValidateMergeRecovery() error = %v", err)
+	}
+	if !validation.Valid() {
+		t.Fatalf("validation = %+v, want valid updated recovery", validation)
+	}
+	if !validation.HeadChanged {
+		t.Fatalf("validation.HeadChanged = false, want true")
+	}
+	if !validation.ContainsExpectedBase {
+		t.Fatalf("validation.ContainsExpectedBase = false, want true")
+	}
+}
+
 func TestReviewContextReturnsUnresolvedThreads(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 

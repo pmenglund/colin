@@ -117,3 +117,57 @@ func TestMergeRecoveryFailureExplainsHumanRepairStep(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeRetryingExplainsAutomaticMergeRetry(t *testing.T) {
+	t.Parallel()
+
+	got := MergeRetrying(
+		domain.PullRequestRef{Number: 17, URL: "https://example.test/pr/17"},
+		"colin/workflow-improvements",
+		"main",
+		"the base branch `main` moved again after Colin prepared the branch for merge",
+		"COLIN_OUTCOME: READY_FOR_MERGE_RETRY",
+	)
+
+	for _, want := range []string{
+		"Keeping issue in `Merge` while Colin retries merge automation automatically.",
+		"- Branch: `colin/workflow-improvements`",
+		"- Retry reason: the base branch `main` moved again after Colin prepared the branch for merge",
+		"- What Colin is doing next: retrying merge automation automatically after a short backoff.",
+		"Codex repair summary:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("MergeRetrying() = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestMergeRecoveryValidationFailureExplainsFalsePositiveRepair(t *testing.T) {
+	t.Parallel()
+
+	got := MergeRecoveryValidationFailure(
+		domain.PullRequestRef{Number: 17, URL: "https://example.test/pr/17"},
+		"colin/workflow-improvements",
+		"main",
+		"Review",
+		"Codex reported the merge recovery as ready, but the branch head did not change (abc -> abc).",
+		"COLIN_OUTCOME: READY_FOR_MERGE_RETRY",
+		[]string{
+			"- Branch head before recovery: `abc`",
+			"- Branch head after recovery: `abc`",
+		},
+		errors.New("merge commit cannot be cleanly created"),
+	)
+
+	for _, want := range []string{
+		"Colin moved the issue back to `Review` because Codex reported the merge recovery as ready, but Colin could not verify that the branch was actually updated for merge retry.",
+		"- Validation blocker: Codex reported the merge recovery as ready, but the branch head did not change (abc -> abc).",
+		"- Branch head before recovery: `abc`",
+		"Codex recovery summary:",
+		"- What Colin is doing next: stopping merge automation until the branch is updated for real.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("MergeRecoveryValidationFailure() = %q, want substring %q", got, want)
+		}
+	}
+}

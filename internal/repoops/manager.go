@@ -26,6 +26,14 @@ var (
 	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
 )
 
+type MergeFailureKind string
+
+const (
+	MergeFailureKindTransient    MergeFailureKind = "transient"
+	MergeFailureKindBaseAdvanced MergeFailureKind = "base_advanced"
+	MergeFailureKindManual       MergeFailureKind = "manual"
+)
+
 var codexReviewLogins = []string{
 	"chatgpt-codex-connector",
 	"chatgpt-codex-connector[bot]",
@@ -35,6 +43,7 @@ var codexReviewLogins = []string{
 type Result struct {
 	Branch     string
 	BaseRef    string
+	BaseSHA    string
 	PRNumber   int
 	PRURL      string
 	PRState    string
@@ -45,6 +54,50 @@ type Result struct {
 	PRRepoName string
 	Commit     string
 	Action     string
+}
+
+// MergeFailure classifies a merge failure so callers can choose between retrying and human handoff.
+type MergeFailure struct {
+	Kind            MergeFailureKind
+	Err             error
+	ExpectedBaseSHA string
+	CurrentBaseSHA  string
+}
+
+func (m *MergeFailure) Error() string {
+	if m == nil || m.Err == nil {
+		return ""
+	}
+	return m.Err.Error()
+}
+
+func (m *MergeFailure) Unwrap() error {
+	if m == nil {
+		return nil
+	}
+	return m.Err
+}
+
+func IsMergeFailureKind(err error, kind MergeFailureKind) bool {
+	var mergeFailure *MergeFailure
+	return errors.As(err, &mergeFailure) && mergeFailure.Kind == kind
+}
+
+// MergeRecoveryValidation reports whether a claimed merge recovery actually updated the branch for merge retry.
+type MergeRecoveryValidation struct {
+	PreviousHeadSHA      string
+	CurrentHeadSHA       string
+	RemoteHeadSHA        string
+	ExpectedBaseSHA      string
+	CurrentBaseSHA       string
+	MergeBaseSHA         string
+	HeadChanged          bool
+	RemoteHeadMatches    bool
+	ContainsExpectedBase bool
+}
+
+func (v MergeRecoveryValidation) Valid() bool {
+	return v.HeadChanged && v.RemoteHeadMatches && v.ContainsExpectedBase
 }
 
 // ReviewContext captures the PR, unresolved review threads, and Codex review signals for an issue branch.
@@ -163,6 +216,7 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		Branch:  branch,
 		BaseRef: target.BaseRef,
 	}
+	result.BaseSHA = m.captureBaseSHA(ctx, workspacePath, target.BaseRef)
 
 	dirty, err := m.isDirty(ctx, workspacePath)
 	if err != nil {
@@ -281,7 +335,7 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 			return result, err
 		}
 		if refreshed == nil || refreshed.Mergeable == nil || !*refreshed.Mergeable {
-			return result, err
+			return result, m.classifyMergeFailure(ctx, workspacePath, result, refreshed, err)
 		}
 
 		m.logger.Info(
@@ -305,6 +359,32 @@ func isRetryableNotMergeableError(err error) bool {
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(message, "pull request is not mergeable") || strings.Contains(message, "not mergeable")
+}
+
+func (m *Manager) classifyMergeFailure(ctx context.Context, workspacePath string, result Result, refreshed *repohost.PullRequest, err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	currentBaseSHA := strings.TrimSpace(m.captureBaseSHA(ctx, workspacePath, result.BaseRef))
+	kind := MergeFailureKindManual
+	switch {
+	case strings.Contains(message, "base branch was modified"):
+		kind = MergeFailureKindBaseAdvanced
+	case strings.Contains(message, "merge commit cannot be cleanly created"),
+		strings.Contains(message, "resolve the merge conflicts locally"):
+		kind = MergeFailureKindManual
+	case refreshed == nil || refreshed.Mergeable == nil:
+		kind = MergeFailureKindTransient
+	case strings.TrimSpace(result.BaseSHA) != "" && currentBaseSHA != "" && currentBaseSHA != strings.TrimSpace(result.BaseSHA):
+		kind = MergeFailureKindBaseAdvanced
+	}
+	return &MergeFailure{
+		Kind:            kind,
+		Err:             err,
+		ExpectedBaseSHA: strings.TrimSpace(result.BaseSHA),
+		CurrentBaseSHA:  currentBaseSHA,
+	}
 }
 
 // ReviewContext returns the current PR and unresolved review threads for the issue branch.
@@ -467,6 +547,151 @@ func (m *Manager) revParse(ctx context.Context, workspacePath string, ref string
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func (m *Manager) captureBaseSHA(ctx context.Context, workspacePath string, baseRef string) string {
+	baseRef = strings.TrimSpace(baseRef)
+	if baseRef == "" {
+		return ""
+	}
+	remoteName := strings.TrimSpace(m.cfg.Repo.RemoteName)
+	if remoteName != "" {
+		if sha, err := m.remoteRefSHA(ctx, workspacePath, remoteName, baseRef); err == nil {
+			return sha
+		}
+	}
+	candidates := []string{
+		strings.TrimSpace(m.cfg.Repo.RemoteName) + "/" + baseRef,
+		baseRef,
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if sha, err := m.revParse(ctx, workspacePath, candidate); err == nil {
+			return sha
+		}
+	}
+	return ""
+}
+
+func (m *Manager) mergeBase(ctx context.Context, workspacePath, left, right string) (string, error) {
+	out, err := m.run(ctx, workspacePath, 15*time.Second, "git", "merge-base", left, right)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (m *Manager) isAncestorCommit(ctx context.Context, workspacePath, ancestor, descendant string) (bool, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = workspacePath
+	output, err := cmd.CombinedOutput()
+	if cmdCtx.Err() == context.DeadlineExceeded {
+		return false, fmt.Errorf("git merge-base --is-ancestor timeout: %w", cmdCtx.Err())
+	}
+	if err == nil {
+		return true, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+
+	m.logger.Warn(
+		"repo command failed",
+		"command", commandString("git", []string{"merge-base", "--is-ancestor", ancestor, descendant}),
+		"workspace_path", workspacePath,
+		"error", err,
+		"output", truncateOutput(string(output)),
+	)
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w: %s", ancestor, descendant, err, truncateOutput(string(output)))
+}
+
+// ValidateMergeRecovery verifies that a reported merge recovery actually advanced the branch and incorporated the expected base commit.
+func (m *Manager) ValidateMergeRecovery(ctx context.Context, workspacePath string, before Result, after Result) (MergeRecoveryValidation, error) {
+	branch := strings.TrimSpace(after.Branch)
+	if branch == "" {
+		branch = strings.TrimSpace(before.Branch)
+	}
+
+	currentHead := strings.TrimSpace(after.Commit)
+	if currentHead == "" {
+		head, err := m.revParse(ctx, workspacePath, "HEAD")
+		if err != nil {
+			return MergeRecoveryValidation{}, fmt.Errorf("resolve repaired branch head: %w", err)
+		}
+		currentHead = head
+	}
+
+	currentBaseSHA := strings.TrimSpace(after.BaseSHA)
+	if currentBaseSHA == "" {
+		baseRef := strings.TrimSpace(after.BaseRef)
+		if baseRef == "" {
+			baseRef = strings.TrimSpace(before.BaseRef)
+		}
+		currentBaseSHA = strings.TrimSpace(m.captureBaseSHA(ctx, workspacePath, baseRef))
+	}
+
+	remoteHeadSHA := ""
+	remoteName := strings.TrimSpace(m.cfg.Repo.RemoteName)
+	if remoteName != "" && branch != "" {
+		sha, err := m.remoteRefSHA(ctx, workspacePath, remoteName, branch)
+		if err != nil {
+			return MergeRecoveryValidation{}, fmt.Errorf("resolve remote branch head for %s/%s: %w", remoteName, branch, err)
+		}
+		remoteHeadSHA = strings.TrimSpace(sha)
+	}
+
+	mergeBaseSHA := ""
+	if currentBaseSHA != "" && currentHead != "" {
+		mergeBase, err := m.mergeBase(ctx, workspacePath, currentHead, currentBaseSHA)
+		if err != nil {
+			return MergeRecoveryValidation{}, fmt.Errorf("resolve merge-base for repaired branch: %w", err)
+		}
+		mergeBaseSHA = mergeBase
+	}
+
+	containsExpectedBase := true
+	expectedBase := strings.TrimSpace(before.BaseSHA)
+	if expectedBase != "" && currentHead != "" {
+		ok, err := m.isAncestorCommit(ctx, workspacePath, expectedBase, currentHead)
+		if err != nil {
+			return MergeRecoveryValidation{}, fmt.Errorf("check repaired branch ancestry: %w", err)
+		}
+		containsExpectedBase = ok
+	}
+
+	validation := MergeRecoveryValidation{
+		PreviousHeadSHA:      strings.TrimSpace(before.Commit),
+		CurrentHeadSHA:       currentHead,
+		RemoteHeadSHA:        remoteHeadSHA,
+		ExpectedBaseSHA:      expectedBase,
+		CurrentBaseSHA:       currentBaseSHA,
+		MergeBaseSHA:         mergeBaseSHA,
+		HeadChanged:          strings.TrimSpace(before.Commit) != "" && currentHead != "" && strings.TrimSpace(before.Commit) != currentHead,
+		RemoteHeadMatches:    remoteHeadSHA == "" || currentHead == "" || remoteHeadSHA == currentHead,
+		ContainsExpectedBase: containsExpectedBase,
+	}
+
+	return validation, nil
+}
+
+func (m *Manager) remoteRefSHA(ctx context.Context, workspacePath, remoteName, ref string) (string, error) {
+	out, err := m.run(ctx, workspacePath, 15*time.Second, "git", "ls-remote", remoteName, "refs/heads/"+ref)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("missing ls-remote output for %s/%s", remoteName, ref)
+	}
+	return fields[0], nil
 }
 
 func (m *Manager) isDirty(ctx context.Context, workspacePath string) (bool, error) {

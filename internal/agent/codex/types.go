@@ -89,6 +89,7 @@ type Result struct {
 	Status           string
 	Summary          string
 	PR               *domain.PullRequestRef
+	RetryDelay       time.Duration
 	ThreadsHandled   int
 	ThreadsRemaining int
 	Err              error

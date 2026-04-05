@@ -69,6 +69,8 @@ const (
 	metadataOutcomePlan          = "exec_plan_conflict"
 	metadataOutcomePlanInvalid   = "exec_plan_invalid"
 	metadataOutcomeMerged        = "merged"
+	maxAutomaticMergeRetries     = 2
+	mergeRetryDelay              = 30 * time.Second
 )
 
 // NewRunner constructs a Runner bound to the current workflow, tracker, and workspace manager.
@@ -253,8 +255,14 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 		result, err := r.repo.Merge(ctx, issue, ws.Path)
 		if err != nil {
+			if repoops.IsMergeFailureKind(err, repoops.MergeFailureKindTransient) {
+				if attemptNumber(attempt) < maxAutomaticMergeRetries {
+					return r.handleBlockedMergeRetry(ctx, issue, ws.Path, result, "", err)
+				}
+				return r.handleMergeFailure(ctx, issue, ws.Path, result, err)
+			}
 			if isHumanMergeFailure(err) {
-				return r.handleRecoverableMergeFailure(ctx, issue, ws.Path, emit, result, err)
+				return r.handleRecoverableMergeFailure(ctx, issue, ws.Path, emit, result, err, attemptNumber(attempt))
 			}
 			return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 		}
@@ -598,6 +606,11 @@ func mergeReviewBlockedStatus(previousState string, currentState string) string 
 	return "succeeded"
 }
 
+func isAutomaticMergeRetryFailure(err error) bool {
+	return repoops.IsMergeFailureKind(err, repoops.MergeFailureKindTransient) ||
+		repoops.IsMergeFailureKind(err, repoops.MergeFailureKindBaseAdvanced)
+}
+
 func (r *Runner) handleMergeFailure(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, err error) Result {
 	reviewState := mergeReviewState(r.cfg)
 	updated, updateErr := r.moveIssueToState(ctx, issue, reviewState)
@@ -621,7 +634,58 @@ func (r *Runner) handleMergeFailure(ctx context.Context, issue domain.Issue, wor
 	}
 }
 
-func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain.Issue, workspacePath string, emit func(Event), result repoops.Result, mergeErr error) Result {
+func (r *Runner) handleBlockedMergeRetry(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, recoverySummary string, mergeErr error) Result {
+	issue = r.persistActualBranchNameValueBestEffort(ctx, issue, result.Branch)
+	issue.PullRequest = &domain.PullRequestRef{
+		Number:          result.PRNumber,
+		URL:             result.PRURL,
+		State:           result.PRState,
+		HeadRef:         result.PRHeadRef,
+		BaseRef:         result.PRBaseRef,
+		Backend:         result.PRBackend,
+		RepositoryOwner: result.PROwner,
+		RepositoryName:  result.PRRepoName,
+	}
+	return Result{
+		Issue:         issue,
+		RunType:       RunTypeMerge,
+		WorkspacePath: workspacePath,
+		Status:        "blocked",
+		Summary:       buildMergeRetrySummary(result, mergeErr, recoverySummary),
+		PR:            pullRequestRef(*issue.PullRequest),
+		RetryDelay:    mergeRetryDelay,
+	}
+}
+
+func (r *Runner) handleInvalidMergeRecovery(ctx context.Context, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, validation repoops.MergeRecoveryValidation, recoverySummary string) Result {
+	reviewState := mergeReviewState(r.cfg)
+	updated, updateErr := r.moveIssueToState(ctx, issue, reviewState)
+	if updateErr != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: updateErr}
+	}
+	updated = r.persistActualBranchNameValueBestEffort(ctx, updated, result.Branch)
+	updated = r.persistIssueMetadataBestEffort(ctx, updated, codexMetadata(updated, RunTypeMerge, metadataOutcomeReady, ""))
+
+	return Result{
+		Issue:         updated,
+		RunType:       RunTypeMerge,
+		WorkspacePath: workspacePath,
+		Status:        "succeeded",
+		Summary:       buildMergeRecoveryValidationFailureSummary(result, reviewState, mergeErr, validation, recoverySummary),
+		PR: &domain.PullRequestRef{
+			Number:          result.PRNumber,
+			URL:             result.PRURL,
+			State:           result.PRState,
+			HeadRef:         result.PRHeadRef,
+			BaseRef:         result.PRBaseRef,
+			Backend:         result.PRBackend,
+			RepositoryOwner: result.PROwner,
+			RepositoryName:  result.PRRepoName,
+		},
+	}
+}
+
+func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain.Issue, workspacePath string, emit func(Event), result repoops.Result, mergeErr error, attempt int) Result {
 	r.logger.Info(
 		"merge conflict detected; starting codex merge recovery",
 		"issue_id", issue.ID,
@@ -683,6 +747,13 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 		RepositoryOwner: published.PROwner,
 		RepositoryName:  published.PRRepoName,
 	}
+	validation, err := r.repo.ValidateMergeRecovery(ctx, workspacePath, result, published)
+	if err != nil {
+		return r.handleMergeRecoveryFailure(ctx, issue, workspacePath, published, mergeErr, fmt.Sprintf("failed to validate the repaired branch before retrying merge: %v", err), recoverySummary)
+	}
+	if !validation.Valid() {
+		return r.handleInvalidMergeRecovery(ctx, issue, workspacePath, published, mergeErr, validation, recoverySummary)
+	}
 
 	reviewContext, err := r.repo.ReviewContext(ctx, issue, workspacePath)
 	if err != nil {
@@ -722,6 +793,9 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 
 	merged, err := r.repo.MergePullRequest(ctx, workspacePath, published)
 	if err != nil {
+		if isAutomaticMergeRetryFailure(err) && attempt < maxAutomaticMergeRetries {
+			return r.handleBlockedMergeRetry(ctx, issue, workspacePath, merged, recoverySummary, err)
+		}
 		if isHumanMergeFailure(err) {
 			return r.handleMergeFailure(ctx, issue, workspacePath, merged, err)
 		}
@@ -1454,6 +1528,23 @@ func buildMergeFailureSummary(result repoops.Result, reviewState string, err err
 	}, result.Branch, result.BaseRef, reason, reviewState)
 }
 
+func buildMergeRetrySummary(result repoops.Result, err error, recoverySummary string) string {
+	reason := "GitHub is still recalculating the pull request mergeability."
+	if repoops.IsMergeFailureKind(err, repoops.MergeFailureKindBaseAdvanced) {
+		reason = fmt.Sprintf("the base branch `%s` moved again after Colin prepared the branch for merge", result.BaseRef)
+	}
+	return userworkflow.MergeRetrying(domain.PullRequestRef{
+		Number:          result.PRNumber,
+		URL:             result.PRURL,
+		State:           result.PRState,
+		HeadRef:         result.PRHeadRef,
+		BaseRef:         result.PRBaseRef,
+		Backend:         result.PRBackend,
+		RepositoryOwner: result.PROwner,
+		RepositoryName:  result.PRRepoName,
+	}, result.Branch, result.BaseRef, reason, recoverySummary)
+}
+
 func buildMergeRecoveryPrompt(issue domain.Issue, result repoops.Result, mergeErr error) string {
 	var b strings.Builder
 	b.WriteString("Repair the merge conflict for the Linear issue below so Colin can retry the GitHub merge.\n\n")
@@ -1514,9 +1605,54 @@ func buildMergeRecoveryFailureSummary(result repoops.Result, reviewState string,
 	}, result.Branch, result.BaseRef, mergeErr, reason, reviewState, recoveryOutput)
 }
 
+func buildMergeRecoveryValidationFailureSummary(result repoops.Result, reviewState string, mergeErr error, validation repoops.MergeRecoveryValidation, recoverySummary string) string {
+	reason := "Codex reported the merge recovery as ready, but Colin could not verify that the branch was actually updated for merge retry."
+	if !validation.HeadChanged && validation.PreviousHeadSHA != "" && validation.CurrentHeadSHA != "" {
+		reason = fmt.Sprintf("Codex reported the merge recovery as ready, but the branch head did not change (%s -> %s).", validation.PreviousHeadSHA, validation.CurrentHeadSHA)
+	} else if !validation.RemoteHeadMatches && validation.CurrentHeadSHA != "" && validation.RemoteHeadSHA != "" {
+		reason = fmt.Sprintf("Codex reported the merge recovery as ready, but the pushed branch head (%s) does not match origin (%s).", validation.CurrentHeadSHA, validation.RemoteHeadSHA)
+	} else if !validation.ContainsExpectedBase && validation.ExpectedBaseSHA != "" {
+		reason = fmt.Sprintf("Codex reported the merge recovery as ready, but the branch still does not contain the expected base commit %s.", validation.ExpectedBaseSHA)
+	}
+	evidence := mergeRecoveryValidationEvidence(validation)
+	return userworkflow.MergeRecoveryValidationFailure(domain.PullRequestRef{
+		Number:          result.PRNumber,
+		URL:             result.PRURL,
+		State:           result.PRState,
+		HeadRef:         result.PRHeadRef,
+		BaseRef:         result.PRBaseRef,
+		Backend:         result.PRBackend,
+		RepositoryOwner: result.PROwner,
+		RepositoryName:  result.PRRepoName,
+	}, result.Branch, result.BaseRef, reviewState, reason, recoverySummary, evidence, mergeErr)
+}
+
 func buildMergeRecoveryReviewBlockedSummary(cfg domain.ServiceConfig, recoverySummary string, reviewContext repoops.ReviewContext) string {
 	block := mergeReviewBlockDisposition(cfg, reviewContext)
 	return userworkflow.MergeRecoveryReviewBlocked(reviewContext.PullRequest, recoverySummary, block.WaitingForPickup, block.PendingApproval, block.ThreadCount)
+}
+
+func mergeRecoveryValidationEvidence(validation repoops.MergeRecoveryValidation) []string {
+	var evidence []string
+	if validation.PreviousHeadSHA != "" {
+		evidence = append(evidence, fmt.Sprintf("- Branch head before recovery: `%s`", validation.PreviousHeadSHA))
+	}
+	if validation.CurrentHeadSHA != "" {
+		evidence = append(evidence, fmt.Sprintf("- Branch head after recovery: `%s`", validation.CurrentHeadSHA))
+	}
+	if validation.RemoteHeadSHA != "" {
+		evidence = append(evidence, fmt.Sprintf("- Branch head on origin: `%s`", validation.RemoteHeadSHA))
+	}
+	if validation.ExpectedBaseSHA != "" {
+		evidence = append(evidence, fmt.Sprintf("- Expected base commit before retry: `%s`", validation.ExpectedBaseSHA))
+	}
+	if validation.CurrentBaseSHA != "" {
+		evidence = append(evidence, fmt.Sprintf("- Current base commit: `%s`", validation.CurrentBaseSHA))
+	}
+	if validation.MergeBaseSHA != "" {
+		evidence = append(evidence, fmt.Sprintf("- Current merge-base: `%s`", validation.MergeBaseSHA))
+	}
+	return evidence
 }
 
 func buildNoReviewableChangesSummary(targetState string) string {
