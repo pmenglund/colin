@@ -95,6 +95,10 @@ func TestObservabilityServerRoutes(t *testing.T) {
 					Message:   "refresh complete",
 				}},
 			}},
+			CodexTotals: domain.Totals{
+				TotalTokens:    5000,
+				SecondsRunning: 420,
+			},
 		}, nil
 	}, func(context.Context, string) (domain.Issue, error) {
 		execPlanUpdatedAt := time.Date(2026, 3, 28, 12, 34, 54, 0, time.UTC)
@@ -213,8 +217,20 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		if !strings.Contains(text, `data-testid="refresh-status"`) {
 			t.Fatalf("missing refresh status indicator: %s", text)
 		}
+		if !strings.Contains(text, `data-testid="snapshot-age"`) {
+			t.Fatalf("missing snapshot age indicator: %s", text)
+		}
 		if !strings.Contains(text, `data-refresh-status="live"`) {
 			t.Fatalf("missing live refresh status: %s", text)
+		}
+		if !strings.Contains(text, `5,000`) {
+			t.Fatalf("missing comma-formatted total tokens: %s", text)
+		}
+		if !strings.Contains(text, `Runtime`) || !strings.Contains(text, `7m`) {
+			t.Fatalf("missing runtime stat: %s", text)
+		}
+		if strings.Contains(text, `API snapshot`) {
+			t.Fatalf("unexpected API snapshot card: %s", text)
 		}
 		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
 			t.Fatalf("missing shutdown alert: %s", text)
@@ -242,6 +258,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(text, `data-testid="refresh-status"`) {
 			t.Fatalf("missing refresh status indicator: %s", text)
+		}
+		if !strings.Contains(text, `data-testid="snapshot-age"`) {
+			t.Fatalf("missing snapshot age indicator: %s", text)
 		}
 		if !strings.Contains(text, `data-testid="shutdown-alert"`) {
 			t.Fatalf("missing shutdown alert: %s", text)

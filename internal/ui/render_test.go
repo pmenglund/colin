@@ -94,12 +94,14 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-live-refresh-mode="fragment"`,
 		`data-testid="refresh-button"`,
 		`data-testid="refresh-status"`,
+		`data-testid="snapshot-age"`,
 		`data-testid="shutdown-alert"`,
 		`data-testid="shutdown-alert-badge"`,
 		`data-refresh-status="live"`,
 		`data-generated-at="2026-03-28T12:00:00Z"`,
 		`title="Last successful update at 2026-03-28T12:00:00Z"`,
 		`Live data`,
+		`0s old`,
 		`Warning`,
 		`Shutdown in progress`,
 		`Colin will not start new work`,
@@ -143,20 +145,24 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Merge`,
 		`Issue is approved and waiting to be merged.`,
 		`data-testid="rate-limits-codex"`,
-		`data-testid="rate-limit-codex-primary"`,
-		`data-testid="rate-limit-codex-secondary"`,
+		`data-testid="rate-limits-codex-primary"`,
+		`data-testid="rate-limits-codex-secondary"`,
 		`data-testid="rate-limits-linear"`,
+		`data-testid="rate-limits-linear-linear_requests"`,
 		`Codex`,
 		`Linear`,
 		`aria-label="Codex 5h window used"`,
 		`aria-valuenow="5"`,
 		`aria-label="Codex 1w window used"`,
 		`aria-valuenow="9"`,
+		`aria-label="Linear requests used"`,
+		`aria-valuenow="75"`,
 		`5h`,
 		`1w`,
+		`Requests`,
 		`resets in 5h32m`,
 		`resets in 1w`,
-		`resets in 5m, 25 of 100 remaining next request in 3s`,
+		`25 of 100 remaining next request in 3s`,
 		`data-local-time="true"`,
 		`data-timestamp="2026-03-28T11:58:01Z"`,
 		`11:58:01 UTC`,
@@ -180,9 +186,8 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	if strings.Contains(html, "Tracked Issues") {
 		t.Fatalf("render should not include tracked issues summary card\n%s", html)
 	}
-
-	if strings.Index(html, "Running tasks") > strings.Index(html, "API snapshot") {
-		t.Fatalf("API snapshot should render after running tasks:\n%s", html)
+	if strings.Contains(html, "API snapshot") {
+		t.Fatalf("render should not include API snapshot card\n%s", html)
 	}
 	if strings.Contains(html, `5% used of 5h window which resets in 5h32m`) {
 		t.Fatalf("codex rate limits should render progress bars instead of old text rows\n%s", html)
@@ -219,7 +224,7 @@ func TestRateLimitPanelKeepsCodexBucketWhenUsageUnavailable(t *testing.T) {
 
 	for _, want := range []string{
 		`data-testid="rate-limits-codex"`,
-		`data-testid="rate-limit-codex-primary"`,
+		`data-testid="rate-limits-codex-primary"`,
 		`aria-label="Codex 5h window used"`,
 		`aria-valuetext="usage unavailable"`,
 		`usage unavailable`,
@@ -359,11 +364,33 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	if !strings.Contains(html, `data-testid="refresh-status"`) {
 		t.Fatalf("fragment missing refresh status badge:\n%s", html)
 	}
+	if !strings.Contains(html, `data-testid="snapshot-age"`) {
+		t.Fatalf("fragment missing snapshot age badge:\n%s", html)
+	}
 	if !strings.Contains(html, `data-refresh-status="live"`) {
 		t.Fatalf("fragment missing live refresh status:\n%s", html)
 	}
 	if !strings.Contains(html, `data-testid="shutdown-alert"`) {
 		t.Fatalf("fragment missing shutdown alert:\n%s", html)
+	}
+	if strings.Contains(html, "API snapshot") {
+		t.Fatalf("fragment should not render API snapshot:\n%s", html)
+	}
+}
+
+func TestFormatIntAddsCommas(t *testing.T) {
+	t.Parallel()
+
+	if got := formatInt(1234567890); got != "1,234,567,890" {
+		t.Fatalf("formatInt() = %q, want %q", got, "1,234,567,890")
+	}
+}
+
+func TestFormatRuntimeSecondsUsesCompactDuration(t *testing.T) {
+	t.Parallel()
+
+	if got := formatRuntimeSeconds((5 * time.Hour).Seconds() + (3 * time.Minute).Seconds()); got != "5h3m" {
+		t.Fatalf("formatRuntimeSeconds() = %q, want %q", got, "5h3m")
 	}
 }
 
