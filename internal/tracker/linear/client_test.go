@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -12,12 +13,61 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/tracker"
 )
 
 func init() {
 	builtin.Register()
+}
+
+func mustTestRepoAdapter(t *testing.T) repohost.Adapter {
+	t.Helper()
+
+	adapter, err := repohost.Lookup("github")
+	if err != nil {
+		t.Fatalf("repohost.Lookup() error = %v", err)
+	}
+	return adapter
+}
+
+type fakeAttachmentAdapter struct {
+	kind repohost.HostKind
+}
+
+func (a fakeAttachmentAdapter) Kind() repohost.HostKind { return a.kind }
+func (a fakeAttachmentAdapter) DisplayName() string     { return "Attachment Test" }
+func (a fakeAttachmentAdapter) CurrentToken() string    { return "" }
+func (a fakeAttachmentAdapter) IsValidToken(string) bool {
+	return true
+}
+func (a fakeAttachmentAdapter) RecommendedEnvVar() string    { return "ATTACHMENT_TEST_TOKEN" }
+func (a fakeAttachmentAdapter) ValidateTokenMessage() string { return "" }
+func (a fakeAttachmentAdapter) ParseRepositoryURL(raw string) (repohost.Repository, error) {
+	return repohost.Repository{}, repohost.ErrUnsupportedRepositoryURL
+}
+func (a fakeAttachmentAdapter) ParsePullRequestURL(raw string) (string, string, int, bool) {
+	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "attachment://"))
+	parts := strings.SplitN(raw, "/", 2)
+	if len(parts) != 2 {
+		return "", "", 0, false
+	}
+	prParts := strings.SplitN(parts[1], "#", 2)
+	if len(prParts) != 2 {
+		return "", "", 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(prParts[1]))
+	if err != nil || number <= 0 {
+		return "", "", 0, false
+	}
+	owner := strings.TrimSpace(parts[0])
+	repo := strings.TrimSpace(prParts[0])
+	return owner, repo, number, true
+}
+func (a fakeAttachmentAdapter) RenderSetupInstructions(repohost.Repository, string) string { return "" }
+func (a fakeAttachmentAdapter) NewClient(domain.ServiceConfig, *slog.Logger) (repohost.Client, error) {
+	return nil, nil
 }
 
 func TestNewDoesNotValidateWorkflowStates(t *testing.T) {
@@ -621,10 +671,11 @@ func TestCreateIssueComment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint:  server.URL,
-		apiKey:    "token",
-		uiBaseURL: "https://colin.example.test/root/",
-		client:    &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		uiBaseURL:   "https://colin.example.test/root/",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	commentID, err := client.CreateIssueComment(context.Background(), "issue-1", "hello world")
@@ -668,10 +719,11 @@ func TestCreateCommentReply(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint:  server.URL,
-		apiKey:    "token",
-		uiBaseURL: "https://colin.example.test/root/",
-		client:    &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		uiBaseURL:   "https://colin.example.test/root/",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	commentID, err := client.CreateCommentReply(context.Background(), "issue-1", "comment-1", "reply")
@@ -744,6 +796,7 @@ func TestEnsureProjectIssueWebhookCreatesMissingWebhook(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -833,6 +886,7 @@ func TestEnsureProjectIssueWebhookLeavesMatchingWebhookUnchanged(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -930,6 +984,7 @@ func TestEnsureProjectIssueWebhookReplacesManagedWebhookMissingIssueLabelSubscri
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -1029,6 +1084,7 @@ func TestEnsureProjectIssueWebhookReplacesManagedWebhookAtOldURL(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -1109,10 +1165,11 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint:  server.URL,
-		apiKey:    "token",
-		uiBaseURL: "https://colin.example.test/root/",
-		client:    &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		uiBaseURL:   "https://colin.example.test/root/",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
@@ -1131,6 +1188,9 @@ func TestUpsertIssueMetadata(t *testing.T) {
 		PullRequestState:        "OPEN",
 		PullRequestHeadRef:      "pmenglund/colin-94",
 		PullRequestBaseRef:      "main",
+		PullRequestBackend:      "github",
+		PullRequestRepoOwner:    "pmenglund",
+		PullRequestRepoName:     "colin",
 		LoopFailureFingerprint:  "review_publish\nReview\nno commits",
 		LoopFailureCount:        2,
 		PausedAt:                &now,
@@ -1188,6 +1248,15 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotMetadata["pull_request_base_ref"] != "main" {
 		t.Fatalf("pull_request_base_ref = %v, want main", gotMetadata["pull_request_base_ref"])
 	}
+	if gotMetadata["pull_request_backend"] != "github" {
+		t.Fatalf("pull_request_backend = %v, want github", gotMetadata["pull_request_backend"])
+	}
+	if gotMetadata["pull_request_repo_owner"] != "pmenglund" {
+		t.Fatalf("pull_request_repo_owner = %v, want pmenglund", gotMetadata["pull_request_repo_owner"])
+	}
+	if gotMetadata["pull_request_repo_name"] != "colin" {
+		t.Fatalf("pull_request_repo_name = %v, want colin", gotMetadata["pull_request_repo_name"])
+	}
 	if gotMetadata["loop_failure_fingerprint"] != "review_publish\nReview\nno commits" {
 		t.Fatalf("loop_failure_fingerprint = %v", gotMetadata["loop_failure_fingerprint"])
 	}
@@ -1241,6 +1310,15 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.PullRequestHeadRef != "pmenglund/colin-94" {
 		t.Fatalf("metadata.PullRequestHeadRef = %q, want %q", metadata.PullRequestHeadRef, "pmenglund/colin-94")
+	}
+	if metadata.PullRequestBackend != "github" {
+		t.Fatalf("metadata.PullRequestBackend = %q, want github", metadata.PullRequestBackend)
+	}
+	if metadata.PullRequestRepoOwner != "pmenglund" {
+		t.Fatalf("metadata.PullRequestRepoOwner = %q, want pmenglund", metadata.PullRequestRepoOwner)
+	}
+	if metadata.PullRequestRepoName != "colin" {
+		t.Fatalf("metadata.PullRequestRepoName = %q, want colin", metadata.PullRequestRepoName)
 	}
 	if metadata.LoopFailureCount != 2 {
 		t.Fatalf("metadata.LoopFailureCount = %d, want 2", metadata.LoopFailureCount)
@@ -1303,10 +1381,11 @@ func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint:  server.URL,
-		apiKey:    "token",
-		uiBaseURL: "http://127.0.0.1:8888",
-		client:    &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		uiBaseURL:   "http://127.0.0.1:8888",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 	client.SetUIBaseURLResolver(func(context.Context) string {
 		return "https://colin.tail.example.ts.net"
@@ -1397,10 +1476,11 @@ func TestUpsertIssueMetadataUpdatesExistingAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint:  server.URL,
-		apiKey:    "token",
-		uiBaseURL: "https://colin.example.test/root/",
-		client:    &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		uiBaseURL:   "https://colin.example.test/root/",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
@@ -1505,10 +1585,11 @@ func TestUpsertIssueMetadataUpdatesNewestDuplicateAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint:  server.URL,
-		apiKey:    "token",
-		uiBaseURL: "https://colin.example.test/root/",
-		client:    &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		uiBaseURL:   "https://colin.example.test/root/",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
@@ -1574,10 +1655,11 @@ func TestEnsureIssueLabelCreatesMissingLabel(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
-		labelIDs: map[string]string{},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+		labelIDs:    map[string]string{},
 	}
 
 	if err := client.EnsureIssueLabel(context.Background(), domain.PausedIssueLabel); err != nil {
@@ -1640,10 +1722,11 @@ func TestAddIssueLabelUsesExistingLabelID(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
-		labelIDs: map[string]string{},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+		labelIDs:    map[string]string{},
 	}
 
 	if err := client.AddIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1709,10 +1792,11 @@ func TestRemoveIssueLabelUsesExistingLabelID(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
-		labelIDs: map[string]string{},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+		labelIDs:    map[string]string{},
 	}
 
 	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1753,10 +1837,11 @@ func TestRemoveIssueLabelNoopWhenLabelMissing(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
-		labelIDs: map[string]string{},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+		labelIDs:    map[string]string{},
 	}
 
 	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1816,10 +1901,11 @@ func TestRemoveIssueLabelNoopWhenIssueAlreadyLacksLabel(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
-		labelIDs: map[string]string{},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+		labelIDs:    map[string]string{},
 	}
 
 	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1880,10 +1966,11 @@ func TestRemoveIssueLabelReturnsMixedGraphQLErrors(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
-		labelIDs: map[string]string{},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
+		labelIDs:    map[string]string{},
 	}
 
 	err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel)
@@ -1954,9 +2041,10 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 3, 29, 17, 5, 0, 0, time.UTC)
@@ -2059,9 +2147,10 @@ func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
@@ -2143,9 +2232,10 @@ func TestUpsertIssueExecPlanRejectsDuplicates(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	_, err := client.UpsertIssueExecPlan(context.Background(), "issue-1", domain.ExecPlan{Body: "# Plan\n\nDetails."})
@@ -2211,9 +2301,10 @@ func TestUpdateIssueState(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	if err := client.UpdateIssueState(context.Background(), "issue-1", "Review"); err != nil {
@@ -2254,9 +2345,10 @@ func TestUpdateIssueStateUnknownState(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	err := client.UpdateIssueState(context.Background(), "issue-1", "Review")
@@ -2285,6 +2377,7 @@ func TestCurrentRateLimitsCapturesRequestHeaders(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2351,9 +2444,10 @@ func TestResolveGitAutomationStatePrefersBranchSpecificMatch(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		endpoint: server.URL,
-		apiKey:   "token",
-		client:   &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: mustTestRepoAdapter(t),
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
 	stateName, ok, err := client.ResolveGitAutomationState(context.Background(), "issue-1", "merge", "main")
@@ -2484,6 +2578,7 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2583,6 +2678,7 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2696,6 +2792,7 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2812,6 +2909,7 @@ func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) 
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2901,6 +2999,7 @@ func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttach
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2979,6 +3078,7 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2999,8 +3099,81 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 	if issues[0].AttachedPullRequests[0].Number != 11 {
 		t.Fatalf("AttachedPullRequests[0].Number = %d, want 11", issues[0].AttachedPullRequests[0].Number)
 	}
+	if issues[0].AttachedPullRequests[0].Backend != "github" {
+		t.Fatalf("AttachedPullRequests[0].Backend = %q, want github", issues[0].AttachedPullRequests[0].Backend)
+	}
+	if issues[0].AttachedPullRequests[0].RepositoryOwner != "pmenglund" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryOwner = %q, want pmenglund", issues[0].AttachedPullRequests[0].RepositoryOwner)
+	}
+	if issues[0].AttachedPullRequests[0].RepositoryName != "colin" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want colin", issues[0].AttachedPullRequests[0].RepositoryName)
+	}
 	if issues[0].AttachedPullRequests[1].Number != 14 {
 		t.Fatalf("AttachedPullRequests[1].Number = %d, want 14", issues[0].AttachedPullRequests[1].Number)
+	}
+}
+
+func TestNormalizeIssueParsesAttachedPullRequestsWithConfiguredBackend(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{repoAdapter: fakeAttachmentAdapter{kind: "attachmenttest"}}
+	issue, err := client.normalizeIssue(map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-177",
+		"title":      "Normalize pull request attachments",
+		"state":      map[string]any{"name": "Review"},
+		"attachments": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"id":  "attachment-1",
+					"url": "attachment://acme/widgets#17",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeIssue() error = %v", err)
+	}
+	if len(issue.AttachedPullRequests) != 1 {
+		t.Fatalf("len(issue.AttachedPullRequests) = %d, want 1", len(issue.AttachedPullRequests))
+	}
+	got := issue.AttachedPullRequests[0]
+	if got.Backend != "attachmenttest" {
+		t.Fatalf("AttachedPullRequests[0].Backend = %q, want %q", got.Backend, "attachmenttest")
+	}
+	if got.RepositoryOwner != "acme" || got.RepositoryName != "widgets" || got.Number != 17 {
+		t.Fatalf("AttachedPullRequests[0] = %+v, want acme/widgets#17", got)
+	}
+}
+
+func TestNormalizeIssueDedupesAttachedPullRequestsByBackendAndRepository(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{repoAdapter: fakeAttachmentAdapter{kind: "attachmenttest"}}
+	issue, err := client.normalizeIssue(map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-177",
+		"title":      "Keep repository-specific PR references distinct",
+		"state":      map[string]any{"name": "Review"},
+		"attachments": map[string]any{
+			"nodes": []any{
+				map[string]any{"id": "attachment-1", "url": "attachment://acme/widgets#17"},
+				map[string]any{"id": "attachment-2", "url": "attachment://acme/widgets#17"},
+				map[string]any{"id": "attachment-3", "url": "attachment://acme/console#17"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeIssue() error = %v", err)
+	}
+	if len(issue.AttachedPullRequests) != 2 {
+		t.Fatalf("len(issue.AttachedPullRequests) = %d, want 2", len(issue.AttachedPullRequests))
+	}
+	if issue.AttachedPullRequests[0].RepositoryName != "widgets" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want widgets", issue.AttachedPullRequests[0].RepositoryName)
+	}
+	if issue.AttachedPullRequests[1].RepositoryName != "console" {
+		t.Fatalf("AttachedPullRequests[1].RepositoryName = %q, want console", issue.AttachedPullRequests[1].RepositoryName)
 	}
 }
 
@@ -3052,6 +3225,7 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -3134,6 +3308,7 @@ func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
+		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",

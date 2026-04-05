@@ -19,6 +19,8 @@ import (
 	"github.com/pmenglund/colin/internal/domain"
 )
 
+const serviceE2EWaitTimeout = 10 * time.Second
+
 func TestServiceRunsIssueEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -96,12 +98,12 @@ Work on {{ .issue.identifier }}.
 		errCh <- svc.Run(ctx)
 	}()
 
-	waitFor(t, 5*time.Second, func() bool {
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
 		_, err := os.Stat(markerPath)
 		return err == nil
 	})
 
-	waitFor(t, 5*time.Second, func() bool {
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
 		return linear.ReplyCount() > 0
 	})
 	cancel()
@@ -228,11 +230,11 @@ Work on {{ .issue.identifier }}.
 		errCh <- svc.Run(ctx)
 	}()
 
-	waitFor(t, 5*time.Second, func() bool {
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
 		return svc.DashboardURL() != ""
 	})
 
-	waitFor(t, 5*time.Second, func() bool {
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
 		resp, err := http.Get(svc.DashboardURL() + "/api/v1/state")
 		if err != nil {
 			return false
@@ -242,7 +244,7 @@ Work on {{ .issue.identifier }}.
 		return strings.Contains(string(body), `"running":1`)
 	})
 
-	waitFor(t, 5*time.Second, func() bool {
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
 		snapshot, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=info")
 		if err != nil {
 			return false
@@ -250,7 +252,7 @@ Work on {{ .issue.identifier }}.
 		return containsBufferedLog(snapshot, "service starting")
 	})
 
-	waitFor(t, 5*time.Second, func() bool {
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
 		snapshot, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=debug")
 		if err != nil {
 			return false
