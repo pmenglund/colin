@@ -108,7 +108,6 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 	delete(o.running, event.issueID)
 	o.totalTokens.SecondsRunning += time.Since(entry.startedAt).Seconds()
 	event.result.Issue = mergeRunningIssueContext(entry.issue, event.result.Issue)
-	o.applyObservedDashboardIssueTransition(event.result.Issue, entry.issue.State, event.result.Issue.State)
 	if len(entry.outputLog) > 0 {
 		issue := event.result.Issue
 		event.result.Issue = o.persistIssueOutputMetadata(ctx, issue, entry.outputLog)
@@ -133,6 +132,8 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		o.scheduleRetry(event.issueID, entry.identifier, nextAttempt(entry.retryAttempt), "worker stalled", 10*time.Second, entry.comment, true)
 		return
 	}
+
+	o.applyObservedDashboardIssueTransition(event.result.Issue, entry.issue.State, event.result.Issue.State)
 
 	if event.result.Status == "blocked" {
 		event.result.Issue = o.clearLoopState(ctx, event.result.Issue)

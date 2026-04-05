@@ -1742,6 +1742,60 @@ func TestHandleWorkerExitUpdatesDashboardIssueStateCountsImmediately(t *testing.
 	}
 }
 
+func TestHandleWorkerExitDoesNotReverseDashboardStateForExternallyStoppedWorker(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Honor external move", State: "Review"}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo", "In Progress"}},
+			Repo:    domain.RepoConfig{PublishStates: []string{"Review"}},
+		}},
+		running: map[string]*runningEntry{
+			"1": {issue: issue, identifier: issue.Identifier, startedAt: time.Now().Add(-2 * time.Second), stopReason: "non_dispatchable"},
+		},
+		claimed:   map[string]struct{}{"1": {}},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+		issueStates: map[string]int{
+			"In Progress": 0,
+			"Review":      1,
+		},
+		stateIssues: map[string][]domain.StateIssueSummary{
+			"Review": {
+				{ID: "1", Identifier: "ABC-1", Title: "Honor external move"},
+			},
+		},
+		eventCh: make(chan any, 4),
+	}
+
+	orch.handleWorkerExit(context.Background(), workerExitedEvent{
+		issueID: "1",
+		result: codex.Result{
+			Issue:   domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Honor external move", State: "In Progress"},
+			RunType: codex.RunTypeCoding,
+			Status:  "failed",
+		},
+	})
+
+	if got := orch.issueStates["In Progress"]; got != 0 {
+		t.Fatalf("issueStates[In Progress] = %d, want 0", got)
+	}
+	if got := orch.issueStates["Review"]; got != 1 {
+		t.Fatalf("issueStates[Review] = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["In Progress"]); got != 0 {
+		t.Fatalf("len(stateIssues[In Progress]) = %d, want 0", got)
+	}
+	if got := len(orch.stateIssues["Review"]); got != 1 {
+		t.Fatalf("len(stateIssues[Review]) = %d, want 1", got)
+	}
+	if _, ok := orch.claimed["1"]; ok {
+		t.Fatal("expected claim to be released after external stop")
+	}
+}
+
 func TestHandleRetryDropsClaimedIssueAfterShutdownRequest(t *testing.T) {
 	t.Parallel()
 
