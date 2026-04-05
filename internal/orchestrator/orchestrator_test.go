@@ -1986,7 +1986,7 @@ func TestPostRunSummaryPreservesMultilineEvidence(t *testing.T) {
 		comment:    &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"},
 	}
 
-	summary := "What changed: tightened the review summary format.\n\nBefore: completion comments were generic.\nAfter: completion comments explain the change in before/after terms.\nVerification: go test ./internal/automation ./internal/orchestrator"
+	summary := "## Why\n\nTightened the review summary format so handoff comments are easier to scan.\n\n## Before\n\nCompletion comments were generic.\n\n## After\n\nCompletion comments use explicit Why/Before/After/Evidence sections.\n\n## Evidence\n\n```text\ngo test ./internal/automation ./internal/orchestrator\n```"
 	orch.postRunSummary(context.Background(), entry, domain.Issue{ID: "issue-1", Identifier: "COLIN-149"}, summary)
 
 	if len(tracker.commentReplies) != 1 {

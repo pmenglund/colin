@@ -40,7 +40,8 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		"#   channel_id: C0123456789",
 		"#   signing_secret: $SLACK_SIGNING_SECRET",
 		"COLIN_OUTCOME: READY_FOR_REVIEW",
-		"before and after",
+		"## Why",
+		"## Evidence",
 		"Playwright screenshots",
 		"text comments to Linear",
 	} {

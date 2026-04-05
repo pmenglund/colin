@@ -1307,16 +1307,27 @@ func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, base
 }
 
 func defaultPRTemplate() string {
-	return `## Summary
+	return `## Why
 
-Automated changes for {{.issue.identifier}}.
+Explain why this change was made and what reviewer context or motivation matters for this PR.
 
-## Linear
-
-- Issue: {{.issue.identifier}}
+- Linear issue: {{.issue.identifier}}
 {{- if .issue.url }}
 - URL: {{ .issue.url }}
-{{- end }}`
+{{- end }}
+- PR title: {{.pr_title}}
+
+## Before
+
+Describe the reviewer baseline for this PR only.
+
+## After
+
+Describe only the change introduced by this PR.
+
+## Evidence
+
+Prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.`
 }
 
 func prIssueMap(issue domain.Issue) map[string]any {
