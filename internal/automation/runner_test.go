@@ -698,8 +698,8 @@ func TestParseCodingSummaryOutcomeLeavesImplicitSummaryUnclassified(t *testing.T
 func TestBuildReviewThreadReplyBodyKeepsReplyCompact(t *testing.T) {
 	t.Parallel()
 
-	reply := buildReviewThreadReplyBody("Before: old layout\nAfter: new layout\nVerification: go test ./...")
-	want := "[colin] Addressed in the latest update. See the Linear issue comment for the before/after summary and verification details."
+	reply := buildReviewThreadReplyBody("## Before\n\nOld layout.\n\n## After\n\nNew layout.\n\n## Evidence\n\n```text\ngo test ./...\n```")
+	want := "[colin] Addressed in the latest update. See the Linear issue comment for the Why/Before/After/Evidence summary."
 	if reply != want {
 		t.Fatalf("buildReviewThreadReplyBody() = %q, want %q", reply, want)
 	}
