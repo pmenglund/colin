@@ -133,6 +133,8 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, event workerExitedE
 		return
 	}
 
+	o.applyObservedDashboardIssueTransition(event.result.Issue, entry.issue.State, event.result.Issue.State)
+
 	if event.result.Status == "blocked" {
 		event.result.Issue = o.clearLoopState(ctx, event.result.Issue)
 		if strings.TrimSpace(event.result.Summary) != "" {

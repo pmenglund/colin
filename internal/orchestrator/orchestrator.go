@@ -565,8 +565,7 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 	entry.session.LastCodexMessage = event.Message
 	entry.session.LastCodexTimestamp = &event.Timestamp
 	if event.Event == codex.EventIssueStateRefreshed {
-		o.applyObservedIssueStateTransition(event.PrevState, event.State)
-		o.applyObservedStateIssueTransition(entry.issue, event.PrevState, event.State)
+		o.applyObservedDashboardIssueTransition(entry.issue, event.PrevState, event.State)
 	}
 	if event.State != "" {
 		entry.issue.State = event.State
@@ -618,6 +617,11 @@ func (o *Orchestrator) handleCodexEvent(ctx context.Context, event codex.Event) 
 			"total_tokens", entry.session.CodexTotalTokens,
 		)
 	}
+}
+
+func (o *Orchestrator) applyObservedDashboardIssueTransition(issue domain.Issue, previousState string, currentState string) {
+	o.applyObservedIssueStateTransition(previousState, currentState)
+	o.applyObservedStateIssueTransition(issue, previousState, currentState)
 }
 
 func (o *Orchestrator) applyObservedIssueStateTransition(previousState string, currentState string) {

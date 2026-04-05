@@ -78,7 +78,9 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 			o.reviewSync[issue.ID] = state
 			return issue, false
 		}
+		previousState := issue.State
 		issue.State = reviewState
+		o.applyObservedDashboardIssueTransition(issue, previousState, issue.State)
 		issue = o.clearPendingReviewFollowUp(ctx, issue)
 		issue, _ = o.postIssueStatus(ctx, issue, issue.Identifier, nil, "The requested GitHub review thread is no longer unresolved, so Colin returned the issue to `Review` without starting a coding round.")
 		delete(o.reviewSync, issue.ID)
