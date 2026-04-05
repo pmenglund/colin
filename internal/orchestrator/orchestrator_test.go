@@ -1094,6 +1094,66 @@ func TestShouldDispatchRejectsPausedLabel(t *testing.T) {
 	}
 }
 
+func TestShouldDispatchRejectsSecondMergeByDefault(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Repo:  domain.RepoConfig{MergeStates: []string{"Merge"}},
+			Agent: domain.AgentConfig{MaxConcurrentAgents: 4, MaxConcurrentAgentsByState: map[string]int{"merge": 1}},
+		}},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Already merging", State: "Merge"},
+				identifier: "ABC-1",
+			},
+		},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "2",
+		Identifier: "ABC-2",
+		Title:      "Merge candidate",
+		State:      "Merge",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false when one merge is already running")
+	}
+}
+
+func TestShouldDispatchAllowsSecondMergeWhenWorkflowOverridesLimit(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Repo:  domain.RepoConfig{MergeStates: []string{"Merge"}},
+			Agent: domain.AgentConfig{MaxConcurrentAgents: 4, MaxConcurrentAgentsByState: map[string]int{"merge": 2}},
+		}},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Already merging", State: "Merge"},
+				identifier: "ABC-1",
+			},
+		},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if !orch.shouldDispatch(domain.Issue{
+		ID:         "2",
+		Identifier: "ABC-2",
+		Title:      "Merge candidate",
+		State:      "Merge",
+	}) {
+		t.Fatal("shouldDispatch() = false, want true when merge limit is explicitly raised")
+	}
+}
+
 func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	t.Parallel()
 

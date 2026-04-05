@@ -45,6 +45,8 @@ hooks:
 
 agent:
   max_concurrent_agents: 4
+  max_concurrent_agents_by_state:
+    Merge: 1
   max_turns: 8
   max_retry_backoff_ms: 300000
   # When enabled, Colin first decides whether an issue is small enough to one-shot

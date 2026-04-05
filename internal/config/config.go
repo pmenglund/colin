@@ -65,11 +65,13 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			Timeout: 60 * time.Second,
 		},
 		Agent: domain.AgentConfig{
-			MaxConcurrentAgents:        10,
-			MaxRetryBackoff:            5 * time.Minute,
-			MaxConcurrentAgentsByState: map[string]int{},
-			MaxTurns:                   20,
-			CreateExecPlan:             false,
+			MaxConcurrentAgents: 10,
+			MaxRetryBackoff:     5 * time.Minute,
+			MaxConcurrentAgentsByState: map[string]int{
+				StateKey("Merge"): 1,
+			},
+			MaxTurns:       20,
+			CreateExecPlan: false,
 		},
 		Codex: domain.CodexConfig{
 			Command:           "codex app-server",
