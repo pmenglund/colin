@@ -125,6 +125,9 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Agent.MaxTurns != 20 {
 		t.Fatalf("cfg.Agent.MaxTurns = %d", cfg.Agent.MaxTurns)
 	}
+	if got := cfg.Agent.MaxConcurrentAgentsByState[StateKey("Merge")]; got != 1 {
+		t.Fatalf("cfg.Agent.MaxConcurrentAgentsByState[merge] = %d, want 1", got)
+	}
 	if cfg.Agent.CreateExecPlan {
 		t.Fatal("cfg.Agent.CreateExecPlan = true, want false by default")
 	}
@@ -154,6 +157,31 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Slack.BotToken != "" || cfg.Slack.AppToken != "" || cfg.Slack.ChannelID != "" {
 		t.Fatalf("cfg.Slack = %#v, want disabled by default", cfg.Slack)
+	}
+}
+
+func TestBuildAllowsExplicitMergeConcurrencyOverride(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"agent": map[string]any{
+			"max_concurrent_agents_by_state": map[string]any{
+				"Merge": 3,
+			},
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Agent.MaxConcurrentAgentsByState[StateKey("Merge")]; got != 3 {
+		t.Fatalf("cfg.Agent.MaxConcurrentAgentsByState[merge] = %d, want 3", got)
 	}
 }
 

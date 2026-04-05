@@ -25,16 +25,27 @@ var (
 	ErrMixedTargetConfig       = errors.New("mixed_target_config")
 )
 
-const defaultPRTemplate = `## Summary
+const defaultPRTemplate = `## Why
 
-Automated changes for {{.issue.identifier}}.
+Explain why this change was made and what reviewer context or motivation matters for this PR.
 
-## Linear
-
-- Issue: {{.issue.identifier}}
+- Linear issue: {{.issue.identifier}}
 {{- if .issue.url }}
 - URL: {{ .issue.url }}
-{{- end }}`
+{{- end }}
+- PR title: {{.pr_title}}
+
+## Before
+
+Describe the reviewer baseline for this PR only.
+
+## After
+
+Describe only the change introduced by this PR.
+
+## Evidence
+
+Prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.`
 
 const defaultBranchTemplate = `colin/{{.issue.identifier}}-{{.issue.title}}`
 
@@ -65,11 +76,13 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			Timeout: 60 * time.Second,
 		},
 		Agent: domain.AgentConfig{
-			MaxConcurrentAgents:        10,
-			MaxRetryBackoff:            5 * time.Minute,
-			MaxConcurrentAgentsByState: map[string]int{},
-			MaxTurns:                   20,
-			CreateExecPlan:             false,
+			MaxConcurrentAgents: 10,
+			MaxRetryBackoff:     5 * time.Minute,
+			MaxConcurrentAgentsByState: map[string]int{
+				StateKey("Merge"): 1,
+			},
+			MaxTurns:       20,
+			CreateExecPlan: false,
 		},
 		Codex: domain.CodexConfig{
 			Command:           "codex app-server",

@@ -44,6 +44,7 @@ type PullRequest struct {
 // ReviewComment is the minimal review comment payload Colin consumes.
 type ReviewComment struct {
 	ID          string
+	DatabaseID  string
 	Body        string
 	URL         string
 	AuthorLogin string
@@ -86,6 +87,7 @@ type ReviewThreadCommentPage struct {
 
 // Reaction captures the minimal reaction data Colin uses for Codex review signals.
 type Reaction struct {
+	ID        int64
 	Content   string
 	CreatedAt *time.Time
 	UserLogin string
@@ -96,6 +98,12 @@ type ReactionPage struct {
 	Reactions   []Reaction
 	HasNextPage bool
 	EndCursor   string
+}
+
+// ReviewCommentReactionPage is one page of review-comment reactions from the backend API.
+type ReviewCommentReactionPage struct {
+	Reactions []Reaction
+	NextPage  int
 }
 
 // Client wraps the repository host operations Colin needs for publish, review, and merge automation.
@@ -109,6 +117,7 @@ type Client interface {
 	ReviewThreads(ctx context.Context, owner, repo string, number int, cursor string) (ReviewThreadPage, error)
 	ReviewThreadComments(ctx context.Context, threadID, cursor string) (ReviewThreadCommentPage, error)
 	PullRequestReactions(ctx context.Context, owner, repo string, number int, cursor string) (ReactionPage, error)
+	PullRequestReviewCommentReactions(ctx context.Context, owner, repo string, commentID int64, page int) (ReviewCommentReactionPage, error)
 	ReplyToReviewThread(ctx context.Context, threadID, body string) error
 	ResolveReviewThread(ctx context.Context, threadID string) error
 }

@@ -60,6 +60,19 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	if fakeGitHub.CreatePullRequestCallCount() != 1 {
 		t.Fatalf("CreatePullRequestCallCount() = %d, want 1", fakeGitHub.CreatePullRequestCallCount())
 	}
+	_, _, _, input := fakeGitHub.CreatePullRequestArgsForCall(0)
+	for _, want := range []string{
+		"## Why",
+		"## Before",
+		"## After",
+		"## Evidence",
+		"Linear issue: COLIN-93",
+		"PR title: COLIN-93: Add publish automation",
+	} {
+		if !strings.Contains(input.Body, want) {
+			t.Fatalf("CreatePullRequest body = %q, want substring %q", input.Body, want)
+		}
+	}
 }
 
 func TestValidateRepoAccessSkipsWhenTokenMissing(t *testing.T) {

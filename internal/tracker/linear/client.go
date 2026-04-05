@@ -45,6 +45,7 @@ func (e *AmbiguousCodexThreadError) Error() string {
 
 const (
 	defaultEndpoint              = "https://api.linear.app/graphql"
+	linearIssueBatchSize         = 250
 	colinMetadataAttachmentTitle = "Colin metadata"
 	colinMetadataURLPrefix       = "https://colin.invalid/linear/issues/"
 	colinMetadataURLSuffix       = "/metadata"
@@ -107,12 +108,21 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	client.active = slices.Clone(config.CandidateStates(cfg))
 	client.repoAdapter = repoAdapter
 	client.uiBaseURL = uiBaseURL(cfg.Server)
-	projectIDs, err := client.validateWorkflowStates(context.Background(), cfg)
-	if err != nil {
-		return nil, err
-	}
-	client.watchedProjectIDs = projectIDs
 	return client, nil
+}
+
+// ValidateWorkflowStates validates the configured workflow states against Linear and refreshes watched project metadata.
+func (c *Client) ValidateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) error {
+	if c == nil {
+		return errors.New("nil linear client")
+	}
+	projectIDs, projectsByID, err := c.validateWorkflowStates(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	c.watchedProjectIDs = projectIDs
+	c.projectsByID = projectsByID
+	return nil
 }
 
 // ListProjects returns the caller's accessible Linear projects for setup-time selection.
@@ -239,17 +249,74 @@ func (c *Client) WatchedProjectIDs() []string {
 	return slices.Clone(c.watchedProjectIDs)
 }
 
-// FetchCandidateIssues returns the current active issues for the configured Linear project.
-func (c *Client) FetchCandidateIssues(ctx context.Context) ([]domain.Issue, error) {
-	return c.fetchIssues(ctx, c.active)
+// FetchCandidateIssueSnapshots returns lightweight scheduling snapshots for active issues.
+func (c *Client) FetchCandidateIssueSnapshots(ctx context.Context) ([]domain.Issue, error) {
+	return c.fetchIssueSnapshots(ctx, c.active)
 }
 
-// FetchIssuesByStates returns issues whose current Linear state is in the provided list.
-func (c *Client) FetchIssuesByStates(ctx context.Context, stateNames []string) ([]domain.Issue, error) {
+// FetchIssueSnapshotsByStates returns lightweight issue snapshots for the provided states.
+func (c *Client) FetchIssueSnapshotsByStates(ctx context.Context, stateNames []string) ([]domain.Issue, error) {
 	if len(stateNames) == 0 {
 		return nil, nil
 	}
-	return c.fetchIssues(ctx, stateNames)
+	return c.fetchIssueSnapshots(ctx, stateNames)
+}
+
+// FetchIssueSchedulingMetadataByIDs returns persisted Colin metadata for the supplied issues.
+func (c *Client) FetchIssueSchedulingMetadataByIDs(ctx context.Context, issueIDs []string) (map[string]domain.ColinMetadata, error) {
+	if len(issueIDs) == 0 {
+		return map[string]domain.ColinMetadata{}, nil
+	}
+	const query = `
+query IssueSchedulingMetadata($ids: [ID!]!) {
+  issues(filter: { id: { in: $ids } }, first: 250) {
+    nodes {
+      id
+      attachments(first: 50) {
+        nodes {
+          id
+          title
+          url
+          createdAt
+          updatedAt
+          metadata
+        }
+      }
+    }
+  }
+}
+`
+	metadataByIssueID := make(map[string]domain.ColinMetadata, len(issueIDs))
+	for start := 0; start < len(issueIDs); start += linearIssueBatchSize {
+		end := start + linearIssueBatchSize
+		if end > len(issueIDs) {
+			end = len(issueIDs)
+		}
+		resp, err := c.doQuery(ctx, query, map[string]any{"ids": issueIDs[start:end]})
+		if err != nil {
+			return nil, err
+		}
+		nodes, ok := nestedSlice(resp, "data", "issues", "nodes")
+		if !ok {
+			return nil, ErrUnknownPayload
+		}
+		for _, node := range nodes {
+			issueID, _ := stringValue(node["id"])
+			if strings.TrimSpace(issueID) == "" {
+				continue
+			}
+			attachments, ok := nestedSlice(node, "attachments", "nodes")
+			if !ok {
+				continue
+			}
+			metadata, ok := extractColinMetadataFromAttachments(attachments)
+			if !ok {
+				continue
+			}
+			metadataByIssueID[issueID] = metadata
+		}
+	}
+	return metadataByIssueID, nil
 }
 
 // FetchIssueStatesByIDs refreshes the minimal state snapshot for the supplied Linear issue IDs.
@@ -284,7 +351,7 @@ query IssueStates($ids: [ID!]!) {
 	}
 	issues := make([]domain.Issue, 0, len(nodes))
 	for _, node := range nodes {
-		issue, err := c.normalizeIssue(node)
+		issue, err := normalizeIssueSnapshot(node)
 		if err != nil {
 			return nil, err
 		}
@@ -936,9 +1003,9 @@ func (c *Client) CurrentRateLimits() domain.RateLimitSnapshot {
 	return cloneRateLimits(c.rateInfo)
 }
 
-func (c *Client) fetchIssues(ctx context.Context, states []string) ([]domain.Issue, error) {
+func (c *Client) fetchIssueSnapshots(ctx context.Context, states []string) ([]domain.Issue, error) {
 	const query = `
-query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
+query CandidateIssueSnapshots($projectIDs: [ID!], $states: [String!], $after: String) {
   issues(
     first: 50
     after: $after
@@ -952,7 +1019,6 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
       id
       identifier
       title
-      description
       priority
       project {
         id
@@ -972,41 +1038,8 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
             identifier
             state { name }
           }
-        }
       }
-	      attachments(first: 50) {
-	        nodes {
-	          id
-	          title
-	          url
-	          createdAt
-	          updatedAt
-	          metadata
-	        }
-	      }
-      comments(first: 50) {
-        nodes {
-          id
-          body
-          createdAt
-          parentId
-          children(first: 50) {
-            nodes {
-              id
-              body
-              createdAt
-              parentId
-            }
-          }
-        }
-      }
-      history(first: 100) {
-        nodes {
-          createdAt
-          fromState { name }
-          toState { name }
-        }
-      }
+    }
     }
   }
 }
@@ -1028,7 +1061,7 @@ query CandidateIssues($projectIDs: [ID!], $states: [String!], $after: String) {
 			return nil, ErrUnknownPayload
 		}
 		for _, node := range nodes {
-			issue, err := c.normalizeIssue(node)
+			issue, err := normalizeIssueSnapshot(node)
 			if err != nil {
 				return nil, err
 			}
@@ -1085,7 +1118,7 @@ query IssueTeamStates($id: String!) {
 	return "", fmt.Errorf("%w: %s", ErrUnknownState, stateName)
 }
 
-func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) ([]string, error) {
+func (c *Client) validateWorkflowStates(ctx context.Context, cfg domain.ServiceConfig) ([]string, map[string]string, error) {
 	requiredStates := requiredWorkflowStates(cfg)
 
 	const query = `
@@ -1113,26 +1146,27 @@ query ProjectTeamStates($slug: String!) {
 		targets = []domain.TargetConfig{{ProjectSlug: cfg.Tracker.ProjectSlug}}
 	}
 	projectIDs := make([]string, 0, len(targets))
+	projectsByID := make(map[string]string, len(targets))
 	for _, target := range targets {
 		projectSlug := strings.TrimSpace(target.ProjectSlug)
 		resp, err := c.doQuery(ctx, query, map[string]any{"slug": projectSlug})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		projects, ok := nestedSlice(resp, "data", "projects", "nodes")
 		if !ok || len(projects) == 0 {
-			return nil, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, projectSlug)
+			return nil, nil, fmt.Errorf("%w: project %q not found", ErrUnknownPayload, projectSlug)
 		}
 		projectID, _ := stringValue(projects[0]["id"])
 		if strings.TrimSpace(projectID) == "" {
-			return nil, fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, projectSlug)
+			return nil, nil, fmt.Errorf("%w: project %q id missing", ErrUnknownPayload, projectSlug)
 		}
 		projectID = strings.TrimSpace(projectID)
 		projectIDs = append(projectIDs, projectID)
-		c.projectsByID[projectID] = projectSlug
+		projectsByID[projectID] = projectSlug
 		teamNodes, ok := nestedSlice(projects[0], "teams", "nodes")
 		if !ok || len(teamNodes) == 0 {
-			return nil, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, projectSlug)
+			return nil, nil, fmt.Errorf("%w: project %q has no teams", ErrUnknownPayload, projectSlug)
 		}
 
 		var missing []string
@@ -1170,10 +1204,10 @@ query ProjectTeamStates($slug: String!) {
 			missing = append(missing, fmt.Sprintf("team %q missing [%s]", teamName, strings.Join(missingForTeam, ", ")))
 		}
 		if len(missing) > 0 {
-			return nil, fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, projectSlug, strings.Join(missing, "; "))
+			return nil, nil, fmt.Errorf("%w: project %q %s", ErrMissingWorkflowState, projectSlug, strings.Join(missing, "; "))
 		}
 	}
-	return projectIDs, nil
+	return projectIDs, projectsByID, nil
 }
 
 type workflowStateRequirement struct {
@@ -1335,7 +1369,7 @@ func nextAllowedAt(observedAt, resetAt time.Time, remaining int64) time.Time {
 	return observedAt.Add(step)
 }
 
-func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
+func normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
 	id, _ := stringValue(node["id"])
 	identifier, _ := stringValue(node["identifier"])
 	title, _ := stringValue(node["title"])
@@ -1348,9 +1382,6 @@ func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
 		ProjectID:   strings.TrimSpace(projectID(node)),
 		ProjectSlug: strings.TrimSpace(projectSlug(node)),
 		State:       state,
-	}
-	if value, ok := stringValue(node["description"]); ok {
-		issue.Description = &value
 	}
 	if value, ok := intValue(node["priority"]); ok {
 		issue.Priority = &value
@@ -1378,9 +1409,6 @@ func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
 			}
 		}
 	}
-	issue.ColinMetadata = extractColinMetadata(node)
-	issue.ExecPlan, issue.ExecPlanCount = extractExecPlan(node)
-	issue.AttachedPullRequests = c.extractAttachedPullRequests(node)
 	if relationNodes, ok := nestedSlice(node, "inverseRelations", "nodes"); ok {
 		for _, relation := range relationNodes {
 			relationType, _ := stringValue(relation["type"])
@@ -1404,6 +1432,20 @@ func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
 			issue.BlockedBy = append(issue.BlockedBy, blocker)
 		}
 	}
+	return issue, nil
+}
+
+func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
+	issue, err := normalizeIssueSnapshot(node)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if value, ok := stringValue(node["description"]); ok {
+		issue.Description = &value
+	}
+	issue.ColinMetadata = extractColinMetadata(node)
+	issue.ExecPlan, issue.ExecPlanCount = extractExecPlan(node)
+	issue.AttachedPullRequests = c.extractAttachedPullRequests(node)
 	if start, end, ok := latestReviewCycleWindow(node); ok && strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
 		issue.ReviewCycle = &domain.ReviewCycle{
 			EnteredReviewAt:  start,
@@ -1628,6 +1670,14 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	if !ok {
 		return nil
 	}
+	metadata, ok := extractColinMetadataFromAttachments(attachments)
+	if !ok {
+		return nil
+	}
+	return &metadata
+}
+
+func extractColinMetadataFromAttachments(attachments []map[string]any) (domain.ColinMetadata, bool) {
 	metadataAttachments := make([]colinMetadataAttachment, 0, len(attachments))
 	for _, attachment := range attachments {
 		metadata, err := parseColinMetadataAttachmentNode(attachment)
@@ -1638,11 +1688,11 @@ func extractColinMetadata(node map[string]any) *domain.ColinMetadata {
 	}
 	selected, ok := selectCanonicalMetadataAttachment(metadataAttachments)
 	if !ok {
-		return nil
+		return domain.ColinMetadata{}, false
 	}
 	merged := selected.metadata
 	mergeSlackMetadataFields(&merged, metadataAttachments)
-	return &merged
+	return merged, true
 }
 
 func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
@@ -1650,6 +1700,10 @@ func extractExecPlan(node map[string]any) (*domain.ExecPlan, int) {
 	if !ok {
 		return nil, 0
 	}
+	return extractExecPlanFromAttachments(attachments)
+}
+
+func extractExecPlanFromAttachments(attachments []map[string]any) (*domain.ExecPlan, int) {
 	var plans []domain.ExecPlan
 	for _, attachment := range attachments {
 		plan, err := parseColinExecPlanAttachment(attachment)
@@ -1756,6 +1810,12 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.CodexThreadID, _ = stringValue(metadataMap["codex_thread_id"])
 	metadata.ProgressRootCommentID, _ = stringValue(metadataMap["progress_root_comment_id"])
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
+	metadata.PendingReviewCommentID, _ = stringValue(metadataMap["pending_review_comment_id"])
+	metadata.PendingReviewThreadID, _ = stringValue(metadataMap["pending_review_thread_id"])
+	metadata.PendingReviewReactionID, _ = stringValue(metadataMap["pending_review_reaction_id"])
+	metadata.PendingReviewReactor, _ = stringValue(metadataMap["pending_review_reactor"])
+	metadata.QueuedReviewFollowUps = pendingReviewFollowUpsValue(metadataMap["queued_review_follow_ups"])
+	metadata.ReviewReactionWatermarks = stringMapValue(metadataMap["review_reaction_watermarks"])
 	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
 		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
 	}
@@ -1794,6 +1854,11 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	if value, _ := stringValue(metadataMap["paused_at"]); strings.TrimSpace(value) != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 			metadata.PausedAt = &parsed
+		}
+	}
+	if value, _ := stringValue(metadataMap["pending_review_requested_at"]); strings.TrimSpace(value) != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			metadata.PendingReviewRequestedAt = &parsed
 		}
 	}
 	if value, _ := stringValue(metadataMap["updated_at"]); strings.TrimSpace(value) != "" {
@@ -1855,35 +1920,44 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
-		"codex_thread_id":           strings.TrimSpace(metadata.CodexThreadID),
-		"progress_root_comment_id":  strings.TrimSpace(metadata.ProgressRootCommentID),
-		"actual_branch_name":        strings.TrimSpace(metadata.ActualBranchName),
-		"exec_plan_decision":        strings.TrimSpace(string(metadata.ExecPlanDecision)),
-		"review_publish_directive":  strings.TrimSpace(string(metadata.ReviewPublishDirective)),
-		"last_run_type":             strings.TrimSpace(string(metadata.LastRunType)),
-		"last_outcome":              strings.TrimSpace(string(metadata.LastOutcome)),
-		"last_summary_comment_id":   strings.TrimSpace(metadata.LastSummaryCommentID),
-		"colin_comment_ids":         stringSliceAny(metadata.ColinCommentIDs),
-		"pull_request_number":       metadata.PullRequestNumber,
-		"pull_request_url":          strings.TrimSpace(metadata.PullRequestURL),
-		"pull_request_state":        strings.TrimSpace(metadata.PullRequestState),
-		"pull_request_head_ref":     strings.TrimSpace(metadata.PullRequestHeadRef),
-		"pull_request_base_ref":     strings.TrimSpace(metadata.PullRequestBaseRef),
-		"pull_request_backend":      strings.TrimSpace(metadata.PullRequestBackend),
-		"pull_request_repo_owner":   strings.TrimSpace(metadata.PullRequestRepoOwner),
-		"pull_request_repo_name":    strings.TrimSpace(metadata.PullRequestRepoName),
-		"loop_failure_fingerprint":  strings.TrimSpace(metadata.LoopFailureFingerprint),
-		"loop_failure_count":        metadata.LoopFailureCount,
-		"paused_run_type":           strings.TrimSpace(metadata.PausedRunType),
-		"paused_state":              strings.TrimSpace(metadata.PausedState),
-		"paused_reason":             strings.TrimSpace(metadata.PausedReason),
-		"slack_channel_id":          strings.TrimSpace(metadata.SlackChannelID),
-		"slack_message_ts":          strings.TrimSpace(metadata.SlackMessageTS),
-		"slack_permalink":           strings.TrimSpace(metadata.SlackPermalink),
-		"slack_summary_fingerprint": strings.TrimSpace(metadata.SlackSummaryFingerprint),
+		"codex_thread_id":            strings.TrimSpace(metadata.CodexThreadID),
+		"progress_root_comment_id":   strings.TrimSpace(metadata.ProgressRootCommentID),
+		"actual_branch_name":         strings.TrimSpace(metadata.ActualBranchName),
+		"pending_review_comment_id":  strings.TrimSpace(metadata.PendingReviewCommentID),
+		"pending_review_thread_id":   strings.TrimSpace(metadata.PendingReviewThreadID),
+		"pending_review_reaction_id": strings.TrimSpace(metadata.PendingReviewReactionID),
+		"pending_review_reactor":     strings.TrimSpace(metadata.PendingReviewReactor),
+		"queued_review_follow_ups":   pendingReviewFollowUpsAny(metadata.QueuedReviewFollowUps),
+		"review_reaction_watermarks": stringMapAny(metadata.ReviewReactionWatermarks),
+		"exec_plan_decision":         strings.TrimSpace(string(metadata.ExecPlanDecision)),
+		"review_publish_directive":   strings.TrimSpace(string(metadata.ReviewPublishDirective)),
+		"last_run_type":              strings.TrimSpace(string(metadata.LastRunType)),
+		"last_outcome":               strings.TrimSpace(string(metadata.LastOutcome)),
+		"last_summary_comment_id":    strings.TrimSpace(metadata.LastSummaryCommentID),
+		"colin_comment_ids":          stringSliceAny(metadata.ColinCommentIDs),
+		"pull_request_number":        metadata.PullRequestNumber,
+		"pull_request_url":           strings.TrimSpace(metadata.PullRequestURL),
+		"pull_request_state":         strings.TrimSpace(metadata.PullRequestState),
+		"pull_request_head_ref":      strings.TrimSpace(metadata.PullRequestHeadRef),
+		"pull_request_base_ref":      strings.TrimSpace(metadata.PullRequestBaseRef),
+		"pull_request_backend":       strings.TrimSpace(metadata.PullRequestBackend),
+		"pull_request_repo_owner":    strings.TrimSpace(metadata.PullRequestRepoOwner),
+		"pull_request_repo_name":     strings.TrimSpace(metadata.PullRequestRepoName),
+		"loop_failure_fingerprint":   strings.TrimSpace(metadata.LoopFailureFingerprint),
+		"loop_failure_count":         metadata.LoopFailureCount,
+		"paused_run_type":            strings.TrimSpace(metadata.PausedRunType),
+		"paused_state":               strings.TrimSpace(metadata.PausedState),
+		"paused_reason":              strings.TrimSpace(metadata.PausedReason),
+		"slack_channel_id":           strings.TrimSpace(metadata.SlackChannelID),
+		"slack_message_ts":           strings.TrimSpace(metadata.SlackMessageTS),
+		"slack_permalink":            strings.TrimSpace(metadata.SlackPermalink),
+		"slack_summary_fingerprint":  strings.TrimSpace(metadata.SlackSummaryFingerprint),
 	}
 	if metadata.PausedAt != nil {
 		value["paused_at"] = metadata.PausedAt.UTC().Format(time.RFC3339)
+	}
+	if metadata.PendingReviewRequestedAt != nil {
+		value["pending_review_requested_at"] = metadata.PendingReviewRequestedAt.UTC().Format(time.RFC3339)
 	}
 	if metadata.UpdatedAt != nil {
 		value["updated_at"] = metadata.UpdatedAt.UTC().Format(time.RFC3339)
@@ -2034,7 +2108,10 @@ func (c *Client) extractAttachedPullRequests(node map[string]any) []domain.PullR
 	if !ok {
 		return nil
 	}
+	return c.extractAttachedPullRequestsFromAttachments(attachments)
+}
 
+func (c *Client) extractAttachedPullRequestsFromAttachments(attachments []map[string]any) []domain.PullRequestRef {
 	seen := make(map[string]struct{}, len(attachments))
 	prs := make([]domain.PullRequestRef, 0, len(attachments))
 	for _, attachment := range attachments {
@@ -2077,6 +2154,79 @@ func pullRequestAttachmentKey(pr domain.PullRequestRef) string {
 		strings.ToLower(strings.TrimSpace(pr.RepositoryOwner)) + "|" +
 		strings.ToLower(strings.TrimSpace(pr.RepositoryName)) + "|" +
 		strconv.Itoa(pr.Number)
+}
+
+func pendingReviewFollowUpsValue(value any) []domain.PendingReviewFollowUp {
+	nodes, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]domain.PendingReviewFollowUp, 0, len(nodes))
+	for _, node := range nodes {
+		item, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		followUp := domain.PendingReviewFollowUp{}
+		followUp.ThreadID, _ = stringValue(item["thread_id"])
+		followUp.CommentID, _ = stringValue(item["comment_id"])
+		followUp.ReactionID, _ = stringValue(item["reaction_id"])
+		followUp.Reactor, _ = stringValue(item["reactor"])
+		if value, _ := stringValue(item["requested_at"]); strings.TrimSpace(value) != "" {
+			if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+				followUp.RequestedAt = &parsed
+			}
+		}
+		out = append(out, followUp)
+	}
+	return out
+}
+
+func pendingReviewFollowUpsAny(items []domain.PendingReviewFollowUp) []any {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		entry := map[string]any{
+			"thread_id":   strings.TrimSpace(item.ThreadID),
+			"comment_id":  strings.TrimSpace(item.CommentID),
+			"reaction_id": strings.TrimSpace(item.ReactionID),
+			"reactor":     strings.TrimSpace(item.Reactor),
+		}
+		if item.RequestedAt != nil {
+			entry["requested_at"] = item.RequestedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func stringMapValue(value any) map[string]string {
+	node, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(node))
+	for key, raw := range node {
+		text, ok := stringValue(raw)
+		if !ok {
+			continue
+		}
+		out[key] = text
+	}
+	return out
+}
+
+func stringMapAny(values map[string]string) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func stringSliceValue(value any) []string {

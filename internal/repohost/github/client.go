@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,6 +134,14 @@ func (c *Client) BranchExists(ctx context.Context, owner, repo, branch string) (
 	return false, err
 }
 
+func (c *Client) IsCollaborator(ctx context.Context, owner, repo, user string) (bool, error) {
+	collaborator, _, err := c.client.Repositories.IsCollaborator(ctx, owner, repo, user)
+	if err != nil {
+		return false, err
+	}
+	return collaborator, nil
+}
+
 func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number int, cursor string) (repohost.ReviewThreadPage, error) {
 	const query = `query ReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
@@ -150,6 +159,7 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
           comments(first: 20) {
             nodes {
               id
+              databaseId
               body
               url
               createdAt
@@ -203,6 +213,11 @@ func (c *Client) ReviewThreadComments(ctx context.Context, threadID, cursor stri
     ... on PullRequestReviewThread {
       comments(first: 100, after: $cursor) {
         nodes {
+          id
+          databaseId
+          body
+          url
+          createdAt
           author { login }
         }
         pageInfo {
@@ -285,6 +300,47 @@ func (c *Client) PullRequestReactions(ctx context.Context, owner, repo string, n
 		Reactions:   reactions,
 		HasNextPage: hasNextPage,
 		EndCursor:   endCursor,
+	}, nil
+}
+
+func (c *Client) PullRequestReviewCommentReactions(ctx context.Context, owner, repo string, commentID int64, page int) (repohost.ReviewCommentReactionPage, error) {
+	if page <= 0 {
+		page = 1
+	}
+	reactions, resp, err := c.client.Reactions.ListPullRequestCommentReactions(ctx, owner, repo, commentID, &githubapi.ListReactionOptions{
+		ListOptions: githubapi.ListOptions{
+			Page:    page,
+			PerPage: 100,
+		},
+	})
+	if err != nil {
+		return repohost.ReviewCommentReactionPage{}, err
+	}
+	items := make([]repohost.Reaction, 0, len(reactions))
+	for _, reaction := range reactions {
+		if reaction == nil {
+			continue
+		}
+		item := repohost.Reaction{
+			ID:      reaction.GetID(),
+			Content: strings.TrimSpace(reaction.GetContent()),
+		}
+		if user := reaction.GetUser(); user != nil {
+			item.UserLogin = strings.TrimSpace(user.GetLogin())
+		}
+		if createdAt := reaction.GetCreatedAt(); !createdAt.Time.IsZero() {
+			value := createdAt.Time.UTC()
+			item.CreatedAt = &value
+		}
+		items = append(items, item)
+	}
+	nextPage := 0
+	if resp != nil {
+		nextPage = resp.NextPage
+	}
+	return repohost.ReviewCommentReactionPage{
+		Reactions: items,
+		NextPage:  nextPage,
 	}, nil
 }
 
@@ -433,13 +489,16 @@ func reviewThread(node map[string]any) (repohost.ReviewThread, bool) {
 func reviewComment(node map[string]any) (repohost.ReviewComment, bool) {
 	comment := repohost.ReviewComment{}
 	comment.ID, _ = stringValue(node["id"])
+	if databaseID, ok := intValue(node["databaseId"]); ok {
+		comment.DatabaseID = strconv.Itoa(databaseID)
+	}
 	comment.Body, _ = stringValue(node["body"])
 	comment.URL, _ = stringValue(node["url"])
 	comment.AuthorLogin, _ = nestedString(node, "author", "login")
 	if createdAt, ok := parseTimestamp(node["createdAt"]); ok {
 		comment.CreatedAt = &createdAt
 	}
-	if comment.ID == "" && comment.AuthorLogin == "" && comment.Body == "" && comment.URL == "" && comment.CreatedAt == nil {
+	if comment.ID == "" && comment.DatabaseID == "" && comment.AuthorLogin == "" && comment.Body == "" && comment.URL == "" && comment.CreatedAt == nil {
 		return repohost.ReviewComment{}, false
 	}
 	return comment, true

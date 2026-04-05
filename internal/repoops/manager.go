@@ -57,6 +57,21 @@ type ReviewContext struct {
 	CodexReviewApprovedAt  *time.Time
 }
 
+// ReviewCommentApproval is one collaborator approval on an invited Codex review comment.
+type ReviewCommentApproval struct {
+	Thread     domain.ReviewThread
+	CommentID  string
+	ReactionID string
+	Reactor    string
+}
+
+// ReviewFollowUpScan captures unresolved review threads plus qualifying approval signals.
+type ReviewFollowUpScan struct {
+	PullRequest domain.PullRequestRef
+	Threads     []domain.ReviewThread
+	Approvals   []ReviewCommentApproval
+}
+
 // Manager performs git and repository-host operations for a workspace.
 type Manager struct {
 	cfg      domain.ServiceConfig
@@ -64,6 +79,10 @@ type Manager struct {
 	host     repohost.Client
 	hostOnce sync.Once
 	hostErr  error
+}
+
+type repositoryCollaboratorChecker interface {
+	IsCollaborator(ctx context.Context, owner, repo, user string) (bool, error)
 }
 
 // NewManager constructs a repository automation manager.
@@ -86,6 +105,47 @@ func (m *Manager) ValidateRepoAccess(ctx context.Context) error {
 		return err
 	}
 	return client.ValidateAuth(ctx)
+}
+
+// IsRepositoryCollaborator reports whether the given GitHub user can collaborate on the repository.
+func (m *Manager) IsRepositoryCollaborator(ctx context.Context, owner, repo, user string) (bool, error) {
+	client, err := m.repoHostClient()
+	if err != nil {
+		return false, err
+	}
+	checker, ok := client.(repositoryCollaboratorChecker)
+	if !ok {
+		return false, errors.New("repository host client does not support collaborator checks")
+	}
+	return checker.IsCollaborator(ctx, owner, repo, user)
+}
+
+// FindUnresolvedReviewThreadByCommentID resolves one unresolved review thread from a review comment id.
+func (m *Manager) FindUnresolvedReviewThreadByCommentID(ctx context.Context, issue domain.Issue, workspacePath, commentID string) (domain.PullRequestRef, domain.ReviewThread, bool, error) {
+	pr, _, err := m.resolvePullRequest(ctx, issue, workspacePath, "", false)
+	if err != nil {
+		return domain.PullRequestRef{}, domain.ReviewThread{}, false, err
+	}
+	if pr == nil {
+		return domain.PullRequestRef{}, domain.ReviewThread{}, false, nil
+	}
+
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	if err != nil {
+		return domain.PullRequestRef{}, domain.ReviewThread{}, false, err
+	}
+
+	thread, ok, err := m.findReviewThreadByCommentID(ctx, owner, name, pr.Number, commentID)
+	if err != nil {
+		return domain.PullRequestRef{}, domain.ReviewThread{}, false, err
+	}
+	return domain.PullRequestRef{
+		Number:  pr.Number,
+		URL:     pr.URL,
+		State:   pr.State,
+		HeadRef: pr.HeadRefName,
+		BaseRef: pr.BaseRefName,
+	}, thread, ok, nil
 }
 
 // Publish commits workspace changes, pushes the issue branch, and creates or reuses a PR.
@@ -287,6 +347,34 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 		CodexReviewRequestedAt: requestedAt,
 		CodexReviewApprovedAt:  approvedAt,
 	}, nil
+}
+
+// ReviewFollowUpScan returns unresolved review threads and qualifying collaborator approvals on invited Codex comments.
+func (m *Manager) ReviewFollowUpScan(ctx context.Context, issue domain.Issue, workspacePath string) (ReviewFollowUpScan, error) {
+	pr, _, err := m.resolvePullRequest(ctx, issue, workspacePath, "", false)
+	if err != nil {
+		return ReviewFollowUpScan{}, err
+	}
+	if pr == nil {
+		return ReviewFollowUpScan{}, nil
+	}
+
+	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	if err != nil {
+		return ReviewFollowUpScan{}, err
+	}
+	scan, err := m.fetchReviewFollowUpScan(ctx, owner, name, pr.Number)
+	if err != nil {
+		return ReviewFollowUpScan{}, err
+	}
+	scan.PullRequest = domain.PullRequestRef{
+		Number:  pr.Number,
+		URL:     pr.URL,
+		State:   pr.State,
+		HeadRef: pr.HeadRefName,
+		BaseRef: pr.BaseRefName,
+	}
+	return scan, nil
 }
 
 // CurrentBranch returns the current checked-out git branch for the workspace.
@@ -756,6 +844,103 @@ func (m *Manager) fetchReviewThreads(ctx context.Context, workspacePath, owner, 
 	return threads, codexThreads, codexSeen, nil
 }
 
+func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name string, prNumber int) (ReviewFollowUpScan, error) {
+	client, err := m.repoHostClient()
+	if err != nil {
+		return ReviewFollowUpScan{}, err
+	}
+	var (
+		cursor            string
+		threads           []domain.ReviewThread
+		approvals         []ReviewCommentApproval
+		collaboratorCache = map[string]bool{}
+	)
+	for {
+		resp, err := client.ReviewThreads(ctx, owner, name, prNumber, cursor)
+		if err != nil {
+			return ReviewFollowUpScan{}, err
+		}
+		if len(resp.Threads) == 0 && !resp.HasNextPage {
+			return ReviewFollowUpScan{Threads: threads, Approvals: approvals}, nil
+		}
+		for _, node := range resp.Threads {
+			thread, ok := parseReviewThread(node)
+			if !ok || thread.IsResolved {
+				continue
+			}
+			threads = append(threads, thread)
+
+			comments, err := m.reviewThreadComments(ctx, node)
+			if err != nil {
+				return ReviewFollowUpScan{}, err
+			}
+			for _, comment := range comments {
+				if !isInvitedCodexReviewComment(comment) {
+					continue
+				}
+				commentID := reviewCommentID(comment)
+				commentNumber, err := strconv.ParseInt(commentID, 10, 64)
+				if err != nil {
+					continue
+				}
+				reactionID, reactor, found, err := m.latestCollaboratorReviewCommentApproval(ctx, owner, name, commentNumber, collaboratorCache)
+				if err != nil {
+					return ReviewFollowUpScan{}, err
+				}
+				if !found {
+					continue
+				}
+				approvals = append(approvals, ReviewCommentApproval{
+					Thread:     thread,
+					CommentID:  commentID,
+					ReactionID: reactionID,
+					Reactor:    reactor,
+				})
+			}
+		}
+		if !resp.HasNextPage || strings.TrimSpace(resp.EndCursor) == "" {
+			break
+		}
+		cursor = resp.EndCursor
+	}
+	return ReviewFollowUpScan{Threads: threads, Approvals: approvals}, nil
+}
+
+func (m *Manager) findReviewThreadByCommentID(ctx context.Context, owner, name string, prNumber int, commentID string) (domain.ReviewThread, bool, error) {
+	commentID = strings.TrimSpace(commentID)
+	if commentID == "" {
+		return domain.ReviewThread{}, false, nil
+	}
+	client, err := m.repoHostClient()
+	if err != nil {
+		return domain.ReviewThread{}, false, err
+	}
+	cursor := ""
+	for {
+		resp, err := client.ReviewThreads(ctx, owner, name, prNumber, cursor)
+		if err != nil {
+			return domain.ReviewThread{}, false, err
+		}
+		for _, node := range resp.Threads {
+			thread, ok := parseReviewThread(node)
+			if !ok || thread.IsResolved {
+				continue
+			}
+			match, err := m.reviewThreadHasCommentID(ctx, node, commentID)
+			if err != nil {
+				return domain.ReviewThread{}, false, err
+			}
+			if match {
+				return thread, true, nil
+			}
+		}
+		if !resp.HasNextPage || strings.TrimSpace(resp.EndCursor) == "" {
+			return domain.ReviewThread{}, false, nil
+		}
+		cursor = resp.EndCursor
+	}
+}
+
 func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspacePath string, node repohost.ReviewThread) (bool, error) {
 	if reviewThreadPageContainsCodexAuthor(node) {
 		return true, nil
@@ -768,6 +953,20 @@ func (m *Manager) reviewThreadContainsCodexAuthor(ctx context.Context, workspace
 		return false, nil
 	}
 	return m.fetchReviewThreadCommentAuthor(ctx, workspacePath, threadID)
+}
+
+func (m *Manager) reviewThreadHasCommentID(ctx context.Context, node repohost.ReviewThread, commentID string) (bool, error) {
+	if reviewThreadPageHasCommentID(node, commentID) {
+		return true, nil
+	}
+	if !reviewThreadCommentsHasNextPage(node) {
+		return false, nil
+	}
+	threadID := strings.TrimSpace(node.ID)
+	if threadID == "" {
+		return false, nil
+	}
+	return m.fetchReviewThreadCommentID(ctx, threadID, commentID)
 }
 
 func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspacePath, threadID string) (bool, error) {
@@ -794,6 +993,106 @@ func (m *Manager) fetchReviewThreadCommentAuthor(ctx context.Context, workspaceP
 		}
 		cursor = resp.EndCursor
 	}
+}
+
+func (m *Manager) fetchReviewThreadCommentID(ctx context.Context, threadID, commentID string) (bool, error) {
+	client, err := m.repoHostClient()
+	if err != nil {
+		return false, err
+	}
+	cursor := ""
+	for {
+		resp, err := client.ReviewThreadComments(ctx, threadID, cursor)
+		if err != nil {
+			return false, err
+		}
+		for _, node := range resp.Comments {
+			if reviewCommentMatchesID(node, commentID) {
+				return true, nil
+			}
+		}
+		if !resp.HasNextPage || strings.TrimSpace(resp.EndCursor) == "" {
+			return false, nil
+		}
+		cursor = resp.EndCursor
+	}
+}
+
+func (m *Manager) reviewThreadComments(ctx context.Context, node repohost.ReviewThread) ([]repohost.ReviewComment, error) {
+	comments := append([]repohost.ReviewComment(nil), node.Comments.Comments...)
+	if !reviewThreadCommentsHasNextPage(node) {
+		return comments, nil
+	}
+	threadID := strings.TrimSpace(node.ID)
+	if threadID == "" {
+		return comments, nil
+	}
+	client, err := m.repoHostClient()
+	if err != nil {
+		return nil, err
+	}
+	cursor := strings.TrimSpace(node.Comments.EndCursor)
+	for {
+		resp, err := client.ReviewThreadComments(ctx, threadID, cursor)
+		if err != nil {
+			return nil, err
+		}
+		comments = append(comments, resp.Comments...)
+		if !resp.HasNextPage || strings.TrimSpace(resp.EndCursor) == "" {
+			return comments, nil
+		}
+		cursor = resp.EndCursor
+	}
+}
+
+func (m *Manager) latestCollaboratorReviewCommentApproval(ctx context.Context, owner, name string, commentID int64, collaboratorCache map[string]bool) (string, string, bool, error) {
+	client, err := m.repoHostClient()
+	if err != nil {
+		return "", "", false, err
+	}
+	page := 1
+	var (
+		latestID   int64
+		latestUser string
+	)
+	for {
+		resp, err := client.PullRequestReviewCommentReactions(ctx, owner, name, commentID, page)
+		if err != nil {
+			return "", "", false, err
+		}
+		for _, reaction := range resp.Reactions {
+			if !strings.EqualFold(strings.TrimSpace(reaction.Content), "+1") || reaction.ID <= 0 {
+				continue
+			}
+			login := strings.TrimSpace(reaction.UserLogin)
+			if login == "" {
+				continue
+			}
+			allowed, ok := collaboratorCache[login]
+			if !ok {
+				allowed, err = m.IsRepositoryCollaborator(ctx, owner, name, login)
+				if err != nil {
+					return "", "", false, err
+				}
+				collaboratorCache[login] = allowed
+			}
+			if !allowed {
+				continue
+			}
+			if reaction.ID > latestID {
+				latestID = reaction.ID
+				latestUser = login
+			}
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		page = resp.NextPage
+	}
+	if latestID == 0 {
+		return "", "", false, nil
+	}
+	return strconv.FormatInt(latestID, 10), latestUser, true, nil
 }
 
 func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, owner, name string, prNumber int) (*time.Time, *time.Time, error) {
@@ -877,6 +1176,38 @@ func reviewThreadPageContainsCodexAuthor(node repohost.ReviewThread) bool {
 	return false
 }
 
+func reviewThreadPageHasCommentID(node repohost.ReviewThread, commentID string) bool {
+	for _, comment := range node.Comments.Comments {
+		if reviewCommentMatchesID(comment, commentID) {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewCommentID(comment repohost.ReviewComment) string {
+	if value := strings.TrimSpace(comment.DatabaseID); value != "" {
+		return value
+	}
+	return strings.TrimSpace(comment.ID)
+}
+
+func reviewCommentMatchesID(comment repohost.ReviewComment, commentID string) bool {
+	target := strings.TrimSpace(commentID)
+	if target == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(comment.ID), target) || strings.EqualFold(strings.TrimSpace(comment.DatabaseID), target)
+}
+
+func isInvitedCodexReviewComment(comment repohost.ReviewComment) bool {
+	if !isCodexReviewAuthor(comment.AuthorLogin) {
+		return false
+	}
+	body := strings.ToLower(strings.TrimSpace(comment.Body))
+	return strings.Contains(body, "useful? react with")
+}
+
 func isCodexReviewAuthor(login string) bool {
 	for _, candidate := range codexReviewLogins {
 		if strings.EqualFold(strings.TrimSpace(login), candidate) {
@@ -884,6 +1215,11 @@ func isCodexReviewAuthor(login string) bool {
 		}
 	}
 	return false
+}
+
+// IsCodexReviewAuthor reports whether the login belongs to the Codex review app.
+func IsCodexReviewAuthor(login string) bool {
+	return isCodexReviewAuthor(login)
 }
 
 func reviewThreadCommentsHasNextPage(node repohost.ReviewThread) bool {
@@ -987,16 +1323,27 @@ func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, base
 }
 
 func defaultPRTemplate() string {
-	return `## Summary
+	return `## Why
 
-Automated changes for {{.issue.identifier}}.
+Explain why this change was made and what reviewer context or motivation matters for this PR.
 
-## Linear
-
-- Issue: {{.issue.identifier}}
+- Linear issue: {{.issue.identifier}}
 {{- if .issue.url }}
 - URL: {{ .issue.url }}
-{{- end }}`
+{{- end }}
+- PR title: {{.pr_title}}
+
+## Before
+
+Describe the reviewer baseline for this PR only.
+
+## After
+
+Describe only the change introduced by this PR.
+
+## Evidence
+
+Prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.`
 }
 
 func prIssueMap(issue domain.Issue) map[string]any {

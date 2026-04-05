@@ -289,11 +289,12 @@ func TestGoGitHubClientGraphQLPages(t *testing.T) {
 										"comments": map[string]any{
 											"nodes": []any{
 												map[string]any{
-													"id":        "comment-1",
-													"body":      "Please fix this.",
-													"url":       "https://example.test/comment/1",
-													"createdAt": "2026-03-28T18:00:00Z",
-													"author":    map[string]any{"login": "reviewer"},
+													"id":         "PRRC_kwDOExample1",
+													"databaseId": 3035915056,
+													"body":       "Please fix this.",
+													"url":        "https://example.test/comment/1",
+													"createdAt":  "2026-03-28T18:00:00Z",
+													"author":     map[string]any{"login": "reviewer"},
 												},
 											},
 											"pageInfo": map[string]any{
@@ -318,7 +319,14 @@ func TestGoGitHubClientGraphQLPages(t *testing.T) {
 					"node": map[string]any{
 						"comments": map[string]any{
 							"nodes": []any{
-								map[string]any{"author": map[string]any{"login": "chatgpt-codex-connector[bot]"}},
+								map[string]any{
+									"id":         "PRRC_kwDOExample2",
+									"databaseId": 3035915057,
+									"body":       "follow-up",
+									"url":        "https://example.test/comment/2",
+									"createdAt":  "2026-03-28T18:01:00Z",
+									"author":     map[string]any{"login": "chatgpt-codex-connector[bot]"},
+								},
 							},
 							"pageInfo": map[string]any{
 								"hasNextPage": false,
@@ -364,12 +372,18 @@ func TestGoGitHubClientGraphQLPages(t *testing.T) {
 	if len(threads.Threads) != 1 || !threads.HasNextPage || threads.EndCursor != "page-2" {
 		t.Fatalf("ReviewThreads() = %+v, want one thread and pagination", threads)
 	}
+	if got := threads.Threads[0].Comments.Comments[0].DatabaseID; got != "3035915056" {
+		t.Fatalf("ReviewThreads() database id = %q, want 3035915056", got)
+	}
 	comments, err := client.ReviewThreadComments(context.Background(), "thread-1", "page-2")
 	if err != nil {
 		t.Fatalf("ReviewThreadComments() error = %v", err)
 	}
 	if len(comments.Comments) != 1 {
 		t.Fatalf("ReviewThreadComments() len = %d, want 1", len(comments.Comments))
+	}
+	if got := comments.Comments[0].DatabaseID; got != "3035915057" {
+		t.Fatalf("ReviewThreadComments() database id = %q, want 3035915057", got)
 	}
 	reactions, err := client.PullRequestReactions(context.Background(), "acme", "widgets", 7, "")
 	if err != nil {
@@ -380,6 +394,40 @@ func TestGoGitHubClientGraphQLPages(t *testing.T) {
 	}
 	if len(requestBodies) != 3 {
 		t.Fatalf("graphql request count = %d, want 3", len(requestBodies))
+	}
+}
+
+func TestGoGitHubClientPullRequestReviewCommentReactions(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/widgets/pulls/comments/3035915056/reactions" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("page"); got != "2" {
+			t.Fatalf("page = %q, want 2", got)
+		}
+		writeJSON(t, w, []map[string]any{
+			{
+				"id":         377554834,
+				"content":    "+1",
+				"created_at": "2026-04-04T19:17:46Z",
+				"user":       map[string]any{"login": "pmenglund"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestGoGitHubClient(t, server)
+	reactions, err := client.PullRequestReviewCommentReactions(context.Background(), "acme", "widgets", 3035915056, 2)
+	if err != nil {
+		t.Fatalf("PullRequestReviewCommentReactions() error = %v", err)
+	}
+	if len(reactions.Reactions) != 1 {
+		t.Fatalf("PullRequestReviewCommentReactions() len = %d, want 1", len(reactions.Reactions))
+	}
+	if reactions.Reactions[0].ID != 377554834 || reactions.Reactions[0].Content != "+1" || reactions.Reactions[0].UserLogin != "pmenglund" {
+		t.Fatalf("PullRequestReviewCommentReactions() = %+v, want populated reaction", reactions)
 	}
 }
 

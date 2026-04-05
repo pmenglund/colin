@@ -85,7 +85,7 @@ Work on {{ .issue.identifier }}.
 	}
 
 	logger := newLogger(io.Discard, false)
-	svc, err := New(logger, workflowPath)
+	svc, err := New(context.Background(), logger, workflowPath)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -217,7 +217,7 @@ Work on {{ .issue.identifier }}.
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc, err := New(logger, workflowPath)
+	svc, err := New(context.Background(), logger, workflowPath)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -700,6 +700,14 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
+	case strings.Contains(request.Query, "IssueSchedulingMetadata"):
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"nodes": []map[string]any{s.issueMetadataNode()},
+				},
+			},
+		})
 	case strings.Contains(request.Query, "IssueMetadataAttachments"):
 		s.mu.Lock()
 		metadata := s.metadata
@@ -784,11 +792,17 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{
-					"nodes": []map[string]any{s.issueNode(s.currentState())},
+					"nodes": []map[string]any{s.issueSnapshotNode(s.currentState())},
 				},
 			},
 		})
-	case strings.Contains(request.Query, "CandidateIssues"):
+	case strings.Contains(request.Query, "IssueByID"):
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issue": s.issueDetailNode(s.currentState()),
+			},
+		})
+	case strings.Contains(request.Query, "CandidateIssueSnapshots"):
 		s.mu.Lock()
 		s.candidateFetches++
 		s.mu.Unlock()
@@ -796,7 +810,7 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		state := s.currentState()
 		nodes := []map[string]any{}
 		if requestedStates, ok := request.Variables["states"].([]any); ok && stateAllowed(requestedStates, state) {
-			nodes = append(nodes, s.issueNode(state))
+			nodes = append(nodes, s.issueSnapshotNode(state))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
@@ -830,7 +844,34 @@ func (s *fakeLinearServer) setCurrentState(state string) {
 	s.current = state
 }
 
-func (s *fakeLinearServer) issueNode(state string) map[string]any {
+func (s *fakeLinearServer) issueSnapshotNode(state string) map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-93",
+		"title":      "SDK integration e2e",
+		"priority":   1,
+		"project": map[string]any{
+			"id":     "project-1",
+			"slugId": "test-project",
+		},
+		"branchName": "colin-93",
+		"url":        "https://linear.example/COLIN-93",
+		"createdAt":  now,
+		"updatedAt":  now,
+		"state": map[string]any{
+			"name": state,
+		},
+		"labels": map[string]any{
+			"nodes": []map[string]any{{"name": "e2e"}},
+		},
+		"inverseRelations": map[string]any{
+			"nodes": []map[string]any{},
+		},
+	}
+}
+
+func (s *fakeLinearServer) issueDetailNode(state string) map[string]any {
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.mu.Lock()
 	metadata := s.metadata
@@ -852,10 +893,14 @@ func (s *fakeLinearServer) issueNode(state string) map[string]any {
 		"title":       "SDK integration e2e",
 		"description": "Verify Colin end-to-end",
 		"priority":    1,
-		"branchName":  "colin-93",
-		"url":         "https://linear.example/COLIN-93",
-		"createdAt":   now,
-		"updatedAt":   now,
+		"project": map[string]any{
+			"id":     "project-1",
+			"slugId": "test-project",
+		},
+		"branchName": "colin-93",
+		"url":        "https://linear.example/COLIN-93",
+		"createdAt":  now,
+		"updatedAt":  now,
 		"state": map[string]any{
 			"name": state,
 		},
@@ -868,7 +913,41 @@ func (s *fakeLinearServer) issueNode(state string) map[string]any {
 		"attachments": map[string]any{
 			"nodes": attachments,
 		},
+		"comments": map[string]any{
+			"nodes": []map[string]any{},
+		},
+		"history": map[string]any{
+			"nodes": []map[string]any{},
+		},
 	}
+}
+
+func (s *fakeLinearServer) issueMetadataNode() map[string]any {
+	return map[string]any{
+		"id": "issue-1",
+		"attachments": map[string]any{
+			"nodes": s.metadataAttachmentNodes(),
+		},
+	}
+}
+
+func (s *fakeLinearServer) metadataAttachmentNodes() []map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.mu.Lock()
+	metadata := s.metadata
+	s.mu.Unlock()
+	attachments := []map[string]any{}
+	if metadata != nil {
+		attachments = append(attachments, map[string]any{
+			"id":        "attachment-1",
+			"title":     "Colin metadata",
+			"url":       "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+			"createdAt": now,
+			"updatedAt": now,
+			"metadata":  metadata,
+		})
+	}
+	return attachments
 }
 
 func (s *fakeLinearServer) AuthHeader() string {

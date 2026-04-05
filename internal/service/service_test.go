@@ -140,9 +140,80 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	_, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if !errors.Is(err, linear.ErrMissingWorkflowState) {
 		t.Fatalf("New() error = %v, want linear.ErrMissingWorkflowState", err)
+	}
+}
+
+func TestLoadRuntimeHonorsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "ProjectTeamStates") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	workflow := `---
+tracker:
+  kind: linear
+  endpoint: ` + server.URL + `
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+repo:
+  publish_states:
+    - Review
+  merge_states:
+    - Merge
+codex:
+  command: codex app-server
+---
+Work on {{ .issue.identifier }}.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := loadRuntime(ctx, workflowPath, slog.New(slog.NewTextHandler(io.Discard, nil)), options{})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("loadRuntime() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, linear.ErrAPIRequest) {
+		t.Fatalf("loadRuntime() error = %v, want linear.ErrAPIRequest", err)
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("loadRuntime() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("loadRuntime() took %s, want under 1s", elapsed)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("loadRuntime() did not reach workflow state validation before timing out")
 	}
 }
 
@@ -152,7 +223,7 @@ func TestValidateGitHubAccessReturnsManagerError(t *testing.T) {
 	cfg := domain.ServiceConfig{Repo: domain.RepoConfig{APIToken: "test-token"}}
 	manager := repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &serviceGitHubStub{validateErr: errors.New("bad credentials")})
 
-	err := validateGitHubAccess(cfg, manager)
+	err := validateGitHubAccess(context.Background(), cfg, manager)
 	if err == nil {
 		t.Fatal("validateGitHubAccess() error = nil, want bad credentials")
 	}
@@ -331,7 +402,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath); err != nil {
+	if _, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath); err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 
@@ -427,7 +498,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	_, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if err == nil {
 		t.Fatal("New() error = nil, want preflight failure")
 	}
@@ -471,7 +542,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
+	_, err := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), workflowPath)
 	if !errors.Is(err, errDuplicateListenerPorts) {
 		t.Fatalf("New() error = %v, want errDuplicateListenerPorts", err)
 	}
@@ -846,7 +917,7 @@ Work on {{ .issue.identifier }}.
 	if result.SigningSecretEnvVar != GitHubWebhookSigningSecretEnvVar {
 		t.Fatalf("SigningSecretEnvVar = %q, want %q", result.SigningSecretEnvVar, GitHubWebhookSigningSecretEnvVar)
 	}
-	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread,reaction" {
+	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread" {
 		t.Fatalf("Events = %q", got)
 	}
 }
@@ -1450,16 +1521,6 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 			watchedRepo: "",
 			want:        false,
 		},
-		{
-			name: "missing pull request context",
-			event: app.GitHubWebhookEvent{
-				Event:              "reaction",
-				Action:             "created",
-				RepositoryFullName: "acme/widgets",
-			},
-			watchedRepo: "acme/widgets",
-			want:        false,
-		},
 	}
 
 	for _, tc := range cases {
@@ -1777,6 +1838,10 @@ func (s *serviceGitHubStub) PullRequestReactions(context.Context, string, string
 	return repohost.ReactionPage{}, nil
 }
 
+func (s *serviceGitHubStub) PullRequestReviewCommentReactions(context.Context, string, string, int64, int) (repoops.GitHubReviewCommentReactionPage, error) {
+	return repoops.GitHubReviewCommentReactionPage{}, nil
+}
+
 func (s *serviceGitHubStub) ReplyToReviewThread(context.Context, string, string) error {
 	return nil
 }
@@ -1785,13 +1850,17 @@ func (s *serviceGitHubStub) ResolveReviewThread(context.Context, string) error {
 	return nil
 }
 
-func (s *serviceTrackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+func (s *serviceTrackerStub) FetchCandidateIssueSnapshots(context.Context) ([]domain.Issue, error) {
 	return nil, nil
 }
 
-func (s *serviceTrackerStub) FetchIssuesByStates(_ context.Context, stateNames []string) ([]domain.Issue, error) {
+func (s *serviceTrackerStub) FetchIssueSnapshotsByStates(_ context.Context, stateNames []string) ([]domain.Issue, error) {
 	s.stateNames = append([]string(nil), stateNames...)
 	return append([]domain.Issue(nil), s.issuesByState...), nil
+}
+
+func (s *serviceTrackerStub) FetchIssueSchedulingMetadataByIDs(context.Context, []string) (map[string]domain.ColinMetadata, error) {
+	return map[string]domain.ColinMetadata{}, nil
 }
 
 func (s *serviceTrackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {

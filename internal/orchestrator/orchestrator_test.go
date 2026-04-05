@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"reflect"
 	"strings"
@@ -23,29 +24,34 @@ func init() {
 }
 
 type trackerStub struct {
-	candidateIssues     []domain.Issue
-	candidateCalls      int
-	candidateInvoked    chan struct{}
-	candidateCallCh     chan int
-	candidateHook       func(*trackerStub)
-	issuesByState       []domain.Issue
-	issuesByStateCalls  int
-	issuesByStateHook   func(*trackerStub)
-	issuesByID          []domain.Issue
-	issuesByIDCalls     int
-	rateLimits          domain.RateLimitSnapshot
-	issueComments       []string
-	commentReplies      []string
-	metadata            domain.ColinMetadata
-	ensuredLabels       []string
-	addedLabels         []string
-	removedLabels       []string
-	ensureLabelErr      error
-	addIssueLabelErr    error
-	removeIssueLabelErr error
+	candidateIssues         []domain.Issue
+	candidateCalls          int
+	candidateInvoked        chan struct{}
+	candidateCallCh         chan int
+	candidateHook           func(*trackerStub)
+	issuesByState           []domain.Issue
+	issuesByStateCalls      int
+	issuesByStateHook       func(*trackerStub)
+	schedulingMetadata      map[string]domain.ColinMetadata
+	schedulingMetadataCalls int
+	schedulingMetadataHook  func(*trackerStub)
+	issuesByID              []domain.Issue
+	issuesByIDCalls         int
+	updatedStates           []string
+	fetchIssueByIDCalls     int
+	rateLimits              domain.RateLimitSnapshot
+	issueComments           []string
+	commentReplies          []string
+	metadata                domain.ColinMetadata
+	ensuredLabels           []string
+	addedLabels             []string
+	removedLabels           []string
+	ensureLabelErr          error
+	addIssueLabelErr        error
+	removeIssueLabelErr     error
 }
 
-func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+func (s *trackerStub) FetchCandidateIssueSnapshots(context.Context) ([]domain.Issue, error) {
 	s.candidateCalls++
 	if s.candidateHook != nil {
 		s.candidateHook(s)
@@ -66,12 +72,23 @@ func (s *trackerStub) FetchCandidateIssues(context.Context) ([]domain.Issue, err
 	return s.candidateIssues, nil
 }
 
-func (s *trackerStub) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+func (s *trackerStub) FetchIssueSnapshotsByStates(context.Context, []string) ([]domain.Issue, error) {
 	s.issuesByStateCalls++
 	if s.issuesByStateHook != nil {
 		s.issuesByStateHook(s)
 	}
 	return s.issuesByState, nil
+}
+
+func (s *trackerStub) FetchIssueSchedulingMetadataByIDs(context.Context, []string) (map[string]domain.ColinMetadata, error) {
+	s.schedulingMetadataCalls++
+	if s.schedulingMetadataHook != nil {
+		s.schedulingMetadataHook(s)
+	}
+	if s.schedulingMetadata == nil {
+		return map[string]domain.ColinMetadata{}, nil
+	}
+	return maps.Clone(s.schedulingMetadata), nil
 }
 
 func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {
@@ -80,7 +97,18 @@ func (s *trackerStub) FetchIssueStatesByIDs(context.Context, []string) ([]domain
 }
 
 func (s *trackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
+	s.fetchIssueByIDCalls++
 	for _, issue := range s.issuesByID {
+		if issue.ID == issueID {
+			return issue, nil
+		}
+	}
+	for _, issue := range s.candidateIssues {
+		if issue.ID == issueID {
+			return issue, nil
+		}
+	}
+	for _, issue := range s.issuesByState {
 		if issue.ID == issueID {
 			return issue, nil
 		}
@@ -88,7 +116,8 @@ func (s *trackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.
 	return domain.Issue{}, nil
 }
 
-func (s *trackerStub) UpdateIssueState(context.Context, string, string) error {
+func (s *trackerStub) UpdateIssueState(_ context.Context, issueID string, state string) error {
+	s.updatedStates = append(s.updatedStates, issueID+":"+state)
 	return nil
 }
 
@@ -1065,6 +1094,66 @@ func TestShouldDispatchRejectsPausedLabel(t *testing.T) {
 	}
 }
 
+func TestShouldDispatchRejectsSecondMergeByDefault(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Repo:  domain.RepoConfig{MergeStates: []string{"Merge"}},
+			Agent: domain.AgentConfig{MaxConcurrentAgents: 4, MaxConcurrentAgentsByState: map[string]int{"merge": 1}},
+		}},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Already merging", State: "Merge"},
+				identifier: "ABC-1",
+			},
+		},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "2",
+		Identifier: "ABC-2",
+		Title:      "Merge candidate",
+		State:      "Merge",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false when one merge is already running")
+	}
+}
+
+func TestShouldDispatchAllowsSecondMergeWhenWorkflowOverridesLimit(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Repo:  domain.RepoConfig{MergeStates: []string{"Merge"}},
+			Agent: domain.AgentConfig{MaxConcurrentAgents: 4, MaxConcurrentAgentsByState: map[string]int{"merge": 2}},
+		}},
+		running: map[string]*runningEntry{
+			"1": {
+				issue:      domain.Issue{ID: "1", Identifier: "ABC-1", Title: "Already merging", State: "Merge"},
+				identifier: "ABC-1",
+			},
+		},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if !orch.shouldDispatch(domain.Issue{
+		ID:         "2",
+		Identifier: "ABC-2",
+		Title:      "Merge candidate",
+		State:      "Merge",
+	}) {
+		t.Fatal("shouldDispatch() = false, want true when merge limit is explicitly raised")
+	}
+}
+
 func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	t.Parallel()
 
@@ -1897,7 +1986,7 @@ func TestPostRunSummaryPreservesMultilineEvidence(t *testing.T) {
 		comment:    &commentThreadState{RunType: codex.RunTypeCoding, RootCommentID: "root"},
 	}
 
-	summary := "What changed: tightened the review summary format.\n\nBefore: completion comments were generic.\nAfter: completion comments explain the change in before/after terms.\nVerification: go test ./internal/automation ./internal/orchestrator"
+	summary := "## Why\n\nTightened the review summary format so handoff comments are easier to scan.\n\n## Before\n\nCompletion comments were generic.\n\n## After\n\nCompletion comments use explicit Why/Before/After/Evidence sections.\n\n## Evidence\n\n```text\ngo test ./internal/automation ./internal/orchestrator\n```"
 	orch.postRunSummary(context.Background(), entry, domain.Issue{ID: "issue-1", Identifier: "COLIN-149"}, summary)
 
 	if len(tracker.commentReplies) != 1 {
@@ -2301,7 +2390,10 @@ func TestHandleTickAllowsCandidateFetchAboveSoftReserveDespiteNextAllowedAt(t *t
 	orch.handleTick(context.Background())
 
 	if tracker.candidateCalls != 1 {
-		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+		t.Fatalf("FetchCandidateIssueSnapshots() calls = %d, want 1", tracker.candidateCalls)
+	}
+	if tracker.fetchIssueByIDCalls != 1 {
+		t.Fatalf("FetchIssueByID() calls = %d, want 1", tracker.fetchIssueByIDCalls)
 	}
 	select {
 	case <-runner.invoked:
@@ -2357,10 +2449,16 @@ func TestHandleTickRefreshesStateCountsAfterCandidateFetchUsesBudget(t *testing.
 	orch.handleTick(context.Background())
 
 	if tracker.candidateCalls != 1 {
-		t.Fatalf("FetchCandidateIssues() calls = %d, want 1", tracker.candidateCalls)
+		t.Fatalf("FetchCandidateIssueSnapshots() calls = %d, want 1", tracker.candidateCalls)
 	}
 	if tracker.issuesByStateCalls != 1 {
-		t.Fatalf("FetchIssuesByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+		t.Fatalf("FetchIssueSnapshotsByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+	}
+	if tracker.schedulingMetadataCalls != 1 {
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() calls = %d, want 1", tracker.schedulingMetadataCalls)
+	}
+	if tracker.fetchIssueByIDCalls != 0 {
+		t.Fatalf("FetchIssueByID() calls = %d, want 0", tracker.fetchIssueByIDCalls)
 	}
 	if got := orch.issueStates["Todo"]; got != 1 {
 		t.Fatalf("issueStates[Todo] = %d, want 1", got)

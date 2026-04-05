@@ -8,6 +8,7 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await page.getByTestId("refresh-button").click();
   await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
   await expect(page.getByTestId("dashboard-root")).toBeVisible();
+  await expect(page.getByTestId("snapshot-age")).toHaveText(/old$/);
   const stateCounts = page.getByTestId("linear-state-counts");
   await expect(stateCounts).toBeVisible();
   await expect(stateCounts.locator(".stat-title").filter({ hasText: /^In Progress$/ })).toBeVisible();
@@ -73,6 +74,15 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
   await expect(page.getByTestId("context-window-COLIN-7")).toHaveText("Context window: 70% left (78.4K used / 258K)");
   await expect(page.getByTestId("context-window-bar-COLIN-7")).toHaveAttribute("aria-valuenow", "30");
+  await expect(page.getByTestId("rate-limits-linear-linear_requests")).toBeVisible();
+  await expect(page.getByTestId("rate-limits-linear-linear_requests").locator("[role='progressbar']")).toHaveAttribute(
+    "aria-valuenow",
+    "75",
+  );
+  await expect(page.locator(".stats")).toContainText("Runtime");
+  await expect(page.locator(".stats")).toContainText("7m");
+  await expect(page.locator(".stats")).toContainText("5,000");
+  await expect(page.getByText("API snapshot")).toHaveCount(0);
   await expect(page.getByTestId("shell-instance")).toHaveCount(0);
 
   await page.getByTestId("state-issue-review-COLIN-24").locator(".state-issue-title-link").click();
@@ -158,6 +168,7 @@ test("dashboard marks the view stale when the SSE stream fails and recovers afte
   await page.route("**/api/v1/events", routeHandler);
 
   await page.getByTestId("refresh-button").click();
+  await expect(refreshStatus).not.toHaveAttribute("data-refresh-status", "stale");
   await expect(refreshStatus).toHaveAttribute("data-refresh-status", "stale");
   await expect(refreshStatus).toHaveText("Stale data");
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();

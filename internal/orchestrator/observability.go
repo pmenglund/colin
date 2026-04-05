@@ -226,7 +226,7 @@ func cloneRateLimitWindow(input domain.RateLimitWindow) domain.RateLimitWindow {
 
 // StartupTerminalCleanup removes stale workspaces for issues already in terminal tracker states.
 func (o *Orchestrator) StartupTerminalCleanup(ctx context.Context) error {
-	issues, err := o.runtime.Tracker.FetchIssuesByStates(ctx, o.runtime.Config.Tracker.TerminalStates)
+	issues, err := o.runtime.Tracker.FetchIssueSnapshotsByStates(ctx, o.runtime.Config.Tracker.TerminalStates)
 	if err != nil {
 		return fmt.Errorf("startup terminal cleanup: %w", err)
 	}

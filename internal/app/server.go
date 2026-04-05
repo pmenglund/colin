@@ -63,6 +63,11 @@ type GitHubWebhookEvent struct {
 	RepositoryFullName string
 	PullRequestNumber  int
 	HasPullRequest     bool
+	ReactionContent    string
+	ReactionUserLogin  string
+	CommentID          int64
+	CommentBody        string
+	CommentAuthorLogin string
 	Relevant           bool
 }
 

@@ -300,6 +300,10 @@ a {
   color: var(--text);
 }
 
+.rate-limit-progress-detail {
+  color: var(--muted);
+}
+
 .rate-limit-progress-reset {
   margin-left: auto;
 }
@@ -554,7 +558,9 @@ a {
 .worker-metrics {
   display: grid;
   gap: 0.8rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 18rem));
+  justify-content: start;
+  align-items: start;
 }
 
 .worker-metrics .card {

@@ -94,37 +94,44 @@ func ManagedCodexReviewLabels() []string {
 
 // ColinMetadata is persisted on the Linear issue to track Colin-specific workflow state.
 type ColinMetadata struct {
-	AttachmentID            string
-	URL                     string
-	CodexThreadID           string
-	ProgressRootCommentID   string
-	ColinCommentIDs         []string
-	ActualBranchName        string
-	ExecPlanDecision        ExecPlanDecision
-	ReviewPublishDirective  ReviewPublishDirective
-	LastRunType             RunType
-	LastOutcome             RunOutcome
-	LastSummaryCommentID    string
-	PullRequestNumber       int
-	PullRequestURL          string
-	PullRequestState        string
-	PullRequestHeadRef      string
-	PullRequestBaseRef      string
-	PullRequestBackend      string
-	PullRequestRepoOwner    string
-	PullRequestRepoName     string
-	LoopFailureFingerprint  string
-	LoopFailureCount        int
-	PausedAt                *time.Time
-	PausedRunType           string
-	PausedState             string
-	PausedReason            string
-	SlackChannelID          string
-	SlackMessageTS          string
-	SlackPermalink          string
-	SlackSummaryFingerprint string
-	UpdatedAt               *time.Time
-	CodexOutput             []OutputLog
+	AttachmentID             string
+	URL                      string
+	CodexThreadID            string
+	ProgressRootCommentID    string
+	ColinCommentIDs          []string
+	ActualBranchName         string
+	PendingReviewCommentID   string
+	PendingReviewThreadID    string
+	PendingReviewReactionID  string
+	PendingReviewReactor     string
+	PendingReviewRequestedAt *time.Time
+	QueuedReviewFollowUps    []PendingReviewFollowUp
+	ReviewReactionWatermarks map[string]string
+	ExecPlanDecision         ExecPlanDecision
+	ReviewPublishDirective   ReviewPublishDirective
+	LastRunType              RunType
+	LastOutcome              RunOutcome
+	LastSummaryCommentID     string
+	PullRequestNumber        int
+	PullRequestURL           string
+	PullRequestState         string
+	PullRequestHeadRef       string
+	PullRequestBaseRef       string
+	PullRequestBackend       string
+	PullRequestRepoOwner     string
+	PullRequestRepoName      string
+	LoopFailureFingerprint   string
+	LoopFailureCount         int
+	PausedAt                 *time.Time
+	PausedRunType            string
+	PausedState              string
+	PausedReason             string
+	SlackChannelID           string
+	SlackMessageTS           string
+	SlackPermalink           string
+	SlackSummaryFingerprint  string
+	UpdatedAt                *time.Time
+	CodexOutput              []OutputLog
 }
 
 // ExecPlan is persisted on the Linear issue to track the current issue execution plan.
@@ -182,6 +189,15 @@ type ReviewThread struct {
 	IsOutdated bool
 	CanReply   bool
 	CanResolve bool
+}
+
+// PendingReviewFollowUp is one queued targeted review-thread follow-up.
+type PendingReviewFollowUp struct {
+	ThreadID    string
+	CommentID   string
+	ReactionID  string
+	Reactor     string
+	RequestedAt *time.Time
 }
 
 // WorkflowDefinition is the parsed WORKFLOW.md content used for config and prompt rendering.

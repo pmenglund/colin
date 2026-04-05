@@ -13,7 +13,6 @@ var githubWebhookEvents = []string{
 	"pull_request_review",
 	"pull_request_review_comment",
 	"pull_request_review_thread",
-	"reaction",
 }
 
 // GitHubWebhookSetupResult is the operator-facing outcome of GitHub webhook setup guidance.

@@ -27,8 +27,8 @@ type runtimeService interface {
 }
 
 var (
-	newRuntimeService = func(logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
-		return service.New(logger, workflowPath, options...)
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+		return service.New(ctx, logger, workflowPath, options...)
 	}
 	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
 		return tui.Run(ctx, in, out, source, serviceErrCh, requestShutdownDrain, stop)
@@ -43,14 +43,14 @@ func runRoot(cmd *cobra.Command, opts rootOptions) int {
 	}
 
 	logger := service.NewDefaultLogger(opts.verbose)
-	svc, err := newRuntimeService(logger, opts.workflowPath, options...)
+	ctx, stop := signalContext(cmd.Context())
+	defer stop()
+
+	svc, err := newRuntimeService(ctx, logger, opts.workflowPath, options...)
 	if err != nil {
 		logger.Error("startup failed", "error", service.DescribeStartupError(err))
 		return 1
 	}
-
-	ctx, stop := signalContext(cmd.Context())
-	defer stop()
 
 	runErrCh := make(chan error, 1)
 	go func() {

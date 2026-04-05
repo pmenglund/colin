@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -70,143 +71,32 @@ func (a fakeAttachmentAdapter) NewClient(domain.ServiceConfig, *slog.Logger) (re
 	return nil, nil
 }
 
-func TestNewValidatesWorkflowStates(t *testing.T) {
+func TestNewDoesNotValidateWorkflowStates(t *testing.T) {
 	t.Parallel()
 
+	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		var request struct {
-			Query     string         `json:"query"`
-			Variables map[string]any `json:"variables"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("Decode() error = %v", err)
-		}
-		if !strings.Contains(request.Query, "ProjectTeamStates") {
-			t.Fatalf("unexpected query: %s", request.Query)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"projects": map[string]any{
-					"nodes": []map[string]any{
-						{
-							"id": "project-1",
-							"teams": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":   "team-1",
-										"name": "Product",
-										"states": map[string]any{
-											"nodes": []map[string]any{
-												{"name": "Todo"},
-												{"name": "In Progress"},
-												{"name": "Review"},
-												{"name": "Merge"},
-												{"name": "Done"},
-												{"name": "Refine"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		})
+		requests++
+		t.Fatalf("New() unexpectedly issued request to %s", r.URL.Path)
 	}))
 	defer server.Close()
 
-	client, err := New(domain.ServiceConfig{
-		Tracker: domain.TrackerConfig{
-			Kind:           "linear",
-			Endpoint:       server.URL,
-			APIKey:         "token",
-			ProjectSlug:    "project-1",
-			ActiveStates:   []string{"Todo", "In Progress"},
-			TerminalStates: []string{"Done"},
-		},
-		Repo: domain.RepoConfig{
-			PublishStates: []string{"Review"},
-			MergeStates:   []string{"Merge"},
-		},
-		Codex: domain.CodexConfig{
-			Command: "codex app-server",
-		},
-	})
+	client, err := New(testLinearClientConfig(server.URL))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	if client == nil {
 		t.Fatal("New() returned nil client")
 	}
-	if got := client.WatchedProjectID(); got != "project-1" {
-		t.Fatalf("WatchedProjectID() = %q, want %q", got, "project-1")
+	if requests != 0 {
+		t.Fatalf("request count = %d, want 0", requests)
+	}
+	if got := client.WatchedProjectIDs(); len(got) != 0 {
+		t.Fatalf("WatchedProjectIDs() = %v, want no validated projects before explicit validation", got)
 	}
 }
 
-func TestNewFailsWhenWorkflowStateMissing(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"projects": map[string]any{
-					"nodes": []map[string]any{
-						{
-							"id": "project-1",
-							"teams": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":   "team-1",
-										"name": "Product",
-										"states": map[string]any{
-											"nodes": []map[string]any{
-												{"name": "Todo"},
-												{"name": "In Progress"},
-												{"name": "Review"},
-												{"name": "Merge"},
-												{"name": "Done"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		})
-	}))
-	defer server.Close()
-
-	_, err := New(domain.ServiceConfig{
-		Tracker: domain.TrackerConfig{
-			Kind:           "linear",
-			Endpoint:       server.URL,
-			APIKey:         "token",
-			ProjectSlug:    "project-1",
-			ActiveStates:   []string{"Todo", "In Progress"},
-			TerminalStates: []string{"Done"},
-		},
-		Repo: domain.RepoConfig{
-			PublishStates: []string{"Review"},
-			MergeStates:   []string{"Merge"},
-		},
-		Codex: domain.CodexConfig{
-			Command: "codex app-server",
-		},
-	})
-	if !errors.Is(err, ErrMissingWorkflowState) {
-		t.Fatalf("New() error = %v, want ErrMissingWorkflowState", err)
-	}
-	if !strings.Contains(err.Error(), "Refine") {
-		t.Fatalf("New() error = %q, want missing Refine state", err)
-	}
-}
-
-func TestNewTracksMultipleWatchedProjects(t *testing.T) {
+func TestValidateWorkflowStatesPopulatesWatchedProjects(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,10 +141,127 @@ func TestNewTracksMultipleWatchedProjects(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := New(domain.ServiceConfig{
+	cfg := testLinearClientConfig(server.URL)
+	cfg.Targets = []domain.TargetConfig{
+		{ProjectSlug: "project-1"},
+		{ProjectSlug: "project-2"},
+	}
+
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := client.ValidateWorkflowStates(context.Background(), cfg); err != nil {
+		t.Fatalf("ValidateWorkflowStates() error = %v", err)
+	}
+
+	got := client.WatchedProjectIDs()
+	if len(got) != 2 || got[0] != "project-1-id" || got[1] != "project-2-id" {
+		t.Fatalf("WatchedProjectIDs() = %v, want [project-1-id project-2-id]", got)
+	}
+}
+
+func TestValidateWorkflowStatesFailsWhenWorkflowStateMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"projects": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"id":   "team-1",
+										"name": "Product",
+										"states": map[string]any{
+											"nodes": []map[string]any{
+												{"name": "Todo"},
+												{"name": "In Progress"},
+												{"name": "Review"},
+												{"name": "Merge"},
+												{"name": "Done"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := testLinearClientConfig(server.URL)
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	err = client.ValidateWorkflowStates(context.Background(), cfg)
+	if !errors.Is(err, ErrMissingWorkflowState) {
+		t.Fatalf("ValidateWorkflowStates() error = %v, want ErrMissingWorkflowState", err)
+	}
+	if !strings.Contains(err.Error(), "Refine") {
+		t.Fatalf("ValidateWorkflowStates() error = %q, want missing Refine state", err)
+	}
+}
+
+func TestValidateWorkflowStatesHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	cfg := testLinearClientConfig(server.URL)
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = client.ValidateWorkflowStates(ctx, cfg)
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrAPIRequest) {
+		t.Fatalf("ValidateWorkflowStates() error = %v, want ErrAPIRequest", err)
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("ValidateWorkflowStates() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("ValidateWorkflowStates() took %s, want under 1s", elapsed)
+	}
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("validation request did not reach server")
+	}
+}
+
+func testLinearClientConfig(endpoint string) domain.ServiceConfig {
+	return domain.ServiceConfig{
 		Tracker: domain.TrackerConfig{
 			Kind:           "linear",
-			Endpoint:       server.URL,
+			Endpoint:       endpoint,
 			APIKey:         "token",
 			ProjectSlug:    "project-1",
 			ActiveStates:   []string{"Todo", "In Progress"},
@@ -264,21 +271,9 @@ func TestNewTracksMultipleWatchedProjects(t *testing.T) {
 			PublishStates: []string{"Review"},
 			MergeStates:   []string{"Merge"},
 		},
-		Targets: []domain.TargetConfig{
-			{ProjectSlug: "project-1"},
-			{ProjectSlug: "project-2"},
-		},
 		Codex: domain.CodexConfig{
 			Command: "codex app-server",
 		},
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	got := client.WatchedProjectIDs()
-	if len(got) != 2 || got[0] != "project-1-id" || got[1] != "project-2-id" {
-		t.Fatalf("WatchedProjectIDs() = %v, want [project-1-id project-2-id]", got)
 	}
 }
 
@@ -677,11 +672,10 @@ func TestCreateIssueComment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		uiBaseURL:   "https://colin.example.test/root/",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	commentID, err := client.CreateIssueComment(context.Background(), "issue-1", "hello world")
@@ -725,11 +719,10 @@ func TestCreateCommentReply(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		uiBaseURL:   "https://colin.example.test/root/",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	commentID, err := client.CreateCommentReply(context.Background(), "issue-1", "comment-1", "reply")
@@ -802,7 +795,6 @@ func TestEnsureProjectIssueWebhookCreatesMissingWebhook(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -892,7 +884,6 @@ func TestEnsureProjectIssueWebhookLeavesMatchingWebhookUnchanged(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -990,7 +981,6 @@ func TestEnsureProjectIssueWebhookReplacesManagedWebhookMissingIssueLabelSubscri
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -1090,7 +1080,6 @@ func TestEnsureProjectIssueWebhookReplacesManagedWebhookAtOldURL(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -1171,11 +1160,10 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		uiBaseURL:   "https://colin.example.test/root/",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 3, 29, 17, 0, 0, 0, time.UTC)
@@ -1194,9 +1182,6 @@ func TestUpsertIssueMetadata(t *testing.T) {
 		PullRequestState:        "OPEN",
 		PullRequestHeadRef:      "pmenglund/colin-94",
 		PullRequestBaseRef:      "main",
-		PullRequestBackend:      "github",
-		PullRequestRepoOwner:    "pmenglund",
-		PullRequestRepoName:     "colin",
 		LoopFailureFingerprint:  "review_publish\nReview\nno commits",
 		LoopFailureCount:        2,
 		PausedAt:                &now,
@@ -1254,15 +1239,6 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	if gotMetadata["pull_request_base_ref"] != "main" {
 		t.Fatalf("pull_request_base_ref = %v, want main", gotMetadata["pull_request_base_ref"])
 	}
-	if gotMetadata["pull_request_backend"] != "github" {
-		t.Fatalf("pull_request_backend = %v, want github", gotMetadata["pull_request_backend"])
-	}
-	if gotMetadata["pull_request_repo_owner"] != "pmenglund" {
-		t.Fatalf("pull_request_repo_owner = %v, want pmenglund", gotMetadata["pull_request_repo_owner"])
-	}
-	if gotMetadata["pull_request_repo_name"] != "colin" {
-		t.Fatalf("pull_request_repo_name = %v, want colin", gotMetadata["pull_request_repo_name"])
-	}
 	if gotMetadata["loop_failure_fingerprint"] != "review_publish\nReview\nno commits" {
 		t.Fatalf("loop_failure_fingerprint = %v", gotMetadata["loop_failure_fingerprint"])
 	}
@@ -1316,15 +1292,6 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.PullRequestHeadRef != "pmenglund/colin-94" {
 		t.Fatalf("metadata.PullRequestHeadRef = %q, want %q", metadata.PullRequestHeadRef, "pmenglund/colin-94")
-	}
-	if metadata.PullRequestBackend != "github" {
-		t.Fatalf("metadata.PullRequestBackend = %q, want github", metadata.PullRequestBackend)
-	}
-	if metadata.PullRequestRepoOwner != "pmenglund" {
-		t.Fatalf("metadata.PullRequestRepoOwner = %q, want pmenglund", metadata.PullRequestRepoOwner)
-	}
-	if metadata.PullRequestRepoName != "colin" {
-		t.Fatalf("metadata.PullRequestRepoName = %q, want colin", metadata.PullRequestRepoName)
 	}
 	if metadata.LoopFailureCount != 2 {
 		t.Fatalf("metadata.LoopFailureCount = %d, want 2", metadata.LoopFailureCount)
@@ -1387,11 +1354,10 @@ func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		uiBaseURL:   "http://127.0.0.1:8888",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "http://127.0.0.1:8888",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 	client.SetUIBaseURLResolver(func(context.Context) string {
 		return "https://colin.tail.example.ts.net"
@@ -1482,11 +1448,10 @@ func TestUpsertIssueMetadataUpdatesExistingAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		uiBaseURL:   "https://colin.example.test/root/",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
@@ -1591,11 +1556,10 @@ func TestUpsertIssueMetadataUpdatesNewestDuplicateAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		uiBaseURL:   "https://colin.example.test/root/",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 
 	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
@@ -1661,11 +1625,10 @@ func TestEnsureIssueLabelCreatesMissingLabel(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
-		labelIDs:    map[string]string{},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
 	}
 
 	if err := client.EnsureIssueLabel(context.Background(), domain.PausedIssueLabel); err != nil {
@@ -1728,11 +1691,10 @@ func TestAddIssueLabelUsesExistingLabelID(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
-		labelIDs:    map[string]string{},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
 	}
 
 	if err := client.AddIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1798,11 +1760,10 @@ func TestRemoveIssueLabelUsesExistingLabelID(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
-		labelIDs:    map[string]string{},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
 	}
 
 	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1843,11 +1804,10 @@ func TestRemoveIssueLabelNoopWhenLabelMissing(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
-		labelIDs:    map[string]string{},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
 	}
 
 	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1907,11 +1867,10 @@ func TestRemoveIssueLabelNoopWhenIssueAlreadyLacksLabel(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
-		labelIDs:    map[string]string{},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
 	}
 
 	if err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel); err != nil {
@@ -1972,11 +1931,10 @@ func TestRemoveIssueLabelReturnsMixedGraphQLErrors(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
-		labelIDs:    map[string]string{},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
 	}
 
 	err := client.RemoveIssueLabel(context.Background(), "issue-1", domain.PausedIssueLabel)
@@ -2047,10 +2005,9 @@ func TestUpsertIssueExecPlan(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 3, 29, 17, 5, 0, 0, time.UTC)
@@ -2153,10 +2110,9 @@ func TestUpsertIssueExecPlanUpdatesExistingAttachment(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 
 	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
@@ -2238,10 +2194,9 @@ func TestUpsertIssueExecPlanRejectsDuplicates(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 
 	_, err := client.UpsertIssueExecPlan(context.Background(), "issue-1", domain.ExecPlan{Body: "# Plan\n\nDetails."})
@@ -2307,10 +2262,9 @@ func TestUpdateIssueState(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 
 	if err := client.UpdateIssueState(context.Background(), "issue-1", "Review"); err != nil {
@@ -2351,10 +2305,9 @@ func TestUpdateIssueStateUnknownState(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 
 	err := client.UpdateIssueState(context.Background(), "issue-1", "Review")
@@ -2383,7 +2336,6 @@ func TestCurrentRateLimitsCapturesRequestHeaders(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
@@ -2391,8 +2343,8 @@ func TestCurrentRateLimitsCapturesRequestHeaders(t *testing.T) {
 		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
-	if _, err := client.FetchCandidateIssues(context.Background()); err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+	if _, err := client.FetchCandidateIssueSnapshots(context.Background()); err != nil {
+		t.Fatalf("FetchCandidateIssueSnapshots() error = %v", err)
 	}
 
 	limits := client.CurrentRateLimits()
@@ -2450,10 +2402,9 @@ func TestResolveGitAutomationStatePrefersBranchSpecificMatch(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter: mustTestRepoAdapter(t),
-		endpoint:    server.URL,
-		apiKey:      "token",
-		client:      &http.Client{Timeout: 5 * time.Second},
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 
 	stateName, ok, err := client.ResolveGitAutomationState(context.Background(), "issue-1", "merge", "main")
@@ -2468,7 +2419,105 @@ func TestResolveGitAutomationStatePrefersBranchSpecificMatch(t *testing.T) {
 	}
 }
 
-func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
+func TestFetchCandidateIssueSnapshotsStayLightweight(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if strings.Contains(request.Query, "attachments(first: 50)") {
+			t.Fatalf("snapshot query unexpectedly fetched attachments: %s", request.Query)
+		}
+		if strings.Contains(request.Query, "comments(first: 50)") {
+			t.Fatalf("snapshot query unexpectedly fetched comments: %s", request.Query)
+		}
+		if strings.Contains(request.Query, "history(first: 100)") {
+			t.Fatalf("snapshot query unexpectedly fetched history: %s", request.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []map[string]any{
+						{
+							"id":         "issue-1",
+							"identifier": "COLIN-94",
+							"title":      "Address review",
+							"priority":   2,
+							"project": map[string]any{
+								"id":     "project-1",
+								"slugId": "project-1",
+							},
+							"branchName": "colin-94",
+							"url":        "https://linear.app/example/issue/COLIN-94",
+							"createdAt":  "2026-03-28T18:00:00Z",
+							"updatedAt":  "2026-03-28T19:00:00Z",
+							"state":      map[string]any{"name": "Todo"},
+							"labels":     map[string]any{"nodes": []map[string]any{{"name": "paused"}}},
+							"inverseRelations": map[string]any{
+								"nodes": []map[string]any{
+									{
+										"type": "blocks",
+										"issue": map[string]any{
+											"id":         "issue-2",
+											"identifier": "COLIN-95",
+											"state":      map[string]any{"name": "In Progress"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:           server.URL,
+		apiKey:             "token",
+		primaryProjectSlug: "project-1",
+		active:             []string{"Todo"},
+		client:             &http.Client{Timeout: 5 * time.Second},
+	}
+
+	issues, err := client.FetchCandidateIssueSnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssueSnapshots() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues length = %d, want 1", len(issues))
+	}
+	if issues[0].ColinMetadata != nil {
+		t.Fatalf("ColinMetadata = %#v, want nil on snapshot fetch", issues[0].ColinMetadata)
+	}
+	if issues[0].ExecPlan != nil {
+		t.Fatalf("ExecPlan = %#v, want nil on snapshot fetch", issues[0].ExecPlan)
+	}
+	if len(issues[0].AttachedPullRequests) != 0 {
+		t.Fatalf("AttachedPullRequests = %#v, want empty on snapshot fetch", issues[0].AttachedPullRequests)
+	}
+	if issues[0].ReviewCycle != nil {
+		t.Fatalf("ReviewCycle = %#v, want nil on snapshot fetch", issues[0].ReviewCycle)
+	}
+	if len(issues[0].ReviewFeedback) != 0 {
+		t.Fatalf("ReviewFeedback = %#v, want empty on snapshot fetch", issues[0].ReviewFeedback)
+	}
+	if issues[0].Priority == nil || *issues[0].Priority != 2 {
+		t.Fatalf("Priority = %v, want 2", issues[0].Priority)
+	}
+	if len(issues[0].BlockedBy) != 1 || issues[0].BlockedBy[0].Identifier == nil || *issues[0].BlockedBy[0].Identifier != "COLIN-95" {
+		t.Fatalf("BlockedBy = %#v, want COLIN-95 blocker", issues[0].BlockedBy)
+	}
+}
+
+func TestFetchIssueByIDIncludesLatestHumanReviewFeedback(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
@@ -2481,99 +2530,97 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("Decode() error = %v", err)
 		}
+		if !strings.Contains(request.Query, "attachments(first: 50)") {
+			t.Fatalf("detail query missing attachments fetch: %s", request.Query)
+		}
 		if !strings.Contains(request.Query, "comments(first: 50)") {
-			t.Fatalf("query missing comments fetch: %s", request.Query)
+			t.Fatalf("detail query missing comments fetch: %s", request.Query)
 		}
 		if !strings.Contains(request.Query, "history(first: 100)") {
-			t.Fatalf("query missing history fetch: %s", request.Query)
+			t.Fatalf("detail query missing history fetch: %s", request.Query)
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"issues": map[string]any{
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
-					"nodes": []map[string]any{
-						{
-							"id":         "issue-1",
-							"identifier": "COLIN-94",
-							"title":      "Address review",
-							"state":      map[string]any{"name": "Todo"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
+				"issue": map[string]any{
+					"id":         "issue-1",
+					"identifier": "COLIN-94",
+					"title":      "Address review",
+					"state":      map[string]any{"name": "Todo"},
+					"labels":     map[string]any{"nodes": []map[string]any{}},
+					"inverseRelations": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"attachments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":    "attachment-1",
+								"title": "Colin metadata",
+								"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
+								"metadata": map[string]any{
+									"colin_comment_ids": []any{"comment-colin"},
+								},
 							},
-							"attachments": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":    "attachment-1",
-										"title": "Colin metadata",
-										"url":   "https://colin.example.test/linear/issues/issue-1/metadata",
-										"metadata": map[string]any{
-											"colin_comment_ids": []any{"comment-colin"},
+						},
+					},
+					"comments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "comment-old",
+								"body":      "Old review cycle feedback",
+								"createdAt": base.Add(20 * time.Minute).Format(time.RFC3339),
+								"children":  map[string]any{"nodes": []map[string]any{}},
+							},
+							{
+								"id":        "comment-human",
+								"body":      "Address the code review feedback.",
+								"createdAt": base.Add(70 * time.Minute).Format(time.RFC3339),
+								"children": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"id":        "reply-human",
+											"body":      "Then mark the PR comment resolved.",
+											"createdAt": base.Add(71 * time.Minute).Format(time.RFC3339),
+											"parentId":  "comment-human",
 										},
 									},
 								},
 							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":        "comment-old",
-										"body":      "Old review cycle feedback",
-										"createdAt": base.Add(20 * time.Minute).Format(time.RFC3339),
-										"children":  map[string]any{"nodes": []map[string]any{}},
-									},
-									{
-										"id":        "comment-human",
-										"body":      "Address the code review feedback.",
-										"createdAt": base.Add(70 * time.Minute).Format(time.RFC3339),
-										"children": map[string]any{
-											"nodes": []map[string]any{
-												{
-													"id":        "reply-human",
-													"body":      "Then mark the PR comment resolved.",
-													"createdAt": base.Add(71 * time.Minute).Format(time.RFC3339),
-													"parentId":  "comment-human",
-												},
-											},
-										},
-									},
-									{
-										"id":        "comment-colin",
-										"body":      "Colin started work on this issue.",
-										"createdAt": base.Add(72 * time.Minute).Format(time.RFC3339),
-										"children":  map[string]any{"nodes": []map[string]any{}},
-									},
-									{
-										"id":        "comment-after",
-										"body":      "This was added after the issue moved back to Todo.",
-										"createdAt": base.Add(95 * time.Minute).Format(time.RFC3339),
-										"children":  map[string]any{"nodes": []map[string]any{}},
-									},
-								},
+							{
+								"id":        "comment-colin",
+								"body":      "Colin started work on this issue.",
+								"createdAt": base.Add(72 * time.Minute).Format(time.RFC3339),
+								"children":  map[string]any{"nodes": []map[string]any{}},
 							},
-							"history": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"createdAt": base.Add(10 * time.Minute).Format(time.RFC3339),
-										"fromState": map[string]any{"name": "In Progress"},
-										"toState":   map[string]any{"name": "Review"},
-									},
-									{
-										"createdAt": base.Add(30 * time.Minute).Format(time.RFC3339),
-										"fromState": map[string]any{"name": "Review"},
-										"toState":   map[string]any{"name": "Todo"},
-									},
-									{
-										"createdAt": base.Add(60 * time.Minute).Format(time.RFC3339),
-										"fromState": map[string]any{"name": "In Progress"},
-										"toState":   map[string]any{"name": "Review"},
-									},
-									{
-										"createdAt": base.Add(90 * time.Minute).Format(time.RFC3339),
-										"fromState": map[string]any{"name": "Review"},
-										"toState":   map[string]any{"name": "Todo"},
-									},
-								},
+							{
+								"id":        "comment-after",
+								"body":      "This was added after the issue moved back to Todo.",
+								"createdAt": base.Add(95 * time.Minute).Format(time.RFC3339),
+								"children":  map[string]any{"nodes": []map[string]any{}},
+							},
+						},
+					},
+					"history": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"createdAt": base.Add(10 * time.Minute).Format(time.RFC3339),
+								"fromState": map[string]any{"name": "In Progress"},
+								"toState":   map[string]any{"name": "Review"},
+							},
+							{
+								"createdAt": base.Add(30 * time.Minute).Format(time.RFC3339),
+								"fromState": map[string]any{"name": "Review"},
+								"toState":   map[string]any{"name": "Todo"},
+							},
+							{
+								"createdAt": base.Add(60 * time.Minute).Format(time.RFC3339),
+								"fromState": map[string]any{"name": "In Progress"},
+								"toState":   map[string]any{"name": "Review"},
+							},
+							{
+								"createdAt": base.Add(90 * time.Minute).Format(time.RFC3339),
+								"fromState": map[string]any{"name": "Review"},
+								"toState":   map[string]any{"name": "Todo"},
 							},
 						},
 					},
@@ -2588,19 +2635,16 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
-		active:             []string{"Todo"},
+		active:             []string{"Review"},
 		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
-	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+		t.Fatalf("FetchIssueByID() error = %v", err)
 	}
 
-	got := issues[0].ReviewFeedback
+	got := issue.ReviewFeedback
 	if len(got) != 2 {
 		t.Fatalf("review feedback length = %d, want 2", len(got))
 	}
@@ -2615,7 +2659,7 @@ func TestFetchCandidateIssuesIncludesLatestHumanReviewFeedback(t *testing.T) {
 	}
 }
 
-func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T) {
+func TestFetchIssueByIDDedupesRepliesReturnedAtMultipleLevels(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2026, 3, 28, 18, 0, 0, 0, time.UTC)
@@ -2623,57 +2667,55 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 		defer r.Body.Close()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"issues": map[string]any{
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
-					"nodes": []map[string]any{
-						{
-							"id":         "issue-1",
-							"identifier": "COLIN-94",
-							"title":      "Address review",
-							"state":      map[string]any{"name": "Todo"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":        "comment-human",
-										"body":      "Address the review feedback.",
-										"createdAt": base.Add(10 * time.Minute).Format(time.RFC3339),
-										"children": map[string]any{
-											"nodes": []map[string]any{
-												{
-													"id":        "reply-human",
-													"body":      "Mark the PR thread resolved.",
-													"createdAt": base.Add(11 * time.Minute).Format(time.RFC3339),
-													"parentId":  "comment-human",
-												},
-											},
+				"issue": map[string]any{
+					"id":         "issue-1",
+					"identifier": "COLIN-94",
+					"title":      "Address review",
+					"state":      map[string]any{"name": "Todo"},
+					"labels":     map[string]any{"nodes": []map[string]any{}},
+					"inverseRelations": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"attachments": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"comments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":        "comment-human",
+								"body":      "Address the review feedback.",
+								"createdAt": base.Add(10 * time.Minute).Format(time.RFC3339),
+								"children": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"id":        "reply-human",
+											"body":      "Mark the PR thread resolved.",
+											"createdAt": base.Add(11 * time.Minute).Format(time.RFC3339),
+											"parentId":  "comment-human",
 										},
 									},
-									{
-										"id":        "reply-human",
-										"body":      "Mark the PR thread resolved.",
-										"createdAt": base.Add(11 * time.Minute).Format(time.RFC3339),
-										"parentId":  "comment-human",
-										"children":  map[string]any{"nodes": []map[string]any{}},
-									},
 								},
 							},
-							"history": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"createdAt": base.Add(5 * time.Minute).Format(time.RFC3339),
-										"fromState": map[string]any{"name": "In Progress"},
-										"toState":   map[string]any{"name": "Review"},
-									},
-									{
-										"createdAt": base.Add(20 * time.Minute).Format(time.RFC3339),
-										"fromState": map[string]any{"name": "Review"},
-										"toState":   map[string]any{"name": "Todo"},
-									},
-								},
+							{
+								"id":        "reply-human",
+								"body":      "Mark the PR thread resolved.",
+								"createdAt": base.Add(11 * time.Minute).Format(time.RFC3339),
+								"parentId":  "comment-human",
+								"children":  map[string]any{"nodes": []map[string]any{}},
+							},
+						},
+					},
+					"history": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"createdAt": base.Add(5 * time.Minute).Format(time.RFC3339),
+								"fromState": map[string]any{"name": "In Progress"},
+								"toState":   map[string]any{"name": "Review"},
+							},
+							{
+								"createdAt": base.Add(20 * time.Minute).Format(time.RFC3339),
+								"fromState": map[string]any{"name": "Review"},
+								"toState":   map[string]any{"name": "Todo"},
 							},
 						},
 					},
@@ -2688,19 +2730,16 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 		endpoint:           server.URL,
 		apiKey:             "token",
 		primaryProjectSlug: "project-1",
-		active:             []string{"Todo"},
+		active:             []string{"Review"},
 		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
-	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+		t.Fatalf("FetchIssueByID() error = %v", err)
 	}
 
-	got := issues[0].ReviewFeedback
+	got := issue.ReviewFeedback
 	if len(got) != 2 {
 		t.Fatalf("review feedback length = %d, want 2", len(got))
 	}
@@ -2712,26 +2751,28 @@ func TestFetchCandidateIssuesDedupesRepliesReturnedAtMultipleLevels(t *testing.T
 	}
 }
 
-func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
+func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2026, 3, 29, 18, 0, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if strings.Contains(request.Query, "comments(first: 50)") || strings.Contains(request.Query, "history(first: 100)") {
+			t.Fatalf("metadata query unexpectedly fetched comments/history: %s", request.Query)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{
 					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
 					"nodes": []map[string]any{
 						{
-							"id":         "issue-1",
-							"identifier": "COLIN-94",
-							"title":      "Needs more detail",
-							"state":      map[string]any{"name": "Review"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
-							},
+							"id": "issue-1",
 							"attachments": map[string]any{
 								"nodes": []map[string]any{
 									{
@@ -2770,25 +2811,6 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 									},
 								},
 							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":        "comment-1",
-										"body":      "[colin] Ready for review.",
-										"createdAt": base.Add(1 * time.Minute).Format(time.RFC3339),
-										"children":  map[string]any{"nodes": []map[string]any{}},
-									},
-									{
-										"id":        "comment-2",
-										"body":      "[colin] The spec should be improved before implementation.",
-										"createdAt": base.Add(2 * time.Minute).Format(time.RFC3339),
-										"children":  map[string]any{"nodes": []map[string]any{}},
-									},
-								},
-							},
-							"history": map[string]any{
-								"nodes": []map[string]any{},
-							},
 						},
 					},
 				},
@@ -2806,55 +2828,53 @@ func TestFetchCandidateIssuesExtractsColinMetadataFromAttachment(t *testing.T) {
 		client:             &http.Client{Timeout: 5 * time.Second},
 	}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	metadataByIssueID, err := client.FetchIssueSchedulingMetadataByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+	metadata, ok := metadataByIssueID["issue-1"]
+	if !ok {
+		t.Fatalf("metadataByIssueID = %#v, want issue-1 entry", metadataByIssueID)
 	}
-	if issues[0].ColinMetadata == nil {
-		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
-	}
-	if got := issues[0].ColinMetadata.ColinCommentIDs; len(got) != 2 || got[0] != "comment-root-1" || got[1] != "reply-1" {
+	if got := metadata.ColinCommentIDs; len(got) != 2 || got[0] != "comment-root-1" || got[1] != "reply-1" {
 		t.Fatalf("ColinCommentIDs = %#v, want root/reply ids", got)
 	}
-	if issues[0].ColinMetadata.URL != "https://colin.example.test/linear/issues/issue-1/metadata" {
-		t.Fatalf("URL = %q, want metadata attachment URL", issues[0].ColinMetadata.URL)
+	if metadata.URL != "https://colin.example.test/linear/issues/issue-1/metadata" {
+		t.Fatalf("URL = %q, want metadata attachment URL", metadata.URL)
 	}
-	if issues[0].ColinMetadata.ReviewPublishDirective != "skip" {
-		t.Fatalf("ReviewPublishDirective = %q, want %q", issues[0].ColinMetadata.ReviewPublishDirective, "skip")
+	if metadata.ReviewPublishDirective != "skip" {
+		t.Fatalf("ReviewPublishDirective = %q, want %q", metadata.ReviewPublishDirective, "skip")
 	}
-	if issues[0].ColinMetadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
-		t.Fatalf("ExecPlanDecision = %q, want %q", issues[0].ColinMetadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
+	if metadata.ExecPlanDecision != domain.ExecPlanDecisionOneShot {
+		t.Fatalf("ExecPlanDecision = %q, want %q", metadata.ExecPlanDecision, domain.ExecPlanDecisionOneShot)
 	}
-	if got := len(issues[0].ColinMetadata.CodexOutput); got != 1 {
+	if got := len(metadata.CodexOutput); got != 1 {
 		t.Fatalf("CodexOutput length = %d, want 1", got)
 	}
-	if got := issues[0].ColinMetadata.CodexOutput[0].Message; got != "Implemented the change." {
+	if got := metadata.CodexOutput[0].Message; got != "Implemented the change." {
 		t.Fatalf("CodexOutput[0].Message = %q, want %q", got, "Implemented the change.")
 	}
-	if issues[0].ColinMetadata.ActualBranchName != "colin-94" {
-		t.Fatalf("ActualBranchName = %q, want %q", issues[0].ColinMetadata.ActualBranchName, "colin-94")
+	if metadata.ActualBranchName != "colin-94" {
+		t.Fatalf("ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
 	}
-	if issues[0].ColinMetadata.CodexThreadID != "thread-1" {
-		t.Fatalf("CodexThreadID = %q, want thread-1", issues[0].ColinMetadata.CodexThreadID)
+	if metadata.CodexThreadID != "thread-1" {
+		t.Fatalf("CodexThreadID = %q, want thread-1", metadata.CodexThreadID)
 	}
-	if issues[0].ColinMetadata.ProgressRootCommentID != "comment-root-1" {
-		t.Fatalf("ProgressRootCommentID = %q, want comment-root-1", issues[0].ColinMetadata.ProgressRootCommentID)
+	if metadata.ProgressRootCommentID != "comment-root-1" {
+		t.Fatalf("ProgressRootCommentID = %q, want comment-root-1", metadata.ProgressRootCommentID)
 	}
-	if issues[0].ColinMetadata.LoopFailureCount != 3 {
-		t.Fatalf("LoopFailureCount = %d, want 3", issues[0].ColinMetadata.LoopFailureCount)
+	if metadata.LoopFailureCount != 3 {
+		t.Fatalf("LoopFailureCount = %d, want 3", metadata.LoopFailureCount)
 	}
-	if issues[0].ColinMetadata.PausedRunType != "review_publish" {
-		t.Fatalf("PausedRunType = %q, want review_publish", issues[0].ColinMetadata.PausedRunType)
+	if metadata.PausedRunType != "review_publish" {
+		t.Fatalf("PausedRunType = %q, want review_publish", metadata.PausedRunType)
 	}
-	if issues[0].ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743270000123456" {
-		t.Fatalf("SlackPermalink = %q, want permalink", issues[0].ColinMetadata.SlackPermalink)
+	if metadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743270000123456" {
+		t.Fatalf("SlackPermalink = %q, want permalink", metadata.SlackPermalink)
 	}
 }
 
-func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) {
+func TestFetchIssueSchedulingMetadataByIDsPrefersNewestColinMetadataAttachment(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2865,14 +2885,7 @@ func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) 
 					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
 					"nodes": []map[string]any{
 						{
-							"id":         "issue-1",
-							"identifier": "COLIN-165",
-							"title":      "PR merge failure",
-							"state":      map[string]any{"name": "In Progress"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
-							},
+							"id": "issue-1",
 							"attachments": map[string]any{
 								"nodes": []map[string]any{
 									{
@@ -2900,12 +2913,6 @@ func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) 
 									},
 								},
 							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"history": map[string]any{
-								"nodes": []map[string]any{},
-							},
 						},
 					},
 				},
@@ -2914,37 +2921,25 @@ func TestFetchCandidateIssuesPrefersNewestColinMetadataAttachment(t *testing.T) 
 	}))
 	defer server.Close()
 
-	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
-		endpoint:           server.URL,
-		apiKey:             "token",
-		primaryProjectSlug: "project-1",
-		active:             []string{"In Progress"},
-		client:             &http.Client{Timeout: 5 * time.Second},
-	}
+	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	metadataByIssueID, err := client.FetchIssueSchedulingMetadataByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+	metadata := metadataByIssueID["issue-1"]
+	if metadata.AttachmentID != "attachment-new" {
+		t.Fatalf("AttachmentID = %q, want newest metadata attachment", metadata.AttachmentID)
 	}
-	if issues[0].ColinMetadata == nil {
-		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
+	if metadata.SlackMessageTS != "1743723180.123456" {
+		t.Fatalf("SlackMessageTS = %q, want newest metadata timestamp", metadata.SlackMessageTS)
 	}
-	if issues[0].ColinMetadata.AttachmentID != "attachment-new" {
-		t.Fatalf("AttachmentID = %q, want newest metadata attachment", issues[0].ColinMetadata.AttachmentID)
-	}
-	if issues[0].ColinMetadata.SlackMessageTS != "1743723180.123456" {
-		t.Fatalf("SlackMessageTS = %q, want newest metadata timestamp", issues[0].ColinMetadata.SlackMessageTS)
-	}
-	if issues[0].ColinMetadata.SlackSummaryFingerprint != "fp-2" {
-		t.Fatalf("SlackSummaryFingerprint = %q, want newest fingerprint", issues[0].ColinMetadata.SlackSummaryFingerprint)
+	if metadata.SlackSummaryFingerprint != "fp-2" {
+		t.Fatalf("SlackSummaryFingerprint = %q, want newest fingerprint", metadata.SlackSummaryFingerprint)
 	}
 }
 
-func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttachment(t *testing.T) {
+func TestFetchIssueSchedulingMetadataByIDsBackfillsSlackStateFromOlderDuplicateMetadataAttachment(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2955,14 +2950,7 @@ func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttach
 					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
 					"nodes": []map[string]any{
 						{
-							"id":         "issue-1",
-							"identifier": "COLIN-169",
-							"title":      "Investigate warning",
-							"state":      map[string]any{"name": "In Progress"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
-							},
+							"id": "issue-1",
 							"attachments": map[string]any{
 								"nodes": []map[string]any{
 									{
@@ -2990,12 +2978,6 @@ func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttach
 									},
 								},
 							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"history": map[string]any{
-								"nodes": []map[string]any{},
-							},
 						},
 					},
 				},
@@ -3004,55 +2986,124 @@ func TestFetchCandidateIssuesBackfillsSlackStateFromOlderDuplicateMetadataAttach
 	}))
 	defer server.Close()
 
-	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
-		endpoint:           server.URL,
-		apiKey:             "token",
-		primaryProjectSlug: "project-1",
-		active:             []string{"In Progress"},
-		client:             &http.Client{Timeout: 5 * time.Second},
-	}
+	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	metadataByIssueID, err := client.FetchIssueSchedulingMetadataByIDs(context.Background(), []string{"issue-1"})
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+	metadata := metadataByIssueID["issue-1"]
+	if metadata.AttachmentID != "attachment-new" {
+		t.Fatalf("AttachmentID = %q, want newest metadata attachment", metadata.AttachmentID)
 	}
-	if issues[0].ColinMetadata == nil {
-		t.Fatal("issues[0].ColinMetadata = nil, want metadata")
+	if metadata.ProgressRootCommentID != "comment-root-1" {
+		t.Fatalf("ProgressRootCommentID = %q, want newest metadata field", metadata.ProgressRootCommentID)
 	}
-	if issues[0].ColinMetadata.AttachmentID != "attachment-new" {
-		t.Fatalf("AttachmentID = %q, want newest metadata attachment", issues[0].ColinMetadata.AttachmentID)
+	if metadata.SlackMessageTS != "1743723180.123456" {
+		t.Fatalf("SlackMessageTS = %q, want backfilled slack timestamp", metadata.SlackMessageTS)
 	}
-	if issues[0].ColinMetadata.ProgressRootCommentID != "comment-root-1" {
-		t.Fatalf("ProgressRootCommentID = %q, want newest metadata field", issues[0].ColinMetadata.ProgressRootCommentID)
-	}
-	if issues[0].ColinMetadata.SlackMessageTS != "1743723180.123456" {
-		t.Fatalf("SlackMessageTS = %q, want backfilled slack timestamp", issues[0].ColinMetadata.SlackMessageTS)
-	}
-	if issues[0].ColinMetadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743723180123456" {
-		t.Fatalf("SlackPermalink = %q, want backfilled slack permalink", issues[0].ColinMetadata.SlackPermalink)
+	if metadata.SlackPermalink != "https://example.slack.com/archives/C12345678/p1743723180123456" {
+		t.Fatalf("SlackPermalink = %q, want backfilled slack permalink", metadata.SlackPermalink)
 	}
 }
 
-func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
+func TestFetchIssueSchedulingMetadataByIDsBatchesBeyondFirst250Issues(t *testing.T) {
+	t.Parallel()
+
+	const totalIssues = 251
+	requestSizes := make([]int, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		rawIDs, ok := request.Variables["ids"].([]any)
+		if !ok {
+			t.Fatalf("ids variable type = %T, want []any", request.Variables["ids"])
+		}
+		requestSizes = append(requestSizes, len(rawIDs))
+		nodes := make([]map[string]any, 0, len(rawIDs))
+		for _, rawID := range rawIDs {
+			issueID, ok := rawID.(string)
+			if !ok {
+				t.Fatalf("issue id type = %T, want string", rawID)
+			}
+			nodes = append(nodes, map[string]any{
+				"id": issueID,
+				"attachments": map[string]any{
+					"nodes": []map[string]any{
+						{
+							"id":    "attachment-" + issueID,
+							"title": "Colin metadata",
+							"url":   "https://colin.example.test/linear/issues/" + issueID + "/metadata",
+							"metadata": map[string]any{
+								"progress_root_comment_id": "comment-" + issueID,
+							},
+						},
+					},
+				},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"nodes": nodes,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	issueIDs := make([]string, 0, totalIssues)
+	for i := 0; i < totalIssues; i++ {
+		issueIDs = append(issueIDs, fmt.Sprintf("issue-%03d", i))
+	}
+
+	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
+
+	metadataByIssueID, err := client.FetchIssueSchedulingMetadataByIDs(context.Background(), issueIDs)
+	if err != nil {
+		t.Fatalf("FetchIssueSchedulingMetadataByIDs() error = %v", err)
+	}
+	if got := len(requestSizes); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+	if requestSizes[0] != 250 || requestSizes[1] != 1 {
+		t.Fatalf("request sizes = %#v, want [250 1]", requestSizes)
+	}
+	if got := len(metadataByIssueID); got != totalIssues {
+		t.Fatalf("metadataByIssueID length = %d, want %d", got, totalIssues)
+	}
+	if metadataByIssueID["issue-250"].ProgressRootCommentID != "comment-issue-250" {
+		t.Fatalf("ProgressRootCommentID for tail issue = %q, want %q", metadataByIssueID["issue-250"].ProgressRootCommentID, "comment-issue-250")
+	}
+}
+
+func TestFetchIssueByIDExtractsAttachedPullRequests(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"issues": map[string]any{
-					"nodes": []map[string]any{
-						{
-							"id":         "issue-1",
-							"identifier": "COLIN-112",
-							"title":      "Prevent duplicate PRs",
-							"state":      map[string]any{"name": "Review"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
+				"issue": map[string]any{
+					"id":         "issue-1",
+					"identifier": "COLIN-112",
+					"title":      "Prevent duplicate PRs",
+					"state":      map[string]any{"name": "Review"},
+					"labels":     map[string]any{"nodes": []map[string]any{}},
+					"inverseRelations": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"attachments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":    "attachment-1",
+								"title": "PR 11",
+								"url":   "attachment://acme/widgets#11",
 							},
 							"attachments": map[string]any{
 								"nodes": []map[string]any{
@@ -3078,10 +3129,10 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 									},
 								},
 							},
-							"comments": map[string]any{"nodes": []map[string]any{}},
-							"history":  map[string]any{"nodes": []map[string]any{}},
 						},
 					},
+					"comments": map[string]any{"nodes": []map[string]any{}},
+					"history":  map[string]any{"nodes": []map[string]any{}},
 				},
 			},
 		})
@@ -3089,35 +3140,30 @@ func TestFetchCandidateIssuesExtractsAttachedPullRequests(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
-		endpoint:           server.URL,
-		apiKey:             "token",
-		primaryProjectSlug: "project-1",
-		active:             []string{"Review"},
-		client:             &http.Client{Timeout: 5 * time.Second},
+		repoAdapter: fakeAttachmentAdapter{kind: "attachmenttest"},
+		endpoint:    server.URL,
+		apiKey:      "token",
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+		t.Fatalf("FetchIssueByID() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+	if len(issue.AttachedPullRequests) != 2 {
+		t.Fatalf("AttachedPullRequests length = %d, want 2", len(issue.AttachedPullRequests))
 	}
-	if len(issues[0].AttachedPullRequests) != 2 {
-		t.Fatalf("AttachedPullRequests length = %d, want 2", len(issues[0].AttachedPullRequests))
+	if issue.AttachedPullRequests[0].Number != 11 {
+		t.Fatalf("AttachedPullRequests[0].Number = %d, want 11", issue.AttachedPullRequests[0].Number)
 	}
-	if issues[0].AttachedPullRequests[0].Number != 11 {
-		t.Fatalf("AttachedPullRequests[0].Number = %d, want 11", issues[0].AttachedPullRequests[0].Number)
+	if issue.AttachedPullRequests[0].Backend != "attachmenttest" {
+		t.Fatalf("AttachedPullRequests[0].Backend = %q, want attachmenttest", issue.AttachedPullRequests[0].Backend)
 	}
-	if issues[0].AttachedPullRequests[0].Backend != "github" {
-		t.Fatalf("AttachedPullRequests[0].Backend = %q, want github", issues[0].AttachedPullRequests[0].Backend)
+	if issue.AttachedPullRequests[0].RepositoryOwner != "acme" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryOwner = %q, want acme", issue.AttachedPullRequests[0].RepositoryOwner)
 	}
-	if issues[0].AttachedPullRequests[0].RepositoryOwner != "pmenglund" {
-		t.Fatalf("AttachedPullRequests[0].RepositoryOwner = %q, want pmenglund", issues[0].AttachedPullRequests[0].RepositoryOwner)
-	}
-	if issues[0].AttachedPullRequests[0].RepositoryName != "colin" {
-		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want colin", issues[0].AttachedPullRequests[0].RepositoryName)
+	if issue.AttachedPullRequests[0].RepositoryName != "widgets" {
+		t.Fatalf("AttachedPullRequests[0].RepositoryName = %q, want widgets", issue.AttachedPullRequests[0].RepositoryName)
 	}
 	if issues[0].AttachedPullRequests[1].Number != 11 {
 		t.Fatalf("AttachedPullRequests[1].Number = %d, want 11", issues[0].AttachedPullRequests[1].Number)
@@ -3197,7 +3243,7 @@ func TestNormalizeIssueDedupesAttachedPullRequestsByBackendAndRepository(t *test
 	}
 }
 
-func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
+func TestFetchIssueByIDExtractsExecPlanFromAttachment(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2026, 3, 29, 18, 0, 0, 0, time.UTC)
@@ -3205,38 +3251,33 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 		defer r.Body.Close()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"issues": map[string]any{
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
-					"nodes": []map[string]any{
-						{
-							"id":         "issue-1",
-							"identifier": "COLIN-108",
-							"title":      "Add exec plans",
-							"state":      map[string]any{"name": "In Progress"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"attachments": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":    "attachment-2",
-										"title": "Colin ExecPlan",
-										"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
-										"metadata": map[string]any{
-											"body":       "# Plan\n\nDetails.",
-											"updated_at": base.Format(time.RFC3339),
-										},
-									},
+				"issue": map[string]any{
+					"id":         "issue-1",
+					"identifier": "COLIN-108",
+					"title":      "Add exec plans",
+					"state":      map[string]any{"name": "In Progress"},
+					"labels":     map[string]any{"nodes": []map[string]any{}},
+					"inverseRelations": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"attachments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":    "attachment-2",
+								"title": "Colin ExecPlan",
+								"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
+								"metadata": map[string]any{
+									"body":       "# Plan\n\nDetails.",
+									"updated_at": base.Format(time.RFC3339),
 								},
 							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"history": map[string]any{
-								"nodes": []map[string]any{},
-							},
 						},
+					},
+					"comments": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"history": map[string]any{
+						"nodes": []map[string]any{},
 					},
 				},
 			},
@@ -3244,82 +3285,67 @@ func TestFetchCandidateIssuesExtractsExecPlanFromAttachment(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
-		endpoint:           server.URL,
-		apiKey:             "token",
-		primaryProjectSlug: "project-1",
-		active:             []string{"In Progress"},
-		client:             &http.Client{Timeout: 5 * time.Second},
-	}
+	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+		t.Fatalf("FetchIssueByID() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+	if issue.ExecPlan == nil {
+		t.Fatal("ExecPlan = nil, want plan")
 	}
-	if issues[0].ExecPlan == nil {
-		t.Fatal("issues[0].ExecPlan = nil, want plan")
+	if issue.ExecPlanCount != 1 {
+		t.Fatalf("ExecPlanCount = %d, want 1", issue.ExecPlanCount)
 	}
-	if issues[0].ExecPlanCount != 1 {
-		t.Fatalf("ExecPlanCount = %d, want 1", issues[0].ExecPlanCount)
+	if issue.ExecPlan.Body != "# Plan\n\nDetails." {
+		t.Fatalf("ExecPlan.Body = %q, want plan body", issue.ExecPlan.Body)
 	}
-	if issues[0].ExecPlan.Body != "# Plan\n\nDetails." {
-		t.Fatalf("ExecPlan.Body = %q, want plan body", issues[0].ExecPlan.Body)
-	}
-	if issues[0].ExecPlan.URL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
-		t.Fatalf("ExecPlan.URL = %q, want attachment URL", issues[0].ExecPlan.URL)
+	if issue.ExecPlan.URL != "http://127.0.0.1/linear/issues/issue-1/exec-plan" {
+		t.Fatalf("ExecPlan.URL = %q, want attachment URL", issue.ExecPlan.URL)
 	}
 }
 
-func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
+func TestFetchIssueByIDRejectsDuplicateExecPlanAttachments(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"issues": map[string]any{
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
-					"nodes": []map[string]any{
-						{
-							"id":         "issue-1",
-							"identifier": "COLIN-110",
-							"title":      "Repair exec plan metadata",
-							"state":      map[string]any{"name": "Todo"},
-							"labels":     map[string]any{"nodes": []map[string]any{}},
-							"inverseRelations": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"attachments": map[string]any{
-								"nodes": []map[string]any{
-									{
-										"id":    "attachment-1",
-										"title": "Colin ExecPlan",
-										"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
-										"metadata": map[string]any{
-											"body": "# Plan A",
-										},
-									},
-									{
-										"id":    "attachment-2",
-										"title": "Colin ExecPlan",
-										"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
-										"metadata": map[string]any{
-											"body": "# Plan B",
-										},
-									},
+				"issue": map[string]any{
+					"id":         "issue-1",
+					"identifier": "COLIN-110",
+					"title":      "Repair exec plan metadata",
+					"state":      map[string]any{"name": "Todo"},
+					"labels":     map[string]any{"nodes": []map[string]any{}},
+					"inverseRelations": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"attachments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"id":    "attachment-1",
+								"title": "Colin ExecPlan",
+								"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
+								"metadata": map[string]any{
+									"body": "# Plan A",
 								},
 							},
-							"comments": map[string]any{
-								"nodes": []map[string]any{},
-							},
-							"history": map[string]any{
-								"nodes": []map[string]any{},
+							{
+								"id":    "attachment-2",
+								"title": "Colin ExecPlan",
+								"url":   "http://127.0.0.1/linear/issues/issue-1/exec-plan",
+								"metadata": map[string]any{
+									"body": "# Plan B",
+								},
 							},
 						},
+					},
+					"comments": map[string]any{
+						"nodes": []map[string]any{},
+					},
+					"history": map[string]any{
+						"nodes": []map[string]any{},
 					},
 				},
 			},
@@ -3327,26 +3353,16 @@ func TestFetchCandidateIssuesRejectsDuplicateExecPlanAttachments(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		repoAdapter:        mustTestRepoAdapter(t),
-		endpoint:           server.URL,
-		apiKey:             "token",
-		primaryProjectSlug: "project-1",
-		active:             []string{"Todo"},
-		client:             &http.Client{Timeout: 5 * time.Second},
-	}
+	client := &Client{endpoint: server.URL, apiKey: "token", client: &http.Client{Timeout: 5 * time.Second}}
 
-	issues, err := client.FetchCandidateIssues(context.Background())
+	issue, err := client.FetchIssueByID(context.Background(), "issue-1")
 	if err != nil {
-		t.Fatalf("FetchCandidateIssues() error = %v", err)
+		t.Fatalf("FetchIssueByID() error = %v", err)
 	}
-	if len(issues) != 1 {
-		t.Fatalf("issues length = %d, want 1", len(issues))
+	if issue.ExecPlan != nil {
+		t.Fatalf("ExecPlan = %#v, want nil when duplicates exist", issue.ExecPlan)
 	}
-	if issues[0].ExecPlan != nil {
-		t.Fatalf("issues[0].ExecPlan = %#v, want nil when duplicates exist", issues[0].ExecPlan)
-	}
-	if issues[0].ExecPlanCount != 2 {
-		t.Fatalf("ExecPlanCount = %d, want 2", issues[0].ExecPlanCount)
+	if issue.ExecPlanCount != 2 {
+		t.Fatalf("ExecPlanCount = %d, want 2", issue.ExecPlanCount)
 	}
 }

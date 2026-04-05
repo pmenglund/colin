@@ -698,10 +698,152 @@ func TestParseCodingSummaryOutcomeLeavesImplicitSummaryUnclassified(t *testing.T
 func TestBuildReviewThreadReplyBodyKeepsReplyCompact(t *testing.T) {
 	t.Parallel()
 
-	reply := buildReviewThreadReplyBody("Before: old layout\nAfter: new layout\nVerification: go test ./...")
-	want := "[colin] Addressed in the latest update. See the Linear issue comment for the before/after summary and verification details."
+	reply := buildReviewThreadReplyBody("## Before\n\nOld layout.\n\n## After\n\nNew layout.\n\n## Evidence\n\n```text\ngo test ./...\n```")
+	want := "[colin] Addressed in the latest update. See the Linear issue comment for the Why/Before/After/Evidence summary."
 	if reply != want {
 		t.Fatalf("buildReviewThreadReplyBody() = %q, want %q", reply, want)
+	}
+}
+
+func TestFinalizeReviewThreadsTargetsOnlyReactedThread(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	repoURL := createRunnerGitOrigin(t, tempDir)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo", "In Progress"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root:    filepath.Join(tempDir, "workspaces"),
+			RepoURL: repoURL,
+			BaseRef: "symphony",
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			RemoteName:    "origin",
+		},
+	}
+	tracker := &stubTracker{}
+	fakeGitHub := &fakes.FakeGitHubClient{}
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      11,
+		URL:         "https://github.com/pmenglund/colin/pull/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.ReviewThreadsReturnsOnCall(0, repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
+			{
+				ID:               "thread-target",
+				IsResolved:       false,
+				IsOutdated:       false,
+				ViewerCanReply:   true,
+				ViewerCanResolve: true,
+				Path:             "internal/target.go",
+				Comments: repohost.ReviewCommentConnection{
+					Comments: []repohost.ReviewComment{
+						{ID: "comment-target", Body: "Fix the target thread.", AuthorLogin: "reviewer"},
+					},
+				},
+			},
+			{
+				ID:               "thread-other",
+				IsResolved:       false,
+				IsOutdated:       false,
+				ViewerCanReply:   true,
+				ViewerCanResolve: true,
+				Path:             "internal/other.go",
+				Comments: repohost.ReviewCommentConnection{
+					Comments: []repohost.ReviewComment{
+						{ID: "comment-other", Body: "Leave this one alone.", AuthorLogin: "reviewer"},
+					},
+				},
+			},
+		},
+	}, nil)
+	fakeGitHub.ReviewThreadsReturnsOnCall(1, repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
+			{
+				ID:               "thread-other",
+				IsResolved:       false,
+				IsOutdated:       false,
+				ViewerCanReply:   true,
+				ViewerCanResolve: true,
+				Path:             "internal/other.go",
+				Comments: repohost.ReviewCommentConnection{
+					Comments: []repohost.ReviewComment{
+						{ID: "comment-other", Body: "Leave this one alone.", AuthorLogin: "reviewer"},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	manager := workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	branchName := "colin-123"
+	issue := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-123",
+		Title:      "Address reacted review thread",
+		State:      "Todo",
+		BranchName: &branchName,
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:      11,
+			PullRequestURL:         "https://github.com/pmenglund/colin/pull/11",
+			PullRequestHeadRef:     "colin-123",
+			PullRequestBaseRef:     "symphony",
+			PendingReviewThreadID:  "thread-target",
+			PendingReviewCommentID: "comment-target",
+		},
+	}
+	ws, err := manager.Ensure(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+
+	runner := newRunner(
+		cfg,
+		domain.WorkflowDefinition{},
+		tracker,
+		manager,
+		repoops.NewManagerWithRepoHostClient(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), fakeGitHub),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	updated, pr, handled, remaining, summary, blocked := runner.finalizeReviewThreads(context.Background(), issue, ws.Path, "Updated the code.")
+
+	if blocked {
+		t.Fatalf("blocked = true, want false (summary=%q)", summary)
+	}
+	if pr == nil || pr.Number != 11 {
+		t.Fatalf("pr = %#v, want PR #11", pr)
+	}
+	if handled != 1 {
+		t.Fatalf("handled = %d, want 1", handled)
+	}
+	if remaining != 0 {
+		t.Fatalf("remaining = %d, want 0", remaining)
+	}
+	if fakeGitHub.ReplyToReviewThreadCallCount() != 1 {
+		t.Fatalf("ReplyToReviewThreadCallCount() = %d, want 1", fakeGitHub.ReplyToReviewThreadCallCount())
+	}
+	if _, threadID, _ := fakeGitHub.ReplyToReviewThreadArgsForCall(0); threadID != "thread-target" {
+		t.Fatalf("ReplyToReviewThread thread = %q, want %q", threadID, "thread-target")
+	}
+	if fakeGitHub.ResolveReviewThreadCallCount() != 1 {
+		t.Fatalf("ResolveReviewThreadCallCount() = %d, want 1", fakeGitHub.ResolveReviewThreadCallCount())
+	}
+	if _, threadID := fakeGitHub.ResolveReviewThreadArgsForCall(0); threadID != "thread-target" {
+		t.Fatalf("ResolveReviewThread thread = %q, want %q", threadID, "thread-target")
+	}
+	if updated.ColinMetadata == nil || updated.ColinMetadata.PendingReviewThreadID != "" {
+		t.Fatalf("updated.ColinMetadata = %#v, want pending review follow-up cleared", updated.ColinMetadata)
+	}
+	if !strings.Contains(summary, "Left `1` other unresolved GitHub review threads untouched") {
+		t.Fatalf("summary = %q, want untouched-thread note", summary)
 	}
 }
 
@@ -2371,12 +2513,16 @@ type stubTracker struct {
 	resolveMergeStateOK bool
 }
 
-func (s *stubTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+func (s *stubTracker) FetchCandidateIssueSnapshots(context.Context) ([]domain.Issue, error) {
 	return nil, nil
 }
 
-func (s *stubTracker) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+func (s *stubTracker) FetchIssueSnapshotsByStates(context.Context, []string) ([]domain.Issue, error) {
 	return nil, nil
+}
+
+func (s *stubTracker) FetchIssueSchedulingMetadataByIDs(context.Context, []string) (map[string]domain.ColinMetadata, error) {
+	return map[string]domain.ColinMetadata{}, nil
 }
 
 func (s *stubTracker) FetchIssueStatesByIDs(context.Context, []string) ([]domain.Issue, error) {

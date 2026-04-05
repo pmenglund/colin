@@ -1087,8 +1087,43 @@ func (r *Runner) finalizeReviewThreads(ctx context.Context, issue domain.Issue, 
 		return issue, nil, 0, len(issue.ReviewThreads), buildReviewBlockedSummary(summary, nil, 0, len(issue.ReviewThreads), "no pull request found for the issue branch"), true
 	}
 	pr := &reviewContext.PullRequest
+	targetThreadID := pendingReviewThreadID(issue)
 	if len(reviewContext.Threads) == 0 {
+		if targetThreadID != "" {
+			issue = r.clearPendingReviewFollowUpBestEffort(ctx, issue)
+		}
 		return issue, pr, 0, 0, buildReviewReadySummary(summary, pr, 0, 0), false
+	}
+	if targetThreadID != "" {
+		targetThread, ok := reviewThreadByID(reviewContext.Threads, targetThreadID)
+		if !ok {
+			issue = r.clearPendingReviewFollowUpBestEffort(ctx, issue)
+			return issue, pr, 0, 0, buildTargetedReviewReadySummary(summary, pr, 0, len(reviewContext.Threads), true), false
+		}
+		replyBody := buildReviewThreadReplyBody(summary)
+		if err := r.repo.ReplyAndResolveReviewThread(ctx, workspacePath, targetThread, replyBody); err != nil {
+			r.logger.Warn(
+				"failed to reply to or resolve targeted GitHub review thread",
+				"issue_id", issue.ID,
+				"issue_identifier", issue.Identifier,
+				"thread_id", targetThread.ID,
+				"path", targetThread.Path,
+				"error", err,
+			)
+			return issue, pr, 0, 1, buildReviewBlockedSummary(summary, pr, 0, 1, ""), true
+		}
+		postContext, err := r.repo.ReviewContext(ctx, issue, workspacePath)
+		if err != nil {
+			return issue, pr, 1, 1, buildReviewBlockedSummary(summary, pr, 1, 1, fmt.Sprintf("failed to verify GitHub review threads after update: %v", err)), true
+		}
+		if postContext.PullRequest.Number != 0 || strings.TrimSpace(postContext.PullRequest.URL) != "" {
+			pr = &postContext.PullRequest
+		}
+		if _, ok := reviewThreadByID(postContext.Threads, targetThreadID); ok {
+			return issue, pr, 1, 1, buildReviewBlockedSummary(summary, pr, 1, 1, ""), true
+		}
+		issue = r.clearPendingReviewFollowUpBestEffort(ctx, issue)
+		return issue, pr, 1, 0, buildTargetedReviewReadySummary(summary, pr, 1, len(postContext.Threads), false), false
 	}
 
 	replyBody := buildReviewThreadReplyBody(summary)
@@ -1125,7 +1160,7 @@ func (r *Runner) finalizeReviewThreads(ctx context.Context, issue domain.Issue, 
 }
 
 func buildReviewThreadReplyBody(_ string) string {
-	return "[colin] Addressed in the latest update. See the Linear issue comment for the before/after summary and verification details."
+	return "[colin] Addressed in the latest update. See the Linear issue comment for the Why/Before/After/Evidence summary."
 }
 
 func buildReviewReadySummary(summary string, pr *domain.PullRequestRef, handled int, remaining int) string {
@@ -1134,6 +1169,35 @@ func buildReviewReadySummary(summary string, pr *domain.PullRequestRef, handled 
 
 func buildReviewBlockedSummary(summary string, pr *domain.PullRequestRef, handled int, remaining int, reason string) string {
 	return userworkflow.ReviewBlocked(pr, handled, remaining, reason, summary)
+}
+
+func buildTargetedReviewReadySummary(summary string, pr *domain.PullRequestRef, handled int, untouched int, stale bool) string {
+	result := buildReviewReadySummary(summary, pr, handled, 0)
+	switch {
+	case stale:
+		return result + "\n\n- Note: The reacted GitHub review thread was already resolved before Colin finalized the follow-up."
+	case untouched > 0:
+		return result + fmt.Sprintf("\n\n- Note: Left `%d` other unresolved GitHub review threads untouched because this follow-up was scoped to the reacted thread.", untouched)
+	default:
+		return result
+	}
+}
+
+func reviewThreadByID(threads []domain.ReviewThread, threadID string) (domain.ReviewThread, bool) {
+	threadID = strings.TrimSpace(threadID)
+	for _, thread := range threads {
+		if strings.EqualFold(strings.TrimSpace(thread.ID), threadID) {
+			return thread, true
+		}
+	}
+	return domain.ReviewThread{}, false
+}
+
+func pendingReviewThreadID(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(issue.ColinMetadata.PendingReviewThreadID)
 }
 
 func buildMergeBlockedSummary(cfg domain.ServiceConfig, reviewContext repoops.ReviewContext) (string, bool, bool) {
@@ -1587,6 +1651,29 @@ func clearedPersistentThreadMetadata(issue domain.Issue) (domain.ColinMetadata, 
 
 	metadata.CodexThreadID = ""
 	metadata.ProgressRootCommentID = ""
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	return metadata, true
+}
+
+func clearedPendingReviewFollowUpMetadata(issue domain.Issue) (domain.ColinMetadata, bool) {
+	metadata := domain.ColinMetadata{}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+	}
+	if strings.TrimSpace(metadata.PendingReviewThreadID) == "" &&
+		strings.TrimSpace(metadata.PendingReviewCommentID) == "" &&
+		strings.TrimSpace(metadata.PendingReviewReactionID) == "" &&
+		strings.TrimSpace(metadata.PendingReviewReactor) == "" &&
+		metadata.PendingReviewRequestedAt == nil {
+		return metadata, false
+	}
+
+	metadata.PendingReviewThreadID = ""
+	metadata.PendingReviewCommentID = ""
+	metadata.PendingReviewReactionID = ""
+	metadata.PendingReviewReactor = ""
+	metadata.PendingReviewRequestedAt = nil
 	now := time.Now().UTC()
 	metadata.UpdatedAt = &now
 	return metadata, true
@@ -2098,6 +2185,14 @@ func (r *Runner) persistCodexThreadIDBestEffort(ctx context.Context, issue domai
 
 func (r *Runner) clearPersistentThreadMetadataBestEffort(ctx context.Context, issue domain.Issue) domain.Issue {
 	metadata, changed := clearedPersistentThreadMetadata(issue)
+	if !changed {
+		return issue
+	}
+	return r.persistIssueMetadataBestEffort(ctx, issue, metadata)
+}
+
+func (r *Runner) clearPendingReviewFollowUpBestEffort(ctx context.Context, issue domain.Issue) domain.Issue {
+	metadata, changed := clearedPendingReviewFollowUpMetadata(issue)
 	if !changed {
 		return issue
 	}

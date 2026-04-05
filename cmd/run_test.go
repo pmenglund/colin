@@ -58,7 +58,7 @@ func TestRunRootUsesRuntimeTUIWhenInteractiveAndNotVerbose(t *testing.T) {
 	cmd.SetOut(io.Discard)
 
 	stopped := false
-	newRuntimeService = func(logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
 		return fakeRuntimeService{
 			run: func(ctx context.Context) error {
 				<-ctx.Done()
@@ -96,7 +96,7 @@ func TestRunRootSkipsRuntimeTUIWhenVerbose(t *testing.T) {
 	cmd.SetIn(bytes.NewBuffer(nil))
 	cmd.SetOut(io.Discard)
 
-	newRuntimeService = func(logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
 		return fakeRuntimeService{run: func(context.Context) error { return nil }}, nil
 	}
 	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return true }
@@ -121,7 +121,7 @@ func TestRunRootSkipsRuntimeTUIWhenNonInteractive(t *testing.T) {
 	cmd.SetIn(bytes.NewBuffer(nil))
 	cmd.SetOut(&stdout)
 
-	newRuntimeService = func(logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
 		return fakeRuntimeService{run: func(context.Context) error { return nil }}, nil
 	}
 	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return false }
@@ -136,6 +136,40 @@ func TestRunRootSkipsRuntimeTUIWhenNonInteractive(t *testing.T) {
 	}
 	if got := stdout.String(); got != "Colin is running.\n" {
 		t.Fatalf("stdout = %q, want %q", got, "Colin is running.\n")
+	}
+}
+
+func TestRunRootPassesSignalContextToRuntimeConstructor(t *testing.T) {
+	restore := patchRunRootSeams(t)
+	defer restore()
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetIn(bytes.NewBuffer(nil))
+	cmd.SetOut(io.Discard)
+
+	var constructorCtx context.Context
+	newRuntimeService = func(ctx context.Context, logger *slog.Logger, workflowPath string, options ...service.Option) (runtimeService, error) {
+		constructorCtx = ctx
+		return fakeRuntimeService{run: func(context.Context) error { return nil }}, nil
+	}
+	runtimeIsInteractiveTerminal = func(io.Reader, io.Writer) bool { return true }
+
+	runRuntimeTUI = func(ctx context.Context, in io.Reader, out io.Writer, source runtimeService, serviceErrCh <-chan error, requestShutdownDrain func() bool, stop func()) error {
+		stop()
+		return <-serviceErrCh
+	}
+
+	if code := runRoot(cmd, rootOptions{workflowPath: "WORKFLOW.md"}); code != 0 {
+		t.Fatalf("runRoot() exit code = %d, want 0", code)
+	}
+	if constructorCtx == nil {
+		t.Fatal("constructor context = nil")
+	}
+	select {
+	case <-constructorCtx.Done():
+	default:
+		t.Fatal("constructor context was not canceled by stop()")
 	}
 }
 

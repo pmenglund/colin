@@ -17,7 +17,7 @@ const (
 )
 
 func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issue, now time.Time) (domain.Issue, bool) {
-	if !needsReviewSync(issue) || o.runtime.Repo == nil || o.runtime.Workspace == nil {
+	if (!needsReviewSync(issue) && !hasPendingReviewFollowUp(issue)) || o.runtime.Repo == nil || o.runtime.Workspace == nil {
 		delete(o.reviewSync, issue.ID)
 		return issue, true
 	}
@@ -37,6 +37,51 @@ func (o *Orchestrator) prepareReviewIssue(ctx context.Context, issue domain.Issu
 		))
 		state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
 		o.reviewSync[issue.ID] = state
+		return issue, false
+	}
+
+	if hasPendingReviewFollowUp(issue) {
+		reviewContext, err := o.runtime.Repo.ReviewContext(ctx, issue, workspace.Path)
+		if err != nil {
+			state = o.ensureReviewSyncState(issue, state, now)
+			issue, state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
+				"Waiting for the targeted GitHub review thread before starting work.\n- Blocker: failed to read GitHub review threads: %v",
+				err,
+			))
+			state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
+			o.reviewSync[issue.ID] = state
+			return issue, false
+		}
+		if reviewContext.PullRequest.Number > 0 || strings.TrimSpace(reviewContext.PullRequest.URL) != "" {
+			issue.PullRequest = &reviewContext.PullRequest
+		}
+		targetThreadID := strings.TrimSpace(issue.ColinMetadata.PendingReviewThreadID)
+		for _, thread := range reviewContext.Threads {
+			if strings.EqualFold(strings.TrimSpace(thread.ID), targetThreadID) {
+				issue.ReviewThreads = []domain.ReviewThread{thread}
+				delete(o.reviewSync, issue.ID)
+				return issue, true
+			}
+		}
+		reviewState := firstConfiguredPublishState(o.runtime.Config.Repo.PublishStates)
+		if strings.TrimSpace(reviewState) == "" {
+			reviewState = "Review"
+		}
+		if err := o.runtime.Tracker.UpdateIssueState(ctx, issue.ID, reviewState); err != nil {
+			state = o.ensureReviewSyncState(issue, state, now)
+			issue, state.comment = o.postIssueStatus(ctx, issue, issue.Identifier, state.comment, fmt.Sprintf(
+				"Waiting for the targeted GitHub review thread before starting work.\n- Blocker: failed to restore issue to `%s`: %v",
+				reviewState,
+				err,
+			))
+			state.nextPollAt = nextReviewSyncPoll(now, state.firstObserved, state.timedOut)
+			o.reviewSync[issue.ID] = state
+			return issue, false
+		}
+		issue.State = reviewState
+		issue = o.clearPendingReviewFollowUp(ctx, issue)
+		issue, _ = o.postIssueStatus(ctx, issue, issue.Identifier, nil, "The requested GitHub review thread is no longer unresolved, so Colin returned the issue to `Review` without starting a coding round.")
+		delete(o.reviewSync, issue.ID)
 		return issue, false
 	}
 
@@ -77,7 +122,7 @@ func (o *Orchestrator) cleanupReviewSync(active []domain.Issue) {
 	}
 	for issueID := range o.reviewSync {
 		issue, ok := activeByID[issueID]
-		if !ok || !needsReviewSync(issue) {
+		if !ok || !strings.EqualFold(strings.TrimSpace(issue.State), "todo") {
 			delete(o.reviewSync, issueID)
 		}
 	}
@@ -97,10 +142,29 @@ func needsReviewSync(issue domain.Issue) bool {
 	if !strings.EqualFold(strings.TrimSpace(issue.State), "todo") {
 		return false
 	}
+	if hasPendingReviewFollowUp(issue) {
+		return true
+	}
 	if issue.ReviewCycle == nil {
 		return false
 	}
 	return hasIssueReviewSyncPullRequestSignal(issue)
+}
+
+func hasPendingReviewFollowUp(issue domain.Issue) bool {
+	if issue.ColinMetadata == nil {
+		return false
+	}
+	return strings.TrimSpace(issue.ColinMetadata.PendingReviewThreadID) != "" || strings.TrimSpace(issue.ColinMetadata.PendingReviewCommentID) != ""
+}
+
+func firstConfiguredPublishState(states []string) string {
+	for _, state := range states {
+		if strings.TrimSpace(state) != "" {
+			return strings.TrimSpace(state)
+		}
+	}
+	return ""
 }
 
 func hasIssueReviewSyncPullRequestSignal(issue domain.Issue) bool {
