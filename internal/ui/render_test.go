@@ -162,7 +162,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`Requests`,
 		`resets in 5h32m`,
 		`resets in 1w`,
-		`25 of 100 remaining next request in 3s`,
+		`next request in 3s`,
 		`data-local-time="true"`,
 		`data-timestamp="2026-03-28T11:58:01Z"`,
 		`11:58:01 UTC`,
@@ -191,6 +191,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	}
 	if strings.Contains(html, `5% used of 5h window which resets in 5h32m`) {
 		t.Fatalf("codex rate limits should render progress bars instead of old text rows\n%s", html)
+	}
+	if strings.Contains(html, `25 of 100 remaining`) {
+		t.Fatalf("linear rate limit should not render the remaining-count detail\n%s", html)
 	}
 }
 
@@ -257,6 +260,8 @@ func TestStateIssuePopoverRendersLinks(t *testing.T) {
 	for _, want := range []string{
 		`data-testid="state-issues-trigger-review"`,
 		`data-testid="state-issues-review"`,
+		`class="table-wrap state-issues-table-wrap"`,
+		`class="table state-issues-table"`,
 		`Issue ID`,
 		`Title`,
 		`data-testid="state-issue-review-COLIN-94"`,

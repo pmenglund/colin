@@ -18,9 +18,25 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
     "https://linear.app/example/search?q=label%3Apaused+status%3A%22Review%22",
   );
   await page.getByTestId("state-issues-trigger-review").click();
-  await expect(page.getByTestId("state-issues-review")).toContainText("COLIN-24");
-  await expect(page.getByTestId("state-issues-review")).toContainText("Issue ID");
-  await expect(page.getByTestId("state-issues-review")).toContainText("Title");
+  const stateIssuesReview = page.getByTestId("state-issues-review");
+  await expect(stateIssuesReview).toContainText("COLIN-24");
+  await expect(stateIssuesReview).toContainText("Issue ID");
+  await expect(stateIssuesReview).toContainText("Title");
+  const popupFontSizes = await page.evaluate(() => {
+    const header = document.querySelector("[data-testid='state-issues-review'] th");
+    const idLink = document.querySelector("[data-testid='state-issues-review'] .state-issue-id-link");
+    const titleLink = document.querySelector("[data-testid='state-issues-review'] .state-issue-title-link");
+    if (!(header instanceof HTMLElement) || !(idLink instanceof HTMLElement) || !(titleLink instanceof HTMLElement)) {
+      throw new Error("missing popup table content");
+    }
+    return {
+      header: window.getComputedStyle(header).fontSize,
+      idLink: window.getComputedStyle(idLink).fontSize,
+      titleLink: window.getComputedStyle(titleLink).fontSize,
+    };
+  });
+  expect(popupFontSizes.idLink).toBe(popupFontSizes.header);
+  expect(popupFontSizes.titleLink).toBe(popupFontSizes.header);
   await page.evaluate(() => {
     const popup = document.querySelector("[data-testid='state-issues-review']");
     const runningPanel = document.querySelector("[data-testid='running-panel']");
@@ -75,10 +91,22 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("context-window-COLIN-7")).toHaveText("Context window: 70% left (78.4K used / 258K)");
   await expect(page.getByTestId("context-window-bar-COLIN-7")).toHaveAttribute("aria-valuenow", "30");
   await expect(page.getByTestId("rate-limits-linear-linear_requests")).toBeVisible();
-  await expect(page.getByTestId("rate-limits-linear-linear_requests").locator("[role='progressbar']")).toHaveAttribute(
-    "aria-valuenow",
-    "75",
-  );
+  const linearRateLimitRow = page.getByTestId("rate-limits-linear-linear_requests");
+  await expect(linearRateLimitRow.locator("[role='progressbar']")).toHaveAttribute("aria-valuenow", "75");
+  await expect(linearRateLimitRow).not.toContainText("25 of 100 remaining");
+  await expect(linearRateLimitRow.locator(".rate-limit-progress-detail")).toHaveText("next request in 3s");
+  const linearRateLimitLayout = await linearRateLimitRow.evaluate((row) => {
+    const bar = row.querySelector(".rate-limit-progress-bar");
+    const detail = row.querySelector(".rate-limit-progress-detail");
+    if (!(bar instanceof HTMLElement) || !(detail instanceof HTMLElement)) {
+      throw new Error("missing linear rate limit detail");
+    }
+    return {
+      barBottom: bar.getBoundingClientRect().bottom,
+      detailTop: detail.getBoundingClientRect().top,
+    };
+  });
+  expect(linearRateLimitLayout.detailTop).toBeGreaterThanOrEqual(linearRateLimitLayout.barBottom);
   await expect(page.locator(".stats")).toContainText("Runtime");
   await expect(page.locator(".stats")).toContainText("7m");
   await expect(page.locator(".stats")).toContainText("5,000");
