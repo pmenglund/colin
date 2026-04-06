@@ -195,19 +195,21 @@ func newSetupLinearWebhookCmd(stdin io.Reader, stdout, stderr io.Writer, opts *r
 }
 
 func newSetupLinearAppCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
+	var connect bool
 	cmd := &cobra.Command{
 		Use:   "app",
 		Short: "Print the self-hosted Linear app sketch for this workflow",
 		Long: "Print the expected Linear app shape for Colin when you want an assignable app user that can both be delegated work and act on its own.\n\n" +
-			"This command resolves the public Colin webhook URL, points the Linear app at `/webhooks/linear`, lists the required `AgentSessionEvent` webhook category, and explains that app mode should not disable Colin's existing issue-webhook or polling wake-up path.",
+			"This command reports the tailnet-only OAuth connect and callback URLs, resolves the current auth source, points the Linear app at `/webhooks/linear`, lists the required `AgentSessionEvent` webhook category, and explains that app mode should not disable Colin's existing issue-webhook or polling wake-up path.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return exitCode(deps.runSetupLinearApp(cmd, opts.resolvedWorkflowPath()))
+			return exitCode(deps.runSetupLinearApp(cmd, opts.resolvedWorkflowPath(), connect))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
-	cmd.Example = "  colin setup linear app\n  colin --workflow /path/to/WORKFLOW.md setup linear app"
+	cmd.Example = "  colin setup linear app\n  colin setup linear app --connect\n  colin --workflow /path/to/WORKFLOW.md setup linear app"
+	cmd.Flags().BoolVar(&connect, "connect", false, "Run a temporary tailnet-only OAuth callback server and wait for Linear to complete the app connection")
 	return cmd
 }

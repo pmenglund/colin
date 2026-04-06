@@ -57,3 +57,13 @@ func resolveWebhookPublicBaseURL(ctx context.Context, inspector tailscaleInspect
 	})
 	return strings.TrimSpace(status.PublicBaseURL)
 }
+
+func resolveUIBaseURL(ctx context.Context, inspector tailscaleInspector, cfg domain.ServerConfig) string {
+	if value := strings.TrimSpace(cfg.UIURL); value != "" {
+		return strings.TrimRight(value, "/")
+	}
+	if inspector == nil {
+		inspector = tsdiag.NewInspector()
+	}
+	return strings.TrimRight(strings.TrimSpace(inspector.ResolveUIBaseURL(ctx, cfg.Port)), "/")
+}

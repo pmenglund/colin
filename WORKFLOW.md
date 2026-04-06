@@ -2,6 +2,9 @@
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
+  # Optional for the tailnet-only Linear OAuth app flow driven by `colin setup linear app --connect`.
+  oauth_client_id: 2a1218310b843851e0579bd3f19df4ef
+  # Colin's current PKCE OAuth flow does not read a client secret from WORKFLOW.md.
   # Optional once you create a Linear webhook with `colin setup linear webhook`.
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
   active_states:

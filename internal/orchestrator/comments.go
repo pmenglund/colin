@@ -37,7 +37,7 @@ func (o *Orchestrator) createRootComment(ctx context.Context, entry *runningEntr
 	if strings.TrimSpace(body) == "" {
 		return
 	}
-	body = colinCommentBody(body)
+	body = colinCommentBody(body, o.runtime.Config.Tracker.AppMode)
 
 	commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
 		return o.runtime.Tracker.CreateIssueComment(ctx, entry.issue.ID, body)
@@ -67,7 +67,7 @@ func (o *Orchestrator) postReply(ctx context.Context, entry *runningEntry, body 
 	if o.runtime.Tracker == nil || entry == nil || entry.comment == nil || entry.comment.RootCommentID == "" || strings.TrimSpace(body) == "" {
 		return ""
 	}
-	body = colinCommentBody(body)
+	body = colinCommentBody(body, o.runtime.Config.Tracker.AppMode)
 
 	commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
 		return o.runtime.Tracker.CreateCommentReply(ctx, entry.issue.ID, entry.comment.RootCommentID, body)
@@ -96,7 +96,7 @@ func (o *Orchestrator) postIssueStatusDetailed(ctx context.Context, issue domain
 		return issue, comment, ""
 	}
 	comment = commentState(issue, comment, runTypeForState(o, issue.State))
-	body = colinCommentBody(body)
+	body = colinCommentBody(body, o.runtime.Config.Tracker.AppMode)
 
 	if comment.RootCommentID == "" {
 		commentID, err := o.withCommentTimeout(ctx, func(ctx context.Context) (string, error) {
@@ -261,10 +261,13 @@ func rootCommentBody(entry *runningEntry, event codex.Event) string {
 	return strings.Join(lines, "\n")
 }
 
-func colinCommentBody(body string) string {
+func colinCommentBody(body string, appMode bool) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return ""
+	}
+	if appMode {
+		return body
 	}
 	if strings.HasPrefix(strings.ToLower(body), "[colin]") {
 		return body

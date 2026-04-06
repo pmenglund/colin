@@ -28,7 +28,7 @@ type commandDeps struct {
 	runSetupGitHub        func(*cobra.Command, string) int
 	runSetupGitHubWebhook func(*cobra.Command, string) int
 	runSetupTailscale     func(*cobra.Command, string, bool) int
-	runSetupLinearApp     func(*cobra.Command, string) int
+	runSetupLinearApp     func(*cobra.Command, string, bool) int
 	runSetupLinearWebhook func(*cobra.Command, string, string) int
 	isInteractive         func(*cobra.Command) bool
 }

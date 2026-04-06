@@ -18,11 +18,13 @@ import (
 )
 
 const (
-	setupPath         = "/setup/funnel"
-	webhookMountPath  = "/webhooks"
-	readyzPath        = "/webhooks/readyz"
-	linearWebhookPath = "/webhooks/linear"
-	githubWebhookPath = "/webhooks/github"
+	setupPath               = "/setup/funnel"
+	linearOAuthSetupPath    = "/setup/linear/app"
+	linearOAuthCallbackPath = "/callbacks/linear"
+	webhookMountPath        = "/webhooks"
+	readyzPath              = "/webhooks/readyz"
+	linearWebhookPath       = "/webhooks/linear"
+	githubWebhookPath       = "/webhooks/github"
 )
 
 var allowedFunnelPorts = []int{8443, 10000, 443}
@@ -79,6 +81,7 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 		LocalWebhookBaseURL: localWebhookBaseURL(opts),
 	}
 	status.LocalSetupURL = joinURL(status.LocalBaseURL, setupPath)
+	status.LocalLinearOAuthURL = joinURL(status.LocalBaseURL, linearOAuthSetupPath)
 	status.LocalReadyURL = joinURL(status.LocalWebhookBaseURL, readyzPath)
 	status.SuggestedServeCommand = suggestedServeCommand(opts.UIPort)
 
@@ -206,6 +209,8 @@ func (i *Inspector) Resolve(ctx context.Context, opts Options) domain.FunnelSetu
 	status.PublicReadyURL = joinURL(status.PublicBaseURL, readyzPath)
 	status.LinearWebhookURL = joinURL(status.PublicBaseURL, linearWebhookPath)
 	status.GitHubWebhookURL = joinURL(status.PublicBaseURL, githubWebhookPath)
+	status.LinearOAuthConnectURL = joinURL(status.TailnetUIBaseURL, linearOAuthSetupPath)
+	status.LinearOAuthCallbackURL = joinURL(status.TailnetUIBaseURL, linearOAuthCallbackPath)
 	status.Checks = checks
 	return finalizeStatus(status)
 }

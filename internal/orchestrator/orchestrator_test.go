@@ -1094,6 +1094,43 @@ func TestShouldDispatchRejectsPausedLabel(t *testing.T) {
 	}
 }
 
+func TestShouldDispatchRequiresDelegationInAppMode(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates: []string{"Todo", "In Progress"},
+				AppMode:      true,
+			},
+			Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+		}},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "1",
+		Identifier: "ABC-1",
+		Title:      "Not delegated",
+		State:      "Todo",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false when app mode issue is not delegated")
+	}
+	if !orch.shouldDispatch(domain.Issue{
+		ID:               "2",
+		Identifier:       "ABC-2",
+		Title:            "Delegated",
+		State:            "Todo",
+		DelegatedToColin: true,
+	}) {
+		t.Fatal("shouldDispatch() = false, want true when app mode issue is delegated")
+	}
+}
+
 func TestShouldDispatchRejectsSecondMergeByDefault(t *testing.T) {
 	t.Parallel()
 

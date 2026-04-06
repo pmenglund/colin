@@ -33,6 +33,13 @@ func intValue(value *int) (int, bool) {
 	return *value, true
 }
 
+func boolValue(value *bool) (bool, bool) {
+	if value == nil {
+		return false, false
+	}
+	return *value, true
+}
+
 func durationMillisValue(value *int) (time.Duration, bool) {
 	number, ok := intValue(value)
 	if !ok {
