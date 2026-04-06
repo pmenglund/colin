@@ -188,13 +188,15 @@ func TestRunnerResumesPersistedCodexThreadID(t *testing.T) {
 	}
 }
 
-func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
+func TestRunnerStopsEarlyAfterRepeatedReadyForReviewWithoutRepoChanges(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
 	repoURL := createRunnerGitOrigin(t, tempDir)
+	promptsLogPath := filepath.Join(tempDir, "prompts.log")
 	command := fmt.Sprintf(
-		"env COLIN_FAKE_CODEX=1 %q -test.run=TestHelperProcessFakeCodex --",
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptsLogPath,
 		os.Args[0],
 	)
 	cfg := domain.ServiceConfig{
@@ -211,7 +213,7 @@ func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
 			RemoteName:    "origin",
 		},
 		Agent: domain.AgentConfig{
-			MaxTurns: 1,
+			MaxTurns: 8,
 		},
 		Codex: domain.CodexConfig{
 			Command:           command,
@@ -229,6 +231,10 @@ func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
 			Identifier: "COLIN-95",
 			Title:      "Keep coding",
 			State:      "In Progress",
+			ColinMetadata: &domain.ColinMetadata{
+				URL:            "https://example.test/issues/COLIN-95/metadata",
+				SlackPermalink: "https://example.test/slack/COLIN-95",
+			},
 		},
 	}
 	runner := NewRunner(
@@ -238,12 +244,15 @@ func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
 		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
-
 	result := runner.Run(context.Background(), domain.Issue{
 		ID:         "issue-1",
 		Identifier: "COLIN-95",
 		Title:      "Keep coding",
 		State:      "Todo",
+		ColinMetadata: &domain.ColinMetadata{
+			URL:            "https://example.test/issues/COLIN-95/metadata",
+			SlackPermalink: "https://example.test/slack/COLIN-95",
+		},
 	}, nil, nil)
 
 	if result.Status != "succeeded" {
@@ -252,11 +261,22 @@ func TestRunnerKeepsCodingWhenReadyForReviewHasNoRepoChanges(t *testing.T) {
 	if result.Issue.State != "Refine" {
 		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
 	}
-	if strings.Contains(result.Summary, "Implemented the requested change.") {
-		t.Fatalf("Summary = %q, want ready-for-review text cleared after no-change handoff", result.Summary)
+	if got := strings.Count(readRunnerFile(t, promptsLogPath), "===TURN==="); got != 2 {
+		t.Fatalf("prompt count = %d, want 2", got)
 	}
-	if !strings.Contains(result.Summary, "Colin reached the maximum of `1` turns") {
-		t.Fatalf("Summary = %q, want max-turn handoff note", result.Summary)
+	for _, want := range []string{
+		"Colin moved this issue to `Refine` because Codex repeatedly reported it as ready for review, but Colin still found no reviewable repository changes.",
+		"- Turns used: `2`",
+		"- Last meaningful Codex outcome: Implemented the requested change.",
+		"- Colin metadata: https://example.test/issues/COLIN-95/metadata",
+		"- Slack thread: https://example.test/slack/COLIN-95",
+	} {
+		if !strings.Contains(result.Summary, want) {
+			t.Fatalf("Summary = %q, want substring %q", result.Summary, want)
+		}
+	}
+	if strings.Contains(result.Summary, "maximum of `8` turns") {
+		t.Fatalf("Summary = %q, want early-stop diagnosis instead of max-turn note", result.Summary)
 	}
 }
 

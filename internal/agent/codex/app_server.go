@@ -443,6 +443,18 @@ func notificationMessage(note sdkrpc.Notification) map[string]any {
 		}
 		return msg
 	}
+	if note.Params != nil {
+		encoded, err := json.Marshal(note.Params)
+		if err == nil {
+			var params any
+			if err := json.Unmarshal(encoded, &params); err == nil {
+				if paramsMap, ok := params.(map[string]any); ok {
+					msg["params"] = paramsMap
+					return msg
+				}
+			}
+		}
+	}
 	msg["params"] = map[string]any{}
 	return msg
 }

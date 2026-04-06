@@ -71,6 +71,7 @@ const (
 	metadataOutcomeMerged        = "merged"
 	maxAutomaticMergeRetries     = 2
 	mergeRetryDelay              = 30 * time.Second
+	repeatedNoDiffReadyThreshold = 2
 )
 
 // NewRunner constructs a Runner bound to the current workflow, tracker, and workspace manager.
@@ -312,7 +313,12 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	}
 
 	maxTurnsReached := false
+	noDiffReadyCount := 0
+	lastNoDiffReadySummary := ""
+	forcedSummary := ""
+	turnsUsed := 0
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
+		turnsUsed = turn
 		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
 		if err != nil {
 			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
@@ -425,8 +431,8 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 			)
 			break
 		}
-		if summary := strings.TrimSpace(client.FinalSummary()); summary != "" {
-			handoffOutcome, _ := parseCodingSummaryOutcome(summary)
+		if summary := latestTurnSummary(client); summary != "" {
+			handoffOutcome, handoffSummary := parseCodingSummaryOutcome(summary)
 			if handoffOutcome == outcomeNeedsSpec {
 				r.logger.Info(
 					"runner turn produced an explicit needs-spec outcome; finishing coding run",
@@ -442,6 +448,8 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 			}
 			if reviewable {
+				noDiffReadyCount = 0
+				lastNoDiffReadySummary = ""
 				if execPlanCopy != nil && !execPlanProgress.AllCompleted() {
 					client.ClearFinalSummary()
 					r.logger.Info(
@@ -473,6 +481,25 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 					"turn", turn,
 				)
 				break
+			}
+			if handoffOutcome == outcomeReadyForReview {
+				noDiffReadyCount++
+				lastNoDiffReadySummary = handoffSummary
+				if noDiffReadyCount >= repeatedNoDiffReadyThreshold {
+					forcedSummary = userworkflow.CodingNoReviewableChangesRefine(current.State, turn, true, lastNoDiffReadySummary, current.ColinMetadata)
+					r.logger.Info(
+						"runner turn repeatedly produced ready-for-review without reviewable repository changes; stopping early",
+						"issue_id", current.ID,
+						"issue_identifier", current.Identifier,
+						"current_state", current.State,
+						"turn", turn,
+						"threshold", repeatedNoDiffReadyThreshold,
+					)
+					break
+				}
+			} else {
+				noDiffReadyCount = 0
+				lastNoDiffReadySummary = ""
 			}
 			client.ClearFinalSummary()
 			r.logger.Info(
@@ -511,7 +538,10 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		maxTurnsReached = true
 	}
 
-	summary := client.FinalSummary()
+	summary := latestTurnSummary(client)
+	if strings.TrimSpace(forcedSummary) != "" {
+		summary = forcedSummary
+	}
 	prRef := (*domain.PullRequestRef)(nil)
 	threadsHandled := 0
 	threadsRemaining := 0
@@ -532,20 +562,38 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		}
 	}
 
-	handoffOutcome, summary := parseCodingSummaryOutcome(summary)
-	if maxTurnsReached {
-		summary = appendMaxTurnsSummary(summary, current.State, r.cfg.Agent.MaxTurns)
-		if execPlanCopy != nil {
-			summary = appendRemainingExecPlanTasks(summary, execPlanProgress.Remaining())
+	handoffOutcome := ""
+	parsedSummary := strings.TrimSpace(summary)
+	metadataOutcome := metadataOutcomeReady
+	handoffState := ""
+	switch {
+	case strings.TrimSpace(forcedSummary) != "":
+		metadataOutcome = metadataOutcomeMax
+		handoffState = refineStateName
+	case maxTurnsReached:
+		handoffOutcome, parsedSummary = parseCodingSummaryOutcome(summary)
+		metadataOutcome = metadataOutcomeMax
+		handoffState = refineStateName
+		if noDiffReadyCount > 0 {
+			parsedSummary = userworkflow.CodingNoReviewableChangesRefine(current.State, turnsUsed, false, lastNoDiffReadySummary, current.ColinMetadata)
+		} else {
+			parsedSummary = appendMaxTurnsSummary(parsedSummary, current.State, r.cfg.Agent.MaxTurns)
 		}
+	default:
+		handoffOutcome, parsedSummary = parseCodingSummaryOutcome(summary)
+		metadataOutcome = codingOutcome(handoffOutcome, false)
+		handoffState = codingHandoffState(handoffOutcome, false, r.cfg.Repo.PublishStates)
 	}
-	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, codingOutcome(handoffOutcome, maxTurnsReached), "", ""))
-	if err != nil {
-		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
+	if (maxTurnsReached || strings.TrimSpace(forcedSummary) != "") && execPlanCopy != nil {
+		parsedSummary = appendRemainingExecPlanTasks(parsedSummary, execPlanProgress.Remaining())
 	}
-	current, err = r.moveSuccessfulCodingRunToHandoffState(ctx, current, codingHandoffState(handoffOutcome, maxTurnsReached, r.cfg.Repo.PublishStates))
+	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, metadataOutcome, "", ""))
 	if err != nil {
-		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: summary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: parsedSummary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
+	}
+	current, err = r.moveSuccessfulCodingRunToHandoffState(ctx, current, handoffState)
+	if err != nil {
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: parsedSummary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}
 	if r.shouldResetPersistentThreads(current.State) {
 		current = r.clearPersistentThreadMetadataBestEffort(ctx, current)
@@ -563,7 +611,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		RunType:          runType,
 		WorkspacePath:    ws.Path,
 		Status:           "succeeded",
-		Summary:          summary,
+		Summary:          parsedSummary,
 		PR:               prRef,
 		ThreadsHandled:   threadsHandled,
 		ThreadsRemaining: threadsRemaining,
@@ -1448,6 +1496,16 @@ func parseCodingSummaryOutcome(summary string) (string, string) {
 	default:
 		return "", summary
 	}
+}
+
+func latestTurnSummary(client *codex.Client) string {
+	if client == nil {
+		return ""
+	}
+	if summary := strings.TrimSpace(client.FinalSummary()); summary != "" {
+		return summary
+	}
+	return strings.TrimSpace(client.LastOutput())
 }
 
 func parseMergeRecoverySummaryOutcome(summary string) (string, string) {

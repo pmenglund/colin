@@ -171,3 +171,49 @@ func TestMergeRecoveryValidationFailureExplainsFalsePositiveRepair(t *testing.T)
 		}
 	}
 }
+
+func TestCodingNoReviewableChangesRefineExplainsInvestigationPath(t *testing.T) {
+	t.Parallel()
+
+	got := CodingNoReviewableChangesRefine(
+		"In Progress",
+		2,
+		true,
+		"## Why\n\nCOLIN-157 is already implemented in the repository.\n\n## Evidence\n\n```text\n$ git diff --stat HEAD origin/main\n<no output>\n```",
+		&domain.ColinMetadata{
+			URL:            "https://example.test/metadata/COLIN-157",
+			SlackPermalink: "https://example.test/slack/COLIN-157",
+		},
+	)
+
+	for _, want := range []string{
+		"Colin moved this issue to `Refine` because Codex repeatedly reported it as ready for review, but Colin still found no reviewable repository changes.",
+		"- Run type: `coding`",
+		"- State: `In Progress`",
+		"- Turns used: `2`",
+		"- Last meaningful Codex outcome: COLIN-157 is already implemented in the repository.",
+		"- What Colin is doing next: stopping early and moving the issue to `Refine` instead of spending the remaining turn budget repeating the same no-diff handoff.",
+		"- Colin metadata: https://example.test/metadata/COLIN-157",
+		"- Slack thread: https://example.test/slack/COLIN-157",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("CodingNoReviewableChangesRefine() = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestCodingNoReviewableChangesRefineOmitsLinksWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	got := CodingNoReviewableChangesRefine("In Progress", 1, false, "## Why\n\nAlready shipped.", nil)
+
+	if strings.Contains(got, "Colin metadata:") {
+		t.Fatalf("CodingNoReviewableChangesRefine() = %q, want no metadata link", got)
+	}
+	if strings.Contains(got, "Slack thread:") {
+		t.Fatalf("CodingNoReviewableChangesRefine() = %q, want no Slack link", got)
+	}
+	if !strings.Contains(got, "- Last meaningful Codex outcome: Already shipped.") {
+		t.Fatalf("CodingNoReviewableChangesRefine() = %q, want condensed Codex outcome", got)
+	}
+}

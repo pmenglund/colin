@@ -87,6 +87,31 @@ func NoReviewableChanges(targetState string) string {
 	return strings.Join(lines, "\n")
 }
 
+func CodingNoReviewableChangesRefine(state string, turnsUsed int, stoppedEarly bool, codexSummary string, metadata *domain.ColinMetadata) string {
+	intro := "Colin moved this issue to `Refine` because Codex reported it as ready for review, but Colin found no reviewable repository changes."
+	if turnsUsed > 1 {
+		intro = "Colin moved this issue to `Refine` because Codex repeatedly reported it as ready for review, but Colin still found no reviewable repository changes."
+	}
+	lines := []string{intro}
+	lines = append(lines,
+		"- Run type: `coding`",
+		fmt.Sprintf("- State: `%s`", strings.TrimSpace(state)),
+		fmt.Sprintf("- Turns used: `%d`", turnsUsed),
+		"- Likely cause: the requested behavior may already exist on the base branch, or Codex concluded from existing code instead of making new changes in the issue workspace.",
+	)
+	if summaryLine := summarizeCodexOutcomeLine(codexSummary); summaryLine != "" {
+		lines = append(lines, "- Last meaningful Codex outcome: "+summaryLine)
+	}
+	if stoppedEarly {
+		lines = append(lines, "- What Colin is doing next: stopping early and moving the issue to `Refine` instead of spending the remaining turn budget repeating the same no-diff handoff.")
+	} else {
+		lines = append(lines, "- What Colin is doing next: moving the issue to `Refine` after using the configured turn budget without producing a reviewable diff.")
+	}
+	lines = append(lines, "- What you should do: inspect the Colin metadata page and workspace history to confirm whether the issue is already implemented or whether the prompt or workspace state needs correction.")
+	lines = appendInvestigationLinks(lines, metadata)
+	return strings.Join(lines, "\n")
+}
+
 func MergeWaitingForReview(pr domain.PullRequestRef, waitingForPickup bool, pendingApproval bool) string {
 	lines := []string{"Keeping issue in `Merge` while waiting for Codex PR review feedback."}
 	if waitingForPickup {
@@ -249,6 +274,42 @@ func appendCodexSummary(lines []string, summary string) []string {
 		lines = append(lines, "", "Codex summary:", "", summary)
 	}
 	return lines
+}
+
+func appendInvestigationLinks(lines []string, metadata *domain.ColinMetadata) []string {
+	if metadata == nil {
+		return lines
+	}
+	if url := strings.TrimSpace(metadata.URL); url != "" {
+		lines = append(lines, "- Colin metadata: "+url)
+	}
+	if permalink := strings.TrimSpace(metadata.SlackPermalink); permalink != "" {
+		lines = append(lines, "- Slack thread: "+permalink)
+	}
+	return lines
+}
+
+func summarizeCodexOutcomeLine(summary string) string {
+	for _, line := range strings.Split(strings.TrimSpace(summary), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "COLIN_OUTCOME:"):
+			continue
+		case strings.HasPrefix(line, "##"):
+			continue
+		case strings.HasPrefix(line, "```"):
+			continue
+		case strings.HasPrefix(line, "$"):
+			continue
+		case strings.HasPrefix(line, "- "):
+			continue
+		}
+		return line
+	}
+	return ""
 }
 
 func mergeHumanAction(prNumber int, baseRef string, _ string) string {

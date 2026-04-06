@@ -77,6 +77,8 @@ When a coding run finishes and Colin hands work off, the Linear issue comment is
 
 Those handoff comments also explain what Colin is doing next and what human action is required. That includes returned-review cases where GitHub review feedback has not synced yet, cases where review feedback still keeps the issue in `Todo`, and merge-conflict cases where Colin either repairs the branch automatically or sends the issue back to `Review` with concrete follow-up instructions.
 
+When a coding run keeps coming back as "ready for review" but Colin still sees no reviewable repository diff, Colin now short-circuits that loop into `Refine` after a repeated no-diff diagnosis instead of burning the full turn budget. The resulting Linear handoff comment includes the likely cause plus direct links to the Colin metadata page and Slack thread when those are available, so operators can inspect the captured Codex output and workspace history quickly.
+
 Watched-project Linear `Issue` `create` webhooks, watched-project `Issue` `update` webhooks that change scheduling-relevant fields such as `stateId`, and watched-team Linear `IssueLabel` create or remove webhooks can also trigger a best-effort immediate reconciliation between poll intervals so Colin does not always wait for the next scheduled poll to react, including when a human removes the `paused` label. GitHub does not emit a repository webhook for PR review-comment reactions, so Colin detects collaborator `+1` approvals on invited Codex PR review comments during its normal polling loop instead.
 
 ## Getting Started

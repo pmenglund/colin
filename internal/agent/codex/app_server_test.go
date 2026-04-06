@@ -135,6 +135,29 @@ func TestNotificationMessageUsesTopLevelParams(t *testing.T) {
 	}
 }
 
+func TestNotificationMessageFallsBackToTypedParams(t *testing.T) {
+	t.Parallel()
+
+	item, err := json.Marshal(map[string]any{
+		"text": domain.OutcomeReadyForReviewLine + "\n\nAlready implemented.",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	msg := notificationMessage(sdkrpc.Notification{
+		Method: "item/completed",
+		Params: sdkprotocol.ItemCompletedNotification{
+			ThreadID: "thread-1",
+			Item:     item,
+		},
+	})
+
+	if got := summarizeMessage(msg); got != domain.OutcomeReadyForReviewLine+"\n\nAlready implemented." {
+		t.Fatalf("summarizeMessage() = %q, want completed item text from typed params", got)
+	}
+}
+
 func TestCompletedItemTextUsesCompletedItemOnly(t *testing.T) {
 	t.Parallel()
 
