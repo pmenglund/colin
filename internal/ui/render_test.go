@@ -455,7 +455,7 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`Slack channel`,
 		`C12345678`,
 		`1743630000.123456`,
-		`https://example.slack.com/archives/C12345678/p1743630000123456`,
+		`class="issue-title metadata-value-link" href="https://example.slack.com/archives/C12345678/p1743630000123456"`,
 		`href="/linear/issues/issue-1/metadata"`,
 		`href="/linear/issues/issue-1/exec-plan"`,
 		`href="https://linear.app/example/issue/COLIN-111"`,
@@ -464,6 +464,26 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)
 		}
+	}
+}
+
+func TestIssueMetadataPageRendersUnsafeSlackPermalinkAsPlainText(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, IssueMetadataPage(domain.Issue{
+		ID:         "issue-unsafe",
+		Identifier: "COLIN-191",
+		Title:      "Reject unsafe slack permalink scheme",
+		ColinMetadata: &domain.ColinMetadata{
+			SlackPermalink: "javascript:alert('owned')",
+		},
+	}, time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)))
+
+	if !strings.Contains(html, `javascript:alert(&#39;owned&#39;)`) {
+		t.Fatalf("render missing unsafe permalink text\n%s", html)
+	}
+	if strings.Contains(html, `href="javascript:alert(`) {
+		t.Fatalf("render should not emit unsafe permalink href\n%s", html)
 	}
 }
 

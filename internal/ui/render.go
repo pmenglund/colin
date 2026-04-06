@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -119,7 +120,7 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 							metadataStatCard("Summary comment", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastSummaryCommentID }), "not recorded")),
 							metadataStatCard("Slack channel", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackChannelID }), "not recorded")),
 							metadataStatCard("Slack message", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackMessageTS }), "not recorded")),
-							metadataStatCard("Slack permalink", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackPermalink }), "not recorded")),
+							metadataLinkStatCard("Slack permalink", metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackPermalink }), "not recorded"),
 							metadataStatCard("Updated", fallback(metadataTimestamp(metadata), "not recorded")),
 						),
 						issueLinks(issue),
@@ -576,10 +577,45 @@ func stateSlug(state string) string {
 }
 
 func metadataStatCard(title, value string) g.Node {
+	return metadataStatCardContent(title, h.Div(h.Class("issue-title"), g.Text(value)))
+}
+
+func metadataLinkStatCard(title, href, empty string) g.Node {
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return metadataStatCard(title, empty)
+	}
+	if !safeExternalURLScheme(href) {
+		return metadataStatCard(title, href)
+	}
+	return metadataStatCardContent(
+		title,
+		h.A(
+			h.Class("issue-title metadata-value-link"),
+			h.Href(href),
+			g.Text(href),
+		),
+	)
+}
+
+func safeExternalURLScheme(raw string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
+}
+
+func metadataStatCardContent(title string, content g.Node) g.Node {
 	return h.Div(
 		h.Class("card"),
 		h.Div(h.Class("stat-title"), g.Text(title)),
-		h.Div(h.Class("issue-title"), g.Text(value)),
+		content,
 	)
 }
 
