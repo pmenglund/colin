@@ -382,6 +382,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	}
 	view := stripANSI(updated.View().Content)
 	for _, want := range []string{
+		"1. COLIN-147",
 		"COLIN-147",
 		"In Progress",
 		"019d54ec-2095-7b2d-8e1a-0123456789ab",
