@@ -379,6 +379,7 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			Event:     "turn_completed",
 			Message:   "refresh complete",
 		}}
+		issueProviderCalls := 0
 		handler, err := NewUIHandler(func(context.Context) (domain.Snapshot, error) {
 			return domain.Snapshot{
 				GeneratedAt: time.Date(2026, 3, 28, 12, 34, 56, 0, time.UTC),
@@ -392,12 +393,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 				}},
 			}, nil
 		}, func(context.Context, string) (domain.Issue, error) {
-			return domain.Issue{
-				ID:         "issue-1",
-				Identifier: "COLIN-93",
-				Title:      "Add dashboard",
-				State:      "In Progress",
-			}, nil
+			issueProviderCalls++
+			t.Fatal("issueProvider should not be called for codex output events")
+			return domain.Issue{}, nil
 		}, nil, nil, func(context.Context) (domain.SnapshotUpdate, <-chan domain.SnapshotUpdate, error) {
 			return domain.SnapshotUpdate{
 				Sequence:    7,
@@ -454,6 +452,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(outputEvent, `"cursor":"2026-03-28T12:34:57Z|other_message|streamed follow-up"`) {
 			t.Fatalf("output event = %q, want updated cursor", outputEvent)
+		}
+		if issueProviderCalls != 0 {
+			t.Fatalf("issueProviderCalls = %d, want 0", issueProviderCalls)
 		}
 	})
 

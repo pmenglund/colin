@@ -188,7 +188,7 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 				return
 			}
 
-			issue, log, err := currentIssueOutput(r.Context(), provider, issueProvider, issueID)
+			identifier, log, _, err := currentStreamIssueOutput(r.Context(), provider, issueID)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -210,7 +210,7 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 			if err := writeJSONSSEEvent(w, "ready", issueOutputStreamPayload{Cursor: currentCursor}); err != nil {
 				return
 			}
-			currentCursor, err = writeIssueOutputDelta(w, issue, log, afterCursor)
+			currentCursor, err = writeIssueOutputDelta(w, identifier, log, afterCursor)
 			if err != nil {
 				return
 			}
@@ -224,11 +224,11 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 				case <-r.Context().Done():
 					return
 				case <-updates:
-					issue, log, err = currentIssueOutput(r.Context(), provider, issueProvider, issueID)
+					identifier, log, _, err = currentStreamIssueOutput(r.Context(), provider, issueID)
 					if err != nil {
 						return
 					}
-					currentCursor, err = writeIssueOutputDelta(w, issue, log, currentCursor)
+					currentCursor, err = writeIssueOutputDelta(w, identifier, log, currentCursor)
 					if err != nil {
 						return
 					}
@@ -538,6 +538,20 @@ func currentIssueOutput(ctx context.Context, provider SnapshotProvider, issuePro
 	return issue, issueOutputLog(issue), nil
 }
 
+func currentStreamIssueOutput(ctx context.Context, provider SnapshotProvider, issueID string) (string, []domain.OutputLog, bool, error) {
+	snapshot, err := provider(ctx)
+	if err != nil {
+		return "", nil, false, err
+	}
+	for _, entry := range snapshot.Running {
+		if entry.IssueID != issueID {
+			continue
+		}
+		return issueOutputIdentifier(domain.Issue{ID: entry.IssueID, Identifier: entry.Identifier}), append([]domain.OutputLog(nil), entry.OutputLog...), true, nil
+	}
+	return issueID, nil, false, nil
+}
+
 func mergeLiveIssueOutput(issue *domain.Issue, snapshot domain.Snapshot) {
 	if issue == nil {
 		return
@@ -598,11 +612,11 @@ func outputEntriesAfterCursor(log []domain.OutputLog, cursor string) ([]domain.O
 	return nil, false
 }
 
-func writeIssueOutputDelta(w io.Writer, issue domain.Issue, log []domain.OutputLog, afterCursor string) (string, error) {
+func writeIssueOutputDelta(w io.Writer, identifier string, log []domain.OutputLog, afterCursor string) (string, error) {
 	currentCursor := latestOutputCursor(log)
 	entries, found := outputEntriesAfterCursor(log, afterCursor)
 	if strings.TrimSpace(afterCursor) != "" && !found {
-		html, err := renderNodeHTML(ui.WorkerOutputList(issueOutputIdentifier(issue), log))
+		html, err := renderNodeHTML(ui.WorkerOutputList(identifier, log))
 		if err != nil {
 			return currentCursor, err
 		}
