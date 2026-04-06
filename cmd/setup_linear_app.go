@@ -45,14 +45,15 @@ func runSetupLinearApp(cmd *cobra.Command, workflowPath string, connect bool) in
 		renderer.Item("Workspace", result.WorkspaceName)
 	}
 	renderer.Item("Assignment behavior", result.AssignmentBehavior)
+	renderer.Item("Required OAuth scopes", strings.Join(result.RequiredOAuthScopes, ", "))
 	renderer.Item("Required webhook categories", strings.Join(result.RequiredWebhookCategories, ", "))
 	renderer.Item("Optional classic wake-up webhooks", strings.Join(result.OptionalWakeupEvents, ", "))
 
 	renderer.Section("Checks")
-	if result.SigningSecretConfigured {
-		renderer.Status(clioutput.StatusOK, "Signing secret", "configured")
+	if result.AppWebhookSigningSecretConfigured {
+		renderer.Status(clioutput.StatusOK, "App webhook secret", "configured")
 	} else {
-		renderer.Status(clioutput.StatusAction, "Signing secret", "store the shared webhook secret in `tracker.webhook_signing_secret: $"+result.SigningSecretEnvVar+"`")
+		renderer.Status(clioutput.StatusAction, "App webhook secret", "store the Linear app webhook secret in `tracker.app_webhook_signing_secret: $"+result.AppWebhookSigningSecretEnvVar+"`")
 	}
 	if result.OAuthClientIDConfigured {
 		renderer.Status(clioutput.StatusOK, "OAuth client ID", "configured")
@@ -81,6 +82,7 @@ func runSetupLinearApp(cmd *cobra.Command, workflowPath string, connect bool) in
 	renderer.Section("Notes")
 	renderer.Status(clioutput.StatusInfo, "Autonomous behavior", "Colin should proactively create an agent session when it picks up work on its own")
 	renderer.Status(clioutput.StatusInfo, "", "Keep Colin's existing issue-webhook and polling wake-up path enabled. The Linear app should share `/webhooks/linear`; it should not disable the webhook")
+	renderer.Status(clioutput.StatusInfo, "", "If the Linear app webhook uses a different signing secret than the team webhook, store it separately in `tracker.app_webhook_signing_secret`")
 	renderer.Status(clioutput.StatusInfo, "", "The OAuth connect and callback URLs live on the tailnet-only Serve side, not on the public Funnel `/webhooks` paths")
 	renderer.Status(clioutput.StatusInfo, "", "`colin setup linear webhook` is the team-webhook helper. Configure app-owned webhooks from the Linear app setup itself")
 	if !connect {

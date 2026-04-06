@@ -29,6 +29,7 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		`project_slug: "project-1"`,
 		"api_key: $LINEAR_API_KEY",
 		"webhook_signing_secret: $LINEAR_WEBHOOK_SECRET",
+		"# app_webhook_signing_secret: $LINEAR_APP_WEBHOOK_SECRET",
 		"codex_pr_reviews_enabled: false",
 		"api_token: $GITHUB_TOKEN",
 		`repo_url: "git@github.com:acme/repo.git"`,

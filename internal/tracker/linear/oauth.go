@@ -21,6 +21,7 @@ const (
 	defaultOAuthAuthorizeURL = "https://linear.app/oauth/authorize"
 	defaultOAuthTokenURL     = "https://api.linear.app/oauth/token"
 	authFileName             = "auth.json"
+	linearAppOAuthScopes     = "read,write,app:assignable"
 )
 
 var authFileMu sync.Mutex
@@ -160,7 +161,7 @@ func AuthorizeURL(clientID string, pending LinearPendingOAuth) (string, error) {
 	values.Set("client_id", strings.TrimSpace(clientID))
 	values.Set("redirect_uri", strings.TrimSpace(pending.RedirectURI))
 	values.Set("response_type", "code")
-	values.Set("scope", "read,write")
+	values.Set("scope", linearAppOAuthScopes)
 	values.Set("state", strings.TrimSpace(pending.State))
 	values.Set("actor", "app")
 	values.Set("code_challenge", codeChallengeS256(pending.CodeVerifier))

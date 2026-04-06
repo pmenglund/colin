@@ -150,6 +150,90 @@ func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
 	}
 }
 
+func TestSyncGitHubReviewFollowUpRequiresDelegationInAppMode(t *testing.T) {
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	cfg.Tracker.AppMode = true
+	cfg.Tracker.ActiveStates = []string{"Todo", "In Progress"}
+	cfg.Repo.PublishStates = []string{"Review"}
+
+	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+		Number:      11,
+		URL:         "https://github.com/pmenglund/colin/pull/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []repoops.GitHubReviewThread{
+			{
+				ID:               "thread-1",
+				IsResolved:       false,
+				IsOutdated:       false,
+				ViewerCanReply:   true,
+				ViewerCanResolve: true,
+				Path:             "internal/foo.go",
+				Comments: repoops.GitHubReviewCommentConnection{
+					Comments: []repoops.GitHubReviewComment{
+						{
+							ID:          "PRRC_kwDOExample0",
+							DatabaseID:  "3035904923",
+							Body:        "**review**\n\nUseful? React with 👍 / 👎.",
+							URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+							AuthorLogin: "chatgpt-codex-connector[bot]",
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+	fakeGitHub.PullRequestReviewCommentReactionsReturns(repoops.GitHubReviewCommentReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{ID: 377554834, Content: "+1", UserLogin: "pmenglund"},
+		},
+	}, nil)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, &collaboratorGitHubClient{FakeRepoHostClient: fakeGitHub, allowed: true}),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{"issue-1": "Review"},
+	}
+
+	now := time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC)
+	updated, queued := orch.syncGitHubReviewFollowUp(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-123",
+		Title:      "Address review feedback",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:     11,
+			PullRequestURL:        "https://github.com/pmenglund/colin/pull/11",
+			PullRequestHeadRef:    "colin-123",
+			PullRequestBaseRef:    "symphony",
+			ProgressRootCommentID: "root",
+		},
+	}, now)
+
+	if queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = true, want false while issue is not delegated")
+	}
+	if updated.State != "Review" {
+		t.Fatalf("updated.State = %q, want Review", updated.State)
+	}
+	if got := len(tracker.updatedStates); got != 0 {
+		t.Fatalf("updatedStates length = %d, want 0", got)
+	}
+}
+
 func TestSyncGitHubReviewFollowUpQueuesAdditionalApprovals(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
 	cfg.Tracker.ActiveStates = []string{"Todo", "In Progress"}

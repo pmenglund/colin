@@ -9,31 +9,33 @@ import (
 )
 
 const LinearWebhookSigningSecretEnvVar = "LINEAR_WEBHOOK_SECRET"
+const LinearAppWebhookSigningSecretEnvVar = "LINEAR_APP_WEBHOOK_SECRET"
 const LinearOAuthClientIDEnvVar = linear.OAuthClientIDEnvVar
 
 var newLinearAppSetupClient = linear.New
 
 // LinearAppSetupResult is the operator-facing Linear app sketch for one workflow.
 type LinearAppSetupResult struct {
-	ProjectSlug               string
-	ProjectSlugs              []string
-	WebhookURL                string
-	ConnectURL                string
-	CallbackURL               string
-	AuthFilePath              string
-	AppModeEnabled            bool
-	OAuthClientIDConfigured   bool
-	StoredAuthConfigured      bool
-	AuthSource                string
-	ActorName                 string
-	ActorType                 string
-	SupportsAgentSessions     bool
-	WorkspaceName             string
-	AssignmentBehavior        string
-	RequiredWebhookCategories []string
-	OptionalWakeupEvents      []string
-	SigningSecretConfigured   bool
-	SigningSecretEnvVar       string
+	ProjectSlug                       string
+	ProjectSlugs                      []string
+	WebhookURL                        string
+	ConnectURL                        string
+	CallbackURL                       string
+	AuthFilePath                      string
+	AppModeEnabled                    bool
+	OAuthClientIDConfigured           bool
+	StoredAuthConfigured              bool
+	AuthSource                        string
+	ActorName                         string
+	ActorType                         string
+	SupportsAgentSessions             bool
+	WorkspaceName                     string
+	AssignmentBehavior                string
+	RequiredOAuthScopes               []string
+	RequiredWebhookCategories         []string
+	OptionalWakeupEvents              []string
+	AppWebhookSigningSecretConfigured bool
+	AppWebhookSigningSecretEnvVar     string
 }
 
 // LoadLinearAppSetup loads WORKFLOW.md and returns the intended self-hosted Linear app shape.
@@ -77,25 +79,26 @@ func LoadLinearAppSetup(ctx context.Context, workflowPath string, optionFns ...O
 	}
 
 	return LinearAppSetupResult{
-		ProjectSlug:               projectSlug,
-		ProjectSlugs:              projectSlugs,
-		WebhookURL:                linearWebhookURL(baseURL),
-		ConnectURL:                connectURL,
-		CallbackURL:               callbackURL,
-		AuthFilePath:              linear.AuthFilePath(workflowPath),
-		AppModeEnabled:            cfg.Tracker.AppMode,
-		OAuthClientIDConfigured:   strings.TrimSpace(cfg.Tracker.OAuthClientID) != "",
-		StoredAuthConfigured:      authErr == nil && strings.TrimSpace(authFile.Linear.AccessToken) != "",
-		AuthSource:                authSource,
-		ActorName:                 actorName,
-		ActorType:                 actorType,
-		SupportsAgentSessions:     supportsAgentSessions,
-		WorkspaceName:             workspaceName,
-		AssignmentBehavior:        "assigning an issue to Colin should delegate the work while the human owner remains accountable",
-		RequiredWebhookCategories: []string{"AgentSessionEvent"},
-		OptionalWakeupEvents:      []string{"Issue create", "Issue update"},
-		SigningSecretConfigured:   strings.TrimSpace(cfg.Tracker.WebhookSigningSecret) != "",
-		SigningSecretEnvVar:       LinearWebhookSigningSecretEnvVar,
+		ProjectSlug:                       projectSlug,
+		ProjectSlugs:                      projectSlugs,
+		WebhookURL:                        linearWebhookURL(baseURL),
+		ConnectURL:                        connectURL,
+		CallbackURL:                       callbackURL,
+		AuthFilePath:                      linear.AuthFilePath(workflowPath),
+		AppModeEnabled:                    cfg.Tracker.AppMode,
+		OAuthClientIDConfigured:           strings.TrimSpace(cfg.Tracker.OAuthClientID) != "",
+		StoredAuthConfigured:              authErr == nil && strings.TrimSpace(authFile.Linear.AccessToken) != "",
+		AuthSource:                        authSource,
+		ActorName:                         actorName,
+		ActorType:                         actorType,
+		SupportsAgentSessions:             supportsAgentSessions,
+		WorkspaceName:                     workspaceName,
+		AssignmentBehavior:                "assigning an issue to Colin should delegate the work while the human owner remains accountable",
+		RequiredOAuthScopes:               []string{"read", "write", "app:assignable"},
+		RequiredWebhookCategories:         []string{"AgentSessionEvent"},
+		OptionalWakeupEvents:              []string{"Issue create", "Issue update"},
+		AppWebhookSigningSecretConfigured: strings.TrimSpace(cfg.Tracker.AppWebhookSigningSecret) != "",
+		AppWebhookSigningSecretEnvVar:     LinearAppWebhookSigningSecretEnvVar,
 	}, nil
 }
 

@@ -1287,6 +1287,9 @@ func TestUpsertIssueMetadata(t *testing.T) {
 		CodexThreadID:           "thread-1",
 		ProgressRootCommentID:   "comment-root-1",
 		ColinCommentIDs:         []string{"comment-root-1", "reply-1"},
+		DelegationAckKind:       "ready",
+		DelegationAckState:      "Todo",
+		DelegationAckSessionID:  "session-1",
 		ActualBranchName:        "colin-94",
 		ExecPlanDecision:        domain.ExecPlanDecisionOneShot,
 		ReviewPublishDirective:  domain.ReviewPublishDirectiveSkip,
@@ -1336,6 +1339,15 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if gotMetadata["progress_root_comment_id"] != "comment-root-1" {
 		t.Fatalf("progress_root_comment_id = %v, want comment-root-1", gotMetadata["progress_root_comment_id"])
+	}
+	if gotMetadata["delegation_ack_kind"] != "ready" {
+		t.Fatalf("delegation_ack_kind = %v, want ready", gotMetadata["delegation_ack_kind"])
+	}
+	if gotMetadata["delegation_ack_state"] != "Todo" {
+		t.Fatalf("delegation_ack_state = %v, want Todo", gotMetadata["delegation_ack_state"])
+	}
+	if gotMetadata["delegation_ack_session_id"] != "session-1" {
+		t.Fatalf("delegation_ack_session_id = %v, want session-1", gotMetadata["delegation_ack_session_id"])
 	}
 	if got, ok := gotMetadata["colin_comment_ids"].([]any); !ok || len(got) != 2 || got[0] != "comment-root-1" || got[1] != "reply-1" {
 		t.Fatalf("colin_comment_ids = %#v, want root/reply ids", gotMetadata["colin_comment_ids"])
@@ -1396,6 +1408,15 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 	if metadata.ProgressRootCommentID != "comment-root-1" {
 		t.Fatalf("metadata.ProgressRootCommentID = %q, want comment-root-1", metadata.ProgressRootCommentID)
+	}
+	if metadata.DelegationAckKind != "ready" {
+		t.Fatalf("metadata.DelegationAckKind = %q, want ready", metadata.DelegationAckKind)
+	}
+	if metadata.DelegationAckState != "Todo" {
+		t.Fatalf("metadata.DelegationAckState = %q, want Todo", metadata.DelegationAckState)
+	}
+	if metadata.DelegationAckSessionID != "session-1" {
+		t.Fatalf("metadata.DelegationAckSessionID = %q, want session-1", metadata.DelegationAckSessionID)
 	}
 	if metadata.ActualBranchName != "colin-94" {
 		t.Fatalf("metadata.ActualBranchName = %q, want %q", metadata.ActualBranchName, "colin-94")
@@ -2899,6 +2920,9 @@ func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t 
 											"codex_thread_id":           "thread-1",
 											"progress_root_comment_id":  "comment-root-1",
 											"colin_comment_ids":         []any{"comment-root-1", "reply-1"},
+											"delegation_ack_kind":       "ready",
+											"delegation_ack_state":      "Todo",
+											"delegation_ack_session_id": "session-1",
 											"actual_branch_name":        "colin-94",
 											"exec_plan_decision":        "one_shot",
 											"review_publish_directive":  "skip",
@@ -2978,6 +3002,15 @@ func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t 
 	}
 	if metadata.ProgressRootCommentID != "comment-root-1" {
 		t.Fatalf("ProgressRootCommentID = %q, want comment-root-1", metadata.ProgressRootCommentID)
+	}
+	if metadata.DelegationAckKind != "ready" {
+		t.Fatalf("DelegationAckKind = %q, want ready", metadata.DelegationAckKind)
+	}
+	if metadata.DelegationAckState != "Todo" {
+		t.Fatalf("DelegationAckState = %q, want Todo", metadata.DelegationAckState)
+	}
+	if metadata.DelegationAckSessionID != "session-1" {
+		t.Fatalf("DelegationAckSessionID = %q, want session-1", metadata.DelegationAckSessionID)
 	}
 	if metadata.LoopFailureCount != 3 {
 		t.Fatalf("LoopFailureCount = %d, want 3", metadata.LoopFailureCount)

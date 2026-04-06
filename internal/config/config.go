@@ -365,6 +365,9 @@ func applyTrackerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTrackerCon
 	if value := stringValue(raw.WebhookSigningSecret); value != "" {
 		cfg.Tracker.WebhookSigningSecret = resolveEnvToken(value)
 	}
+	if value := stringValue(raw.AppWebhookSigningSecret); value != "" {
+		cfg.Tracker.AppWebhookSigningSecret = resolveEnvToken(value)
+	}
 	if value, ok := boolValue(raw.AppMode); ok {
 		cfg.Tracker.AppMode = value
 	}

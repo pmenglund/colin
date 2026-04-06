@@ -6,7 +6,7 @@ This file captures the stable, repo-specific architecture context for Colin.
 
 Colin is a long-running Go service that watches a Linear project, prepares a per-issue workspace, runs Codex for active issues, moves successful coding runs into the publish handoff state, and performs publish and merge automation from there.
 
-An embedded loopback HTTP server exposes the orchestrator snapshot for live operator inspection, a Tailscale Funnel setup/readiness flow, and live Linear and GitHub webhook paths. It still does not participate in orchestration correctness.
+An embedded loopback HTTP server exposes the orchestrator snapshot for live operator inspection, a Tailscale Funnel setup/readiness flow, live Linear and GitHub webhook paths, and a buffered log endpoint at `http://127.0.0.1:8888/api/v1/logs` that Codex can query to inspect recent service logs. It still does not participate in orchestration correctness.
 
 When configured, Colin also keeps one Slack message per tracked issue updated with the current workflow state and the next action, while linking out to Linear, PR, Colin metadata, and ExecPlan details instead of copying those details into Slack.
 
@@ -60,6 +60,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/automation/` - issue-run orchestration, workflow handoff policy, ExecPlan decisions, and merge-recovery automation
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state
 - `internal/app/` - embedded HTTP dashboard, Funnel setup/readiness pages, and live Linear and GitHub webhook routes
+- `http://127.0.0.1:8888/api/v1/logs` - buffered structured log endpoint for recent Colin service logs; useful for Codex-side debugging and live inspection
 - `internal/ui/` - gomponents-based HTML for the dashboard
 - `internal/notify/` - external issue-summary delivery interfaces and implementations such as Slack
 - `internal/repoops/` - publish and merge automation via git plus the configured repository backend client

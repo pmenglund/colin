@@ -1172,7 +1172,7 @@ tracker:
   kind: linear
   endpoint: ` + server.URL + `
   api_key: test-linear-key
-  webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
+  app_webhook_signing_secret: $LINEAR_APP_WEBHOOK_SECRET
   project_slug: test-project
 codex:
   command: codex app-server
@@ -1184,7 +1184,7 @@ Work on {{ .issue.identifier }}.
 	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	t.Setenv("LINEAR_WEBHOOK_SECRET", "secret")
+	t.Setenv("LINEAR_APP_WEBHOOK_SECRET", "app-secret")
 
 	result, err := LoadLinearAppSetup(context.Background(), workflowPath)
 	if err != nil {
@@ -1205,17 +1205,40 @@ Work on {{ .issue.identifier }}.
 	if !result.SupportsAgentSessions {
 		t.Fatal("SupportsAgentSessions = false, want true")
 	}
-	if !result.SigningSecretConfigured {
-		t.Fatal("SigningSecretConfigured = false, want true")
+	if !result.AppWebhookSigningSecretConfigured {
+		t.Fatal("AppWebhookSigningSecretConfigured = false, want true")
 	}
-	if result.SigningSecretEnvVar != LinearWebhookSigningSecretEnvVar {
-		t.Fatalf("SigningSecretEnvVar = %q, want %q", result.SigningSecretEnvVar, LinearWebhookSigningSecretEnvVar)
+	if result.AppWebhookSigningSecretEnvVar != LinearAppWebhookSigningSecretEnvVar {
+		t.Fatalf("AppWebhookSigningSecretEnvVar = %q, want %q", result.AppWebhookSigningSecretEnvVar, LinearAppWebhookSigningSecretEnvVar)
 	}
 	if got := strings.Join(result.RequiredWebhookCategories, ","); got != "AgentSessionEvent" {
 		t.Fatalf("RequiredWebhookCategories = %q, want %q", got, "AgentSessionEvent")
 	}
+	if got := strings.Join(result.RequiredOAuthScopes, ","); got != "read,write,app:assignable" {
+		t.Fatalf("RequiredOAuthScopes = %q, want %q", got, "read,write,app:assignable")
+	}
 	if got := strings.Join(result.OptionalWakeupEvents, ","); got != "Issue create,Issue update" {
 		t.Fatalf("OptionalWakeupEvents = %q, want %q", got, "Issue create,Issue update")
+	}
+}
+
+func TestLinearWebhookSecretProviderReturnsClassicAndAppSecrets(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					WebhookSigningSecret:    "classic-secret",
+					AppWebhookSigningSecret: "app-secret",
+				},
+			},
+		},
+	}
+
+	got := svc.linearWebhookSecretProvider()(context.Background())
+	if gotWant := strings.Join(got, ","); gotWant != "classic-secret,app-secret" {
+		t.Fatalf("linearWebhookSecretProvider() = %q, want %q", gotWant, "classic-secret,app-secret")
 	}
 }
 
@@ -1641,6 +1664,17 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 			want:      false,
 		},
 		{
+			name: "update with delegation change in watched project",
+			event: app.LinearWebhookEvent{
+				ResourceType:  "Issue",
+				Action:        "update",
+				ProjectID:     "project-1",
+				ChangedFields: []string{"delegateid", "updatedat"},
+			},
+			projectID: "project-1",
+			want:      true,
+		},
+		{
 			name: "update in different project",
 			event: app.LinearWebhookEvent{
 				ResourceType:  "Issue",
@@ -1703,6 +1737,16 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 			projectID: "project-1",
 			want:      true,
 		},
+		{
+			name: "agent session event is issue scoped when project id is missing",
+			event: app.LinearWebhookEvent{
+				ResourceType: "AgentSessionEvent",
+				Action:       "created",
+				IssueID:      "issue-1",
+			},
+			projectID: "project-1",
+			want:      true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1711,6 +1755,245 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 				t.Fatalf("shouldQueueImmediateLinearRefresh() = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{
+		issueByID: map[string]domain.Issue{
+			"issue-1": {
+				ID:               "issue-1",
+				Identifier:       "COLIN-190",
+				Title:            "Teach Colin to respond to delegation",
+				ProjectID:        "project-1",
+				State:            "Todo",
+				DelegatedToColin: true,
+			},
+		},
+	}
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					AppMode:      true,
+					ActiveStates: []string{"Todo", "In Progress"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	result := svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType: "AgentSessionEvent",
+		Action:       "created",
+		IssueID:      "issue-1",
+		SessionID:    "session-1",
+	})
+	if !result.Relevant {
+		t.Fatal("Relevant = false, want true")
+	}
+	if got := len(tracker.issueComments); got != 1 {
+		t.Fatalf("issueComments length = %d, want 1", got)
+	}
+	if got := len(tracker.commentReplies); got != 0 {
+		t.Fatalf("commentReplies length = %d, want 0", got)
+	}
+	if !strings.Contains(tracker.issueComments[0], "will start work") {
+		t.Fatalf("issue comment = %q, want start-work acknowledgement", tracker.issueComments[0])
+	}
+	metadata := tracker.issueByID["issue-1"].ColinMetadata
+	if metadata == nil {
+		t.Fatal("issue metadata = nil, want persisted acknowledgement metadata")
+	}
+	if metadata.ProgressRootCommentID != "root" {
+		t.Fatalf("ProgressRootCommentID = %q, want root", metadata.ProgressRootCommentID)
+	}
+	if metadata.DelegationAckKind != "ready" {
+		t.Fatalf("DelegationAckKind = %q, want ready", metadata.DelegationAckKind)
+	}
+	if metadata.DelegationAckState != "Todo" {
+		t.Fatalf("DelegationAckState = %q, want Todo", metadata.DelegationAckState)
+	}
+	if metadata.DelegationAckSessionID != "session-1" {
+		t.Fatalf("DelegationAckSessionID = %q, want session-1", metadata.DelegationAckSessionID)
+	}
+
+	result = svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType: "AgentSessionEvent",
+		Action:       "prompted",
+		IssueID:      "issue-1",
+		SessionID:    "session-1",
+	})
+	if !result.Relevant {
+		t.Fatal("Relevant after duplicate session = false, want true")
+	}
+	if got := len(tracker.issueComments); got != 1 {
+		t.Fatalf("issueComments length after duplicate session = %d, want 1", got)
+	}
+	if got := len(tracker.commentReplies); got != 0 {
+		t.Fatalf("commentReplies length after duplicate session = %d, want 0", got)
+	}
+}
+
+func TestLinearWebhookTriggerExplainsRequiredStateWhenDelegatedIssueIsNotDispatchable(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{
+		issueByID: map[string]domain.Issue{
+			"issue-1": {
+				ID:               "issue-1",
+				Identifier:       "COLIN-191",
+				Title:            "Wait in backlog",
+				ProjectID:        "project-1",
+				State:            "Backlog",
+				DelegatedToColin: true,
+				ColinMetadata: &domain.ColinMetadata{
+					ProgressRootCommentID: "root-existing",
+				},
+			},
+		},
+	}
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					AppMode:      true,
+					ActiveStates: []string{"Todo", "In Progress"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	result := svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType: "AgentSessionEvent",
+		Action:       "created",
+		IssueID:      "issue-1",
+		SessionID:    "session-2",
+	})
+	if !result.Relevant {
+		t.Fatal("Relevant = false, want true")
+	}
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length = %d, want 0", got)
+	}
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
+	}
+	if !strings.Contains(tracker.commentReplies[0], "move it to one of: `Todo`, `Merge`") {
+		t.Fatalf("comment reply = %q, want waiting-state acknowledgement", tracker.commentReplies[0])
+	}
+}
+
+func TestLinearWebhookTriggerIgnoresAgentSessionEventForUnwatchedIssue(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{
+		watchedProjectIDs: []string{"project-1"},
+		issueByID: map[string]domain.Issue{
+			"issue-1": {
+				ID:               "issue-1",
+				Identifier:       "COLIN-192",
+				Title:            "Different project",
+				ProjectID:        "project-2",
+				State:            "Todo",
+				DelegatedToColin: true,
+			},
+		},
+	}
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					AppMode:      true,
+					ActiveStates: []string{"Todo", "In Progress"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	result := svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType: "AgentSessionEvent",
+		Action:       "created",
+		IssueID:      "issue-1",
+		SessionID:    "session-3",
+	})
+	if result.Relevant {
+		t.Fatal("Relevant = true, want false for unwatched issue")
+	}
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length = %d, want 0", got)
+	}
+	if got := len(tracker.commentReplies); got != 0 {
+		t.Fatalf("commentReplies length = %d, want 0", got)
+	}
+}
+
+func TestLinearWebhookTriggerAcknowledgesDelegationFromIssueUpdateFallback(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{
+		issueByID: map[string]domain.Issue{
+			"issue-1": {
+				ID:               "issue-1",
+				Identifier:       "COLIN-190",
+				Title:            "Teach Colin to respond to delegation",
+				ProjectID:        "project-1",
+				State:            "Todo",
+				DelegatedToColin: true,
+			},
+		},
+	}
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					AppMode:      true,
+					ActiveStates: []string{"Todo", "In Progress"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	result := svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType:  "Issue",
+		Action:        "update",
+		IssueID:       "issue-1",
+		ProjectID:     "project-1",
+		ChangedFields: []string{"delegateid", "updatedat"},
+	})
+	if !result.Relevant {
+		t.Fatal("Relevant = false, want true")
+	}
+	if got := len(tracker.issueComments); got != 1 {
+		t.Fatalf("issueComments length = %d, want 1", got)
+	}
+	if !strings.Contains(tracker.issueComments[0], "will start work") {
+		t.Fatalf("issue comment = %q, want start-work acknowledgement", tracker.issueComments[0])
 	}
 }
 
@@ -1926,12 +2209,19 @@ func (s serviceInspectorStub) ResolveUIBaseURL(context.Context, *int) string {
 }
 
 type serviceTrackerStub struct {
-	ensuredLabels []string
-	issuesByState []domain.Issue
-	stateNames    []string
+	ensuredLabels     []string
+	issuesByState     []domain.Issue
+	stateNames        []string
+	issueByID         map[string]domain.Issue
+	issueComments     []string
+	commentReplies    []string
+	watchedProjectIDs []string
 }
 
 func (s *serviceTrackerStub) WatchedProjectIDs() []string {
+	if s.watchedProjectIDs != nil {
+		return append([]string(nil), s.watchedProjectIDs...)
+	}
 	return []string{"project-1"}
 }
 
@@ -2129,7 +2419,13 @@ func (s *serviceTrackerStub) FetchIssueStatesByIDs(context.Context, []string) ([
 	return nil, nil
 }
 
-func (s *serviceTrackerStub) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+func (s *serviceTrackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
+	if s.issueByID == nil {
+		return domain.Issue{}, nil
+	}
+	if issue, ok := s.issueByID[issueID]; ok {
+		return issue, nil
+	}
 	return domain.Issue{}, nil
 }
 
@@ -2154,16 +2450,25 @@ func (s *serviceTrackerStub) ResolveGitAutomationState(context.Context, string, 
 	return "", false, nil
 }
 
-func (s *serviceTrackerStub) CreateIssueComment(context.Context, string, string) (string, error) {
-	return "", nil
+func (s *serviceTrackerStub) CreateIssueComment(_ context.Context, _ string, body string) (string, error) {
+	s.issueComments = append(s.issueComments, body)
+	return "root", nil
 }
 
-func (s *serviceTrackerStub) CreateCommentReply(context.Context, string, string, string) (string, error) {
-	return "", nil
+func (s *serviceTrackerStub) CreateCommentReply(_ context.Context, _ string, _ string, body string) (string, error) {
+	s.commentReplies = append(s.commentReplies, body)
+	return "reply", nil
 }
 
-func (s *serviceTrackerStub) UpsertIssueMetadata(context.Context, string, domain.ColinMetadata) (domain.ColinMetadata, error) {
-	return domain.ColinMetadata{}, nil
+func (s *serviceTrackerStub) UpsertIssueMetadata(_ context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	if s.issueByID == nil {
+		s.issueByID = map[string]domain.Issue{}
+	}
+	issue := s.issueByID[issueID]
+	metadataCopy := metadata
+	issue.ColinMetadata = &metadataCopy
+	s.issueByID[issueID] = issue
+	return metadata, nil
 }
 
 func (s *serviceTrackerStub) UpsertIssueExecPlan(context.Context, string, domain.ExecPlan) (domain.ExecPlan, error) {

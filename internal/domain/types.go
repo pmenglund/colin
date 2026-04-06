@@ -100,6 +100,9 @@ type ColinMetadata struct {
 	CodexThreadID            string
 	ProgressRootCommentID    string
 	ColinCommentIDs          []string
+	DelegationAckKind        string
+	DelegationAckState       string
+	DelegationAckSessionID   string
 	ActualBranchName         string
 	PendingReviewCommentID   string
 	PendingReviewThreadID    string
@@ -223,15 +226,16 @@ type WorkflowConfig struct {
 }
 
 type WorkflowTrackerConfig struct {
-	Kind                 *string  `yaml:"kind"`
-	Endpoint             *string  `yaml:"endpoint"`
-	APIKey               *string  `yaml:"api_key"`
-	OAuthClientID        *string  `yaml:"oauth_client_id"`
-	WebhookSigningSecret *string  `yaml:"webhook_signing_secret"`
-	AppMode              *bool    `yaml:"app_mode"`
-	ProjectSlug          *string  `yaml:"project_slug"`
-	ActiveStates         []string `yaml:"active_states"`
-	TerminalStates       []string `yaml:"terminal_states"`
+	Kind                    *string  `yaml:"kind"`
+	Endpoint                *string  `yaml:"endpoint"`
+	APIKey                  *string  `yaml:"api_key"`
+	OAuthClientID           *string  `yaml:"oauth_client_id"`
+	WebhookSigningSecret    *string  `yaml:"webhook_signing_secret"`
+	AppWebhookSigningSecret *string  `yaml:"app_webhook_signing_secret"`
+	AppMode                 *bool    `yaml:"app_mode"`
+	ProjectSlug             *string  `yaml:"project_slug"`
+	ActiveStates            []string `yaml:"active_states"`
+	TerminalStates          []string `yaml:"terminal_states"`
 }
 
 type WorkflowPollingConfig struct {
@@ -330,15 +334,16 @@ type ServiceConfig struct {
 
 // TrackerConfig configures the issue tracker adapter.
 type TrackerConfig struct {
-	Kind                 string
-	Endpoint             string
-	APIKey               string
-	OAuthClientID        string
-	WebhookSigningSecret string
-	AppMode              bool
-	ProjectSlug          string
-	ActiveStates         []string
-	TerminalStates       []string
+	Kind                    string
+	Endpoint                string
+	APIKey                  string
+	OAuthClientID           string
+	WebhookSigningSecret    string
+	AppWebhookSigningSecret string
+	AppMode                 bool
+	ProjectSlug             string
+	ActiveStates            []string
+	TerminalStates          []string
 }
 
 // PollingConfig configures the orchestrator poll cadence.

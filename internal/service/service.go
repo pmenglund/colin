@@ -586,12 +586,14 @@ func (s *Service) newDashboardHandler() (http.Handler, error) {
 }
 
 func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
-	return func(_ context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
+	return func(ctx context.Context, event app.LinearWebhookEvent) app.LinearWebhookTriggerResult {
 		s.markWebhookMessage("linear")
 		runtime := s.currentRuntime()
+		event, hydratedIssue := s.hydrateLinearWebhookEvent(ctx, runtime, event)
 		if !shouldQueueImmediateLinearRefresh(event, watchedProjectIDs(runtime.Tracker)) {
 			return app.LinearWebhookTriggerResult{}
 		}
+		s.acknowledgeDelegatedLinearIssue(ctx, runtime, event, hydratedIssue)
 		reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
 		if event.IssueID != "" {
 			reason += " issue_id=" + event.IssueID
@@ -613,9 +615,242 @@ func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
 	}
 }
 
+func (s *Service) hydrateLinearWebhookEvent(ctx context.Context, runtime orchestrator.Runtime, event app.LinearWebhookEvent) (app.LinearWebhookEvent, *domain.Issue) {
+	if runtime.Tracker == nil {
+		return event, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.ResourceType), "AgentSessionEvent") {
+		return event, nil
+	}
+	if strings.TrimSpace(event.IssueID) == "" || strings.TrimSpace(event.ProjectID) != "" {
+		return event, nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	issue, err := runtime.Tracker.FetchIssueByID(lookupCtx, event.IssueID)
+	if err != nil {
+		s.logger.Warn("failed to load Linear issue for AgentSessionEvent webhook", "issue_id", event.IssueID, "error", err)
+		return event, nil
+	}
+	if strings.TrimSpace(issue.ID) == "" {
+		return event, nil
+	}
+	event.ProjectID = strings.TrimSpace(issue.ProjectID)
+	return event, &issue
+}
+
+func (s *Service) acknowledgeDelegatedLinearIssue(ctx context.Context, runtime orchestrator.Runtime, event app.LinearWebhookEvent, hydratedIssue *domain.Issue) {
+	if runtime.Tracker == nil || !runtime.Config.Tracker.AppMode {
+		return
+	}
+	if !shouldAcknowledgeDelegationFromLinearEvent(event) {
+		return
+	}
+	if strings.TrimSpace(event.IssueID) == "" {
+		return
+	}
+
+	ackCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	issue := domain.Issue{}
+	if hydratedIssue != nil {
+		issue = *hydratedIssue
+	} else {
+		var err error
+		issue, err = runtime.Tracker.FetchIssueByID(ackCtx, event.IssueID)
+		if err != nil {
+			s.logger.Warn("failed to load delegated Linear issue for acknowledgement", "issue_id", event.IssueID, "error", err)
+			return
+		}
+	}
+	if strings.TrimSpace(issue.ID) == "" || !issue.DelegatedToColin {
+		return
+	}
+
+	ackKind, body := delegationAcknowledgement(runtime.Config, issue)
+	if strings.TrimSpace(body) == "" {
+		return
+	}
+	sessionID := strings.TrimSpace(event.SessionID)
+	if !shouldPostDelegationAcknowledgement(issue.ColinMetadata, issue.State, ackKind, sessionID) {
+		return
+	}
+
+	commentID, progressRootID, err := postDelegationAcknowledgement(ackCtx, runtime.Tracker, issue, body)
+	if err != nil {
+		s.logger.Warn("failed to post Linear delegation acknowledgement", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+		return
+	}
+
+	metadata := domain.ColinMetadata{
+		ProgressRootCommentID:  strings.TrimSpace(progressRootID),
+		ColinCommentIDs:        appendUniqueTrimmed(nil, commentID),
+		DelegationAckKind:      ackKind,
+		DelegationAckState:     strings.TrimSpace(issue.State),
+		DelegationAckSessionID: sessionID,
+	}
+	if issue.ColinMetadata != nil {
+		metadata = *issue.ColinMetadata
+		metadata.ProgressRootCommentID = strings.TrimSpace(progressRootID)
+		metadata.ColinCommentIDs = appendUniqueTrimmed(metadata.ColinCommentIDs, commentID)
+		metadata.DelegationAckKind = ackKind
+		metadata.DelegationAckState = strings.TrimSpace(issue.State)
+		metadata.DelegationAckSessionID = sessionID
+	}
+	now := time.Now().UTC()
+	metadata.UpdatedAt = &now
+	if _, err := runtime.Tracker.UpsertIssueMetadata(ackCtx, issue.ID, metadata); err != nil {
+		s.logger.Warn("failed to persist Linear delegation acknowledgement metadata", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+	}
+}
+
+func delegationAcknowledgement(cfg domain.ServiceConfig, issue domain.Issue) (kind string, body string) {
+	state := strings.TrimSpace(issue.State)
+	if config.ContainsState(config.CandidateStates(cfg), state) {
+		return "ready", fmt.Sprintf("Colin is assigned and will start work while this issue stays delegated in `%s`.", fallbackStateName(state))
+	}
+
+	humanStates := delegationAcknowledgementHumanStates(cfg)
+	quotedStates := make([]string, 0, len(humanStates))
+	for _, candidate := range humanStates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		quotedStates = append(quotedStates, fmt.Sprintf("`%s`", candidate))
+	}
+	if len(quotedStates) == 0 {
+		return "waiting", fmt.Sprintf("Colin is assigned, but this issue is in `%s`. Move it into a Colin-managed state to start work.", fallbackStateName(state))
+	}
+	return "waiting", fmt.Sprintf(
+		"Colin is assigned, but this issue is in `%s`. To start work, keep it delegated to Colin and move it to one of: %s.",
+		fallbackStateName(state),
+		strings.Join(quotedStates, ", "),
+	)
+}
+
+func delegationAcknowledgementHumanStates(cfg domain.ServiceConfig) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 1+len(cfg.Repo.MergeStates))
+	if len(cfg.Tracker.ActiveStates) > 0 {
+		state := strings.TrimSpace(cfg.Tracker.ActiveStates[0])
+		if state != "" {
+			key := config.StateKey(state)
+			seen[key] = struct{}{}
+			out = append(out, state)
+		}
+	}
+	for _, state := range cfg.Repo.MergeStates {
+		state = strings.TrimSpace(state)
+		if state == "" {
+			continue
+		}
+		key := config.StateKey(state)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, state)
+	}
+	return out
+}
+
+func shouldPostDelegationAcknowledgement(metadata *domain.ColinMetadata, state string, kind string, sessionID string) bool {
+	if metadata == nil {
+		return true
+	}
+	if strings.TrimSpace(metadata.DelegationAckKind) != strings.TrimSpace(kind) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(metadata.DelegationAckState), strings.TrimSpace(state)) {
+		return true
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(metadata.DelegationAckSessionID), strings.TrimSpace(sessionID))
+}
+
+func shouldAcknowledgeDelegationFromLinearEvent(event app.LinearWebhookEvent) bool {
+	resourceType := strings.ToLower(strings.TrimSpace(event.ResourceType))
+	action := strings.ToLower(strings.TrimSpace(event.Action))
+	switch resourceType {
+	case "agentsessionevent":
+		return action == "created" || action == "prompted"
+	case "issue":
+		if action != "update" {
+			return false
+		}
+		return containsChangedField(event.ChangedFields, "delegateid")
+	default:
+		return false
+	}
+}
+
+func postDelegationAcknowledgement(ctx context.Context, tracker tracker.Client, issue domain.Issue, body string) (commentID string, progressRootID string, err error) {
+	progressRootID = ""
+	if issue.ColinMetadata != nil {
+		progressRootID = strings.TrimSpace(issue.ColinMetadata.ProgressRootCommentID)
+	}
+	if progressRootID == "" {
+		commentID, err = tracker.CreateIssueComment(ctx, issue.ID, body)
+		if err != nil {
+			return "", "", err
+		}
+		return commentID, commentID, nil
+	}
+	commentID, err = tracker.CreateCommentReply(ctx, issue.ID, progressRootID, body)
+	if err != nil {
+		return "", "", err
+	}
+	return commentID, progressRootID, nil
+}
+
+func appendUniqueTrimmed(values []string, items ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(items))
+	out := make([]string, 0, len(values)+len(items))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func fallbackStateName(state string) string {
+	if trimmed := strings.TrimSpace(state); trimmed != "" {
+		return trimmed
+	}
+	return "unknown"
+}
+
 func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider {
-	return func(context.Context) string {
-		return s.currentRuntime().Config.Tracker.WebhookSigningSecret
+	return func(context.Context) []string {
+		cfg := s.currentRuntime().Config.Tracker
+		return []string{
+			cfg.WebhookSigningSecret,
+			cfg.AppWebhookSigningSecret,
+		}
 	}
 }
 
@@ -781,11 +1016,11 @@ func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProj
 			return false
 		}
 	case "agentsessionevent":
-		projectID := strings.TrimSpace(event.ProjectID)
-		if projectID == "" || !matchesWatchedProject(projectID, watchedProjectIDs) {
+		if strings.TrimSpace(event.IssueID) == "" {
 			return false
 		}
-		if strings.TrimSpace(event.IssueID) == "" {
+		projectID := strings.TrimSpace(event.ProjectID)
+		if projectID != "" && !matchesWatchedProject(projectID, watchedProjectIDs) {
 			return false
 		}
 		switch strings.ToLower(strings.TrimSpace(event.Action)) {
@@ -857,7 +1092,20 @@ func normalizeRepositoryFullName(value string) string {
 func hasRelevantIssueChange(changedFields []string) bool {
 	for _, field := range changedFields {
 		switch strings.ToLower(strings.TrimSpace(field)) {
-		case "stateid", "projectid", "teamid", "priority", "title", "description", "branchname", "labelids":
+		case "stateid", "projectid", "teamid", "priority", "title", "description", "branchname", "labelids", "delegateid":
+			return true
+		}
+	}
+	return false
+}
+
+func containsChangedField(changedFields []string, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	if want == "" {
+		return false
+	}
+	for _, field := range changedFields {
+		if strings.EqualFold(strings.TrimSpace(field), want) {
 			return true
 		}
 	}

@@ -138,6 +138,15 @@ func (o *Orchestrator) startPendingReviewFollowUp(ctx context.Context, issue dom
 	if !hasPendingReviewFollowUp(issue) || o.runtime.Tracker == nil {
 		return issue, false
 	}
+	if o.runtime.Config.Tracker.AppMode && !issue.DelegatedToColin {
+		o.logger.Info(
+			"skipping github review follow-up because the issue is no longer delegated to Colin",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"state", issue.State,
+		)
+		return issue, false
+	}
 	previousState := issue.State
 	targetState := targetedReviewFollowUpState(o.runtime.Config.Tracker.ActiveStates)
 	if err := o.runtime.Tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {

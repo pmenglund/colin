@@ -392,6 +392,28 @@ func TestBuildReadsTrackerWebhookSigningSecretFromEnv(t *testing.T) {
 	}
 }
 
+func TestBuildReadsTrackerAppWebhookSigningSecretFromEnv(t *testing.T) {
+	t.Setenv("LINEAR_APP_WEBHOOK_SECRET", "app-secret-from-env")
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":                       "linear",
+			"project_slug":               "project-1",
+			"api_key":                    "token",
+			"app_webhook_signing_secret": "$LINEAR_APP_WEBHOOK_SECRET",
+		},
+	},
+	)
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := cfg.Tracker.AppWebhookSigningSecret; got != "app-secret-from-env" {
+		t.Fatalf("cfg.Tracker.AppWebhookSigningSecret = %q, want %q", got, "app-secret-from-env")
+	}
+}
+
 func TestBuildReadsRepoWebhookSigningSecretFromEnv(t *testing.T) {
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "github-secret-from-env")
 

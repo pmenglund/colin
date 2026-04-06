@@ -34,6 +34,9 @@ func TestAuthorizeURLUsesAppActorPKCE(t *testing.T) {
 	if got := parsed.Query().Get("actor"); got != "app" {
 		t.Fatalf("actor = %q, want %q", got, "app")
 	}
+	if got := parsed.Query().Get("scope"); got != linearAppOAuthScopes {
+		t.Fatalf("scope = %q, want %q", got, linearAppOAuthScopes)
+	}
 	if got := parsed.Query().Get("code_challenge_method"); got != "S256" {
 		t.Fatalf("code_challenge_method = %q, want %q", got, "S256")
 	}

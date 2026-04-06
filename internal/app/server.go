@@ -40,6 +40,7 @@ type LinearWebhookEvent struct {
 	Event         string
 	Action        string
 	ResourceType  string
+	SessionID     string
 	IssueID       string
 	ProjectID     string
 	ChangedFields []string

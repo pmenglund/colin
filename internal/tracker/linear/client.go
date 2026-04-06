@@ -2023,6 +2023,9 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.URL = strings.TrimSpace(url)
 	metadata.CodexThreadID, _ = stringValue(metadataMap["codex_thread_id"])
 	metadata.ProgressRootCommentID, _ = stringValue(metadataMap["progress_root_comment_id"])
+	metadata.DelegationAckKind, _ = stringValue(metadataMap["delegation_ack_kind"])
+	metadata.DelegationAckState, _ = stringValue(metadataMap["delegation_ack_state"])
+	metadata.DelegationAckSessionID, _ = stringValue(metadataMap["delegation_ack_session_id"])
 	metadata.ActualBranchName, _ = stringValue(metadataMap["actual_branch_name"])
 	metadata.PendingReviewCommentID, _ = stringValue(metadataMap["pending_review_comment_id"])
 	metadata.PendingReviewThreadID, _ = stringValue(metadataMap["pending_review_thread_id"])
@@ -2136,6 +2139,9 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
 		"codex_thread_id":            strings.TrimSpace(metadata.CodexThreadID),
 		"progress_root_comment_id":   strings.TrimSpace(metadata.ProgressRootCommentID),
+		"delegation_ack_kind":        strings.TrimSpace(metadata.DelegationAckKind),
+		"delegation_ack_state":       strings.TrimSpace(metadata.DelegationAckState),
+		"delegation_ack_session_id":  strings.TrimSpace(metadata.DelegationAckSessionID),
 		"actual_branch_name":         strings.TrimSpace(metadata.ActualBranchName),
 		"pending_review_comment_id":  strings.TrimSpace(metadata.PendingReviewCommentID),
 		"pending_review_thread_id":   strings.TrimSpace(metadata.PendingReviewThreadID),

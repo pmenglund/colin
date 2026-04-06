@@ -200,7 +200,7 @@ func newSetupLinearAppCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootO
 		Use:   "app",
 		Short: "Print the self-hosted Linear app sketch for this workflow",
 		Long: "Print the expected Linear app shape for Colin when you want an assignable app user that can both be delegated work and act on its own.\n\n" +
-			"This command reports the tailnet-only OAuth connect and callback URLs, resolves the current auth source, points the Linear app at `/webhooks/linear`, lists the required `AgentSessionEvent` webhook category, and explains that app mode should not disable Colin's existing issue-webhook or polling wake-up path.",
+			"This command reports the tailnet-only OAuth connect and callback URLs, resolves the current auth source, points the Linear app at `/webhooks/linear`, lists the required `AgentSessionEvent` webhook category, explains that app mode should not disable Colin's existing issue-webhook or polling wake-up path, and reminds you to store a separate app webhook secret in `tracker.app_webhook_signing_secret` when the app does not reuse the team webhook secret.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          maximumArgs(0),

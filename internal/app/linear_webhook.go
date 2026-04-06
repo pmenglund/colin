@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// LinearWebhookSecretProvider returns the configured Linear webhook secret for request validation.
-type LinearWebhookSecretProvider func(context.Context) string
+// LinearWebhookSecretProvider returns the configured Linear webhook secrets for request validation.
+type LinearWebhookSecretProvider func(context.Context) []string
 
 type linearWebhookEnvelope struct {
 	WebhookTimestamp int64           `json:"webhookTimestamp"`
@@ -24,31 +24,32 @@ type linearWebhookEnvelope struct {
 	Type             string          `json:"type"`
 	Data             json.RawMessage `json:"data"`
 	UpdatedFrom      json.RawMessage `json:"updatedFrom"`
+	Raw              json.RawMessage `json:"-"`
 }
 
 func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWebhookSecretProvider, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := ""
+		secrets := []string(nil)
 		if secretProvider != nil {
-			secret = strings.TrimSpace(secretProvider(r.Context()))
+			secrets = compactLinearWebhookSecrets(secretProvider(r.Context()))
 		}
-		logLinearWebhookRequest(logger, slog.LevelInfo, "received linear webhook request", r, len(secret) > 0, nil)
+		logLinearWebhookRequest(logger, slog.LevelInfo, "received linear webhook request", r, len(secrets) > 0, nil)
 
 		if r.Method != http.MethodPost {
-			logLinearWebhookRequest(logger, slog.LevelWarn, "rejected linear webhook request with unsupported method", r, len(secret) > 0, []any{"status", http.StatusMethodNotAllowed})
+			logLinearWebhookRequest(logger, slog.LevelWarn, "rejected linear webhook request with unsupported method", r, len(secrets) > 0, []any{"status", http.StatusMethodNotAllowed})
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
 
 		body, err := ioReadAll(r.Body)
 		if err != nil {
-			logLinearWebhookRequest(logger, slog.LevelWarn, "failed to read linear webhook request body", r, len(secret) > 0, []any{"error", err})
+			logLinearWebhookRequest(logger, slog.LevelWarn, "failed to read linear webhook request body", r, len(secrets) > 0, []any{"error", err})
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		logLinearWebhookRequest(logger, slog.LevelDebug, "read linear webhook request body", r, len(secret) > 0, []any{"body_bytes", len(body)})
-		if secret != "" {
-			if !validLinearWebhookSignature(r.Header.Get("Linear-Signature"), body, secret) {
+		logLinearWebhookRequest(logger, slog.LevelDebug, "read linear webhook request body", r, len(secrets) > 0, []any{"body_bytes", len(body)})
+		if len(secrets) > 0 {
+			if !validLinearWebhookSignatureAny(r.Header.Get("Linear-Signature"), body, secrets) {
 				logLinearWebhookRequest(logger, slog.LevelWarn, "rejected linear webhook request with invalid signature", r, true, []any{"status", http.StatusUnauthorized, "body_bytes", len(body)})
 				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 				return
@@ -62,11 +63,10 @@ func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWeb
 
 		envelope, err := parseLinearWebhookEnvelope(body)
 		if err != nil {
-			logLinearWebhookRequest(logger, slog.LevelWarn, "rejected linear webhook request with invalid payload", r, len(secret) > 0, []any{"status", http.StatusBadRequest, "body_bytes", len(body), "error", err})
+			logLinearWebhookRequest(logger, slog.LevelWarn, "rejected linear webhook request with invalid payload", r, len(secrets) > 0, []any{"status", http.StatusBadRequest, "body_bytes", len(body), "error", err})
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
-
 		event := linearWebhookEventFromRequest(r, envelope)
 		if shouldTriggerLinearWebhook(event) {
 			result := LinearWebhookTriggerResult{}
@@ -84,16 +84,16 @@ func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWeb
 			}
 			switch {
 			case !result.Relevant:
-				logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secret) > 0, extra)
+				logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secrets) > 0, extra)
 			case result.Queued:
-				logLinearWebhookRequest(logger, slog.LevelInfo, "queued immediate orchestrator refresh from linear webhook", r, len(secret) > 0, extra)
+				logLinearWebhookRequest(logger, slog.LevelInfo, "queued immediate orchestrator refresh from linear webhook", r, len(secrets) > 0, extra)
 			case result.Suppressed:
-				logLinearWebhookRequest(logger, slog.LevelDebug, "suppressed immediate orchestrator refresh from linear webhook; polling fallback remains active", r, len(secret) > 0, extra)
+				logLinearWebhookRequest(logger, slog.LevelDebug, "suppressed immediate orchestrator refresh from linear webhook; polling fallback remains active", r, len(secrets) > 0, extra)
 			default:
-				logLinearWebhookRequest(logger, slog.LevelWarn, "could not queue immediate orchestrator refresh from linear webhook", r, len(secret) > 0, extra)
+				logLinearWebhookRequest(logger, slog.LevelWarn, "could not queue immediate orchestrator refresh from linear webhook", r, len(secrets) > 0, extra)
 			}
 		} else {
-			logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secret) > 0, []any{
+			logLinearWebhookRequest(logger, slog.LevelDebug, "ignored linear webhook delivery that does not affect orchestration", r, len(secrets) > 0, []any{
 				"action", event.Action,
 				"resource_type", event.ResourceType,
 				"issue_id", event.IssueID,
@@ -104,9 +104,29 @@ func linearWebhookHandler(trigger LinearWebhookTrigger, secretProvider LinearWeb
 
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		logLinearWebhookRequest(logger, slog.LevelDebug, "accepted linear webhook request", r, len(secret) > 0, []any{"status", http.StatusOK, "body_bytes", len(body)})
+		logLinearWebhookRequest(logger, slog.LevelDebug, "accepted linear webhook request", r, len(secrets) > 0, []any{"status", http.StatusOK, "body_bytes", len(body)})
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
+}
+
+func compactLinearWebhookSecrets(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func logLinearWebhookRequest(logger *slog.Logger, level slog.Level, message string, r *http.Request, secretConfigured bool, extra []any) {
@@ -144,6 +164,15 @@ func validLinearWebhookSignature(header string, body []byte, secret string) bool
 	return subtle.ConstantTimeCompare(computed, expected) == 1
 }
 
+func validLinearWebhookSignatureAny(header string, body []byte, secrets []string) bool {
+	for _, secret := range compactLinearWebhookSecrets(secrets) {
+		if validLinearWebhookSignature(header, body, secret) {
+			return true
+		}
+	}
+	return false
+}
+
 func validLinearWebhookTimestamp(body []byte, now time.Time) bool {
 	var envelope linearWebhookEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -165,6 +194,7 @@ func parseLinearWebhookEnvelope(body []byte) (linearWebhookEnvelope, error) {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return linearWebhookEnvelope{}, err
 	}
+	envelope.Raw = append(json.RawMessage(nil), body...)
 	return envelope, nil
 }
 
@@ -185,12 +215,17 @@ func linearWebhookEventFromRequest(r *http.Request, envelope linearWebhookEnvelo
 	if r != nil {
 		deliveryID = strings.TrimSpace(r.Header.Get("Linear-Delivery"))
 	}
-	issueID, projectID := parseLinearWebhookSubjectData(resourceType, envelope.Data)
+	subjectData := envelope.Data
+	if len(subjectData) == 0 {
+		subjectData = envelope.Raw
+	}
+	sessionID, issueID, projectID := parseLinearWebhookSubjectData(resourceType, subjectData)
 	return LinearWebhookEvent{
 		DeliveryID:    deliveryID,
 		Event:         eventName,
 		Action:        strings.TrimSpace(envelope.Action),
 		ResourceType:  resourceType,
+		SessionID:     sessionID,
 		IssueID:       issueID,
 		ProjectID:     projectID,
 		ChangedFields: parseLinearWebhookChangedFields(envelope.UpdatedFrom),
@@ -220,7 +255,7 @@ func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
 			return false
 		}
 	case "agentsessionevent":
-		if strings.TrimSpace(event.IssueID) == "" || strings.TrimSpace(event.ProjectID) == "" {
+		if strings.TrimSpace(event.IssueID) == "" {
 			return false
 		}
 		switch strings.ToLower(strings.TrimSpace(event.Action)) {
@@ -234,14 +269,16 @@ func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
 	}
 }
 
-func parseLinearWebhookSubjectData(resourceType string, raw json.RawMessage) (issueID string, projectID string) {
+func parseLinearWebhookSubjectData(resourceType string, raw json.RawMessage) (sessionID string, issueID string, projectID string) {
 	switch strings.ToLower(strings.TrimSpace(resourceType)) {
 	case "issuelabel":
-		return parseLinearWebhookIssueLabelData(raw)
+		issueID, projectID = parseLinearWebhookIssueLabelData(raw)
+		return "", issueID, projectID
 	case "agentsessionevent":
 		return parseLinearWebhookAgentSessionData(raw)
 	default:
-		return parseLinearWebhookIssueData(raw)
+		issueID, projectID = parseLinearWebhookIssueData(raw)
+		return "", issueID, projectID
 	}
 }
 
@@ -285,25 +322,69 @@ func parseLinearWebhookIssueLabelData(raw json.RawMessage) (issueID string, proj
 	return issueID, projectID
 }
 
-func parseLinearWebhookAgentSessionData(raw json.RawMessage) (issueID string, projectID string) {
+func parseLinearWebhookAgentSessionData(raw json.RawMessage) (sessionID string, issueID string, projectID string) {
 	if len(raw) == 0 {
-		return "", ""
+		return "", "", ""
 	}
 	var payload struct {
-		IssueID string `json:"issueId"`
-		Issue   struct {
+		ID        string `json:"id"`
+		IssueID   string `json:"issueId"`
+		ProjectID string `json:"projectId"`
+		Issue     struct {
 			ID        string `json:"id"`
 			ProjectID string `json:"projectId"`
+			Project   struct {
+				ID string `json:"id"`
+			} `json:"project"`
 		} `json:"issue"`
+		AgentSession struct {
+			ID      string `json:"id"`
+			IssueID string `json:"issueId"`
+			Comment struct {
+				IssueID string `json:"issueId"`
+			} `json:"comment"`
+			Issue struct {
+				ID        string `json:"id"`
+				ProjectID string `json:"projectId"`
+				Project   struct {
+					ID string `json:"id"`
+				} `json:"project"`
+			} `json:"issue"`
+		} `json:"agentSession"`
+		PromptContext string `json:"promptContext"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	issueID = strings.TrimSpace(payload.IssueID)
-	if issueID == "" {
-		issueID = strings.TrimSpace(payload.Issue.ID)
+	sessionID = strings.TrimSpace(payload.AgentSession.ID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(payload.ID)
 	}
-	return issueID, strings.TrimSpace(payload.Issue.ProjectID)
+
+	issueID = firstNonEmptyTrimmed(
+		payload.IssueID,
+		payload.Issue.ID,
+		payload.AgentSession.IssueID,
+		payload.AgentSession.Comment.IssueID,
+		payload.AgentSession.Issue.ID,
+	)
+	projectID = firstNonEmptyTrimmed(
+		payload.ProjectID,
+		payload.Issue.ProjectID,
+		payload.Issue.Project.ID,
+		payload.AgentSession.Issue.ProjectID,
+		payload.AgentSession.Issue.Project.ID,
+	)
+	return sessionID, issueID, projectID
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func parseLinearWebhookChangedFields(raw json.RawMessage) []string {

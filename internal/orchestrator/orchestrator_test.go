@@ -1104,6 +1104,10 @@ func TestShouldDispatchRequiresDelegationInAppMode(t *testing.T) {
 				ActiveStates: []string{"Todo", "In Progress"},
 				AppMode:      true,
 			},
+			Repo: domain.RepoConfig{
+				PublishStates: []string{"Review"},
+				MergeStates:   []string{"Merge"},
+			},
 			Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
 		}},
 		running:   map[string]*runningEntry{},
@@ -1128,6 +1132,31 @@ func TestShouldDispatchRequiresDelegationInAppMode(t *testing.T) {
 		DelegatedToColin: true,
 	}) {
 		t.Fatal("shouldDispatch() = false, want true when app mode issue is delegated")
+	}
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "3",
+		Identifier: "ABC-3",
+		Title:      "Review without delegation",
+		State:      "Review",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false when app mode review issue is not delegated")
+	}
+	if orch.shouldDispatch(domain.Issue{
+		ID:         "4",
+		Identifier: "ABC-4",
+		Title:      "Merge without delegation",
+		State:      "Merge",
+	}) {
+		t.Fatal("shouldDispatch() = true, want false when app mode merge issue is not delegated")
+	}
+	if !orch.shouldDispatch(domain.Issue{
+		ID:               "5",
+		Identifier:       "ABC-5",
+		Title:            "Review delegated",
+		State:            "Review",
+		DelegatedToColin: true,
+	}) {
+		t.Fatal("shouldDispatch() = false, want true when app mode review issue is delegated")
 	}
 }
 

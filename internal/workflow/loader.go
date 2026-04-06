@@ -240,6 +240,9 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 	return map[string]any{
 		"attachment_id":               value.AttachmentID,
 		"url":                         value.URL,
+		"delegation_ack_kind":         value.DelegationAckKind,
+		"delegation_ack_state":        value.DelegationAckState,
+		"delegation_ack_session_id":   value.DelegationAckSessionID,
 		"actual_branch_name":          value.ActualBranchName,
 		"pending_review_comment_id":   value.PendingReviewCommentID,
 		"pending_review_thread_id":    value.PendingReviewThreadID,

@@ -1023,6 +1023,9 @@ func TestSetupLinearAppHelpExplainsPurpose(t *testing.T) {
 	if !strings.Contains(got, "should not disable Colin's existing issue-webhook or polling wake-up path") {
 		t.Fatalf("help output = %q, want webhook guidance", got)
 	}
+	if !strings.Contains(got, "app_webhook_signing_secret") {
+		t.Fatalf("help output = %q, want app webhook secret guidance", got)
+	}
 	if !strings.Contains(got, "setup linear app") {
 		t.Fatalf("help output = %q, want command name", got)
 	}

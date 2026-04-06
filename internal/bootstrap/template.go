@@ -16,6 +16,8 @@ tracker:
   # oauth_client_id: $LINEAR_OAUTH_CLIENT_ID
   # Optional once you create a Linear webhook with ` + "`colin setup linear webhook`" + `.
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
+  # Optional when the Linear app webhook uses a different secret than the team webhook.
+  # app_webhook_signing_secret: $LINEAR_APP_WEBHOOK_SECRET
   # Set to true only when LINEAR_API_KEY belongs to a Linear app user and you want
   # Colin to start active work only for issues delegated to that app.
   # app_mode: true

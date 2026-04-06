@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -763,8 +764,8 @@ func TestObservabilityServerLogRouteDefaultsToEmptyWhenProviderNil(t *testing.T)
 func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(context.Context) string {
-		return "secret"
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, func(context.Context) []string {
+		return []string{"secret"}
 	}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewObservabilityServer() error = %v", err)
@@ -783,6 +784,40 @@ func TestObservabilityServerLinearWebhookVerifiesSignatureWhenConfigured(t *test
 	}
 }
 
+func TestObservabilityServerLinearWebhookAcceptsAnyConfiguredSecret(t *testing.T) {
+	t.Parallel()
+
+	body := fmt.Sprintf(`{"action":"created","type":"AgentSessionEvent","webhookTimestamp":%d,"data":{"id":"session-1","issueId":"issue-1","issue":{"id":"issue-1","projectId":"project-1"}}}`, time.Now().UTC().UnixMilli())
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, func(_ context.Context, event LinearWebhookEvent) LinearWebhookTriggerResult {
+		return LinearWebhookTriggerResult{Relevant: true, Queued: true}
+	}, func(context.Context) []string {
+		return []string{"classic-secret", "app-secret"}
+	}, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/linear", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Linear-Delivery", "delivery-1")
+	req.Header.Set("Linear-Event", "AgentSessionEvent")
+	req.Header.Set("Linear-Signature", linearTestSignature(body, "app-secret"))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/linear error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t *testing.T) {
 	t.Parallel()
 
@@ -792,6 +827,8 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 		headerEvent   string
 		action        string
 		resourceType  string
+		sessionID     string
+		issueID       string
 		projectID     string
 		changedFields []string
 	}{
@@ -801,6 +838,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			headerEvent:  "Issue",
 			action:       "create",
 			resourceType: "Issue",
+			issueID:      "issue-1",
 			projectID:    "project-1",
 		},
 		{
@@ -809,6 +847,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			headerEvent:   "Issue",
 			action:        "update",
 			resourceType:  "Issue",
+			issueID:       "issue-1",
 			projectID:     "project-1",
 			changedFields: []string{"stateid", "updatedat"},
 		},
@@ -818,6 +857,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			headerEvent:  "IssueLabel",
 			action:       "remove",
 			resourceType: "IssueLabel",
+			issueID:      "issue-1",
 		},
 		{
 			name:         "agent session created",
@@ -825,7 +865,29 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			headerEvent:  "AgentSessionEvent",
 			action:       "created",
 			resourceType: "AgentSessionEvent",
+			sessionID:    "session-1",
+			issueID:      "issue-1",
 			projectID:    "project-1",
+		},
+		{
+			name:         "agent session nested payload",
+			body:         `{"action":"prompted","type":"AgentSessionEvent","webhookTimestamp":1735689600000,"data":{"agentSession":{"id":"session-2","issue":{"id":"issue-1","project":{"id":"project-1"}}}}}`,
+			headerEvent:  "AgentSessionEvent",
+			action:       "prompted",
+			resourceType: "AgentSessionEvent",
+			sessionID:    "session-2",
+			issueID:      "issue-1",
+			projectID:    "project-1",
+		},
+		{
+			name:         "agent session real payload",
+			body:         `{"type":"AgentSessionEvent","action":"created","createdAt":"2026-04-06T05:26:23.708Z","organizationId":"5ff8d263-4454-4af9-957c-836ab8bde3f1","oauthClientId":"2a1218310b843851e0579bd3f19df4ef","appUserId":"00169cc5-f59d-4ed5-a558-edf8cc316531","agentSession":{"id":"4f72a54d-bef3-4a30-90a5-170a41657346","comment":{"id":"cc609d4f-dfbe-4742-aa54-374b886db6f2","body":"This thread is for an agent session with colin.","issueId":"0275579e-47e4-4e2b-b342-3c6807c72eb0"},"issueId":"0275579e-47e4-4e2b-b342-3c6807c72eb0","issue":{"id":"0275579e-47e4-4e2b-b342-3c6807c72eb0","title":"include the number of workers","teamId":"f358a054-4268-41ac-affc-5b0081641f93","identifier":"COLIN-190"}},"promptContext":"<issue identifier=\"COLIN-190\"></issue>","webhookTimestamp":1775453183730,"webhookId":"97175f0f-f3cb-4230-9f6d-0e02c03b7d2d"}`,
+			headerEvent:  "AgentSessionEvent",
+			action:       "created",
+			resourceType: "AgentSessionEvent",
+			sessionID:    "4f72a54d-bef3-4a30-90a5-170a41657346",
+			issueID:      "0275579e-47e4-4e2b-b342-3c6807c72eb0",
+			projectID:    "",
 		},
 	}
 
@@ -871,8 +933,11 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			if events[0].ResourceType != tc.resourceType {
 				t.Fatalf("ResourceType = %q, want %q", events[0].ResourceType, tc.resourceType)
 			}
-			if events[0].IssueID != "issue-1" {
-				t.Fatalf("IssueID = %q, want %q", events[0].IssueID, "issue-1")
+			if events[0].SessionID != tc.sessionID {
+				t.Fatalf("SessionID = %q, want %q", events[0].SessionID, tc.sessionID)
+			}
+			if events[0].IssueID != tc.issueID {
+				t.Fatalf("IssueID = %q, want %q", events[0].IssueID, tc.issueID)
 			}
 			if events[0].ProjectID != tc.projectID {
 				t.Fatalf("ProjectID = %q, want %q", events[0].ProjectID, tc.projectID)
@@ -1225,6 +1290,12 @@ func gitHubTestSignature(secret string, payload string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(payload))
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func linearTestSignature(payload string, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(payload))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func readSSEEvent(t *testing.T, reader *bufio.Reader) string {
