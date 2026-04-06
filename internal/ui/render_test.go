@@ -455,7 +455,7 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`Slack channel`,
 		`C12345678`,
 		`1743630000.123456`,
-		`https://example.slack.com/archives/C12345678/p1743630000123456`,
+		`class="issue-title metadata-value-link" href="https://example.slack.com/archives/C12345678/p1743630000123456"`,
 		`href="/linear/issues/issue-1/metadata"`,
 		`href="/linear/issues/issue-1/exec-plan"`,
 		`href="https://linear.app/example/issue/COLIN-111"`,

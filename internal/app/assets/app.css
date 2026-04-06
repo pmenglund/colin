@@ -682,6 +682,18 @@ a {
   font-weight: 700;
 }
 
+.metadata-value-link {
+  display: inline-block;
+  color: var(--accent-2);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.metadata-value-link:hover,
+.metadata-value-link:focus-visible {
+  text-decoration: underline;
+}
+
 .issue-meta,
 .session-meta {
   display: grid;

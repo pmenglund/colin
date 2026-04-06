@@ -119,7 +119,7 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 							metadataStatCard("Summary comment", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.LastSummaryCommentID }), "not recorded")),
 							metadataStatCard("Slack channel", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackChannelID }), "not recorded")),
 							metadataStatCard("Slack message", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackMessageTS }), "not recorded")),
-							metadataStatCard("Slack permalink", fallback(metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackPermalink }), "not recorded")),
+							metadataLinkStatCard("Slack permalink", metadataValue(metadata, func(value *domain.ColinMetadata) string { return value.SlackPermalink }), "not recorded"),
 							metadataStatCard("Updated", fallback(metadataTimestamp(metadata), "not recorded")),
 						),
 						issueLinks(issue),
@@ -576,10 +576,28 @@ func stateSlug(state string) string {
 }
 
 func metadataStatCard(title, value string) g.Node {
+	return metadataStatCardContent(title, h.Div(h.Class("issue-title"), g.Text(value)))
+}
+
+func metadataLinkStatCard(title, href, empty string) g.Node {
+	if strings.TrimSpace(href) == "" {
+		return metadataStatCard(title, empty)
+	}
+	return metadataStatCardContent(
+		title,
+		h.A(
+			h.Class("issue-title metadata-value-link"),
+			h.Href(href),
+			g.Text(href),
+		),
+	)
+}
+
+func metadataStatCardContent(title string, content g.Node) g.Node {
 	return h.Div(
 		h.Class("card"),
 		h.Div(h.Class("stat-title"), g.Text(title)),
-		h.Div(h.Class("issue-title"), g.Text(value)),
+		content,
 	)
 }
 
