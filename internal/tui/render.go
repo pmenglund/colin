@@ -58,8 +58,8 @@ func renderOverviewView(m model) string {
 	if len(m.snapshot.Running) == 0 {
 		lines = append(lines, subtleStyle.Render("No running workers."))
 	} else {
-		for _, worker := range m.snapshot.Running {
-			lines = append(lines, renderWorkerLine(worker, m.width))
+		for idx, worker := range m.snapshot.Running {
+			lines = append(lines, renderWorkerLine(idx+1, worker, m.width))
 		}
 	}
 	if notice := renderShutdownNotice(m); notice != "" {
@@ -259,11 +259,12 @@ func renderWebhookStatusLine(label string, status domain.WebhookStatus) string {
 	return name + " " + subtleStyle.Render("last msg "+humanizeAge(status.LastMessageAt))
 }
 
-func renderWorkerLine(worker domain.SnapshotRunning, width int) string {
+func renderWorkerLine(position int, worker domain.SnapshotRunning, width int) string {
 	state := renderState(worker.State)
 	status := renderWorkerRuntime(worker.StartedAt)
 	return fmt.Sprintf(
-		"%s  %s  %s  %s  %s",
+		"%s %s  %s  %s  %s  %s",
+		subtleStyle.Render(fmt.Sprintf("%d.", position)),
 		titleStyle.Render(padRight(worker.Identifier, 12)),
 		state,
 		subtleStyle.Render(fmt.Sprintf("turn %d", worker.TurnCount)),
