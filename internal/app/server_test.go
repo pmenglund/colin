@@ -673,6 +673,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 	cases := []struct {
 		name          string
 		body          string
+		headerEvent   string
 		action        string
 		resourceType  string
 		projectID     string
@@ -681,6 +682,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 		{
 			name:         "issue create",
 			body:         `{"action":"create","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"}}`,
+			headerEvent:  "Issue",
 			action:       "create",
 			resourceType: "Issue",
 			projectID:    "project-1",
@@ -688,6 +690,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 		{
 			name:          "issue update",
 			body:          `{"action":"update","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"},"updatedFrom":{"stateId":"old-state","updatedAt":"2026-03-31T00:00:00.000Z"}}`,
+			headerEvent:   "Issue",
 			action:        "update",
 			resourceType:  "Issue",
 			projectID:     "project-1",
@@ -696,8 +699,17 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 		{
 			name:         "issue label remove",
 			body:         `{"action":"remove","type":"IssueLabel","webhookTimestamp":1735689600000,"data":{"id":"issue-label-1","issueId":"issue-1"}}`,
+			headerEvent:  "IssueLabel",
 			action:       "remove",
 			resourceType: "IssueLabel",
+		},
+		{
+			name:         "agent session created",
+			body:         `{"action":"created","type":"AgentSessionEvent","webhookTimestamp":1735689600000,"data":{"id":"session-1","issueId":"issue-1","issue":{"id":"issue-1","projectId":"project-1","delegateId":"app-user-1"}}}`,
+			headerEvent:  "AgentSessionEvent",
+			action:       "created",
+			resourceType: "AgentSessionEvent",
+			projectID:    "project-1",
 		},
 	}
 
@@ -720,7 +732,7 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 				t.Fatalf("NewRequest() error = %v", err)
 			}
 			req.Header.Set("Linear-Delivery", "delivery-1")
-			req.Header.Set("Linear-Event", "Issue")
+			req.Header.Set("Linear-Event", tc.headerEvent)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {

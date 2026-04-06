@@ -76,10 +76,26 @@ type ProjectSummary struct {
 	TeamNames []string
 }
 
+type linearActorIdentity struct {
+	ID                    string
+	Name                  string
+	IsApp                 bool
+	SupportsAgentSessions bool
+}
+
+func (a linearActorIdentity) Type() string {
+	if a.IsApp {
+		return "app"
+	}
+	return "user"
+}
+
 // Client is the Linear-backed implementation of the tracker.Client interface.
 type Client struct {
 	endpoint           string
 	apiKey             string
+	auth               authorizationProvider
+	appMode            bool
 	primaryProjectSlug string
 	projectsByID       map[string]string
 	watchedProjectIDs  []string
@@ -92,6 +108,8 @@ type Client struct {
 	rateInfo           domain.RateLimitSnapshot
 	labelMu            sync.RWMutex
 	labelIDs           map[string]string
+	actorMu            sync.RWMutex
+	actorIdentity      *linearActorIdentity
 }
 
 // New constructs a Linear-backed tracker client from the current service config.
@@ -103,7 +121,11 @@ func New(cfg domain.ServiceConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := newAPIClient(cfg.Tracker.Endpoint, cfg.Tracker.APIKey)
+	client, err := newConfiguredAPIClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	client.appMode = cfg.Tracker.AppMode
 	client.primaryProjectSlug = cfg.Tracker.ProjectSlug
 	client.active = slices.Clone(config.CandidateStates(cfg))
 	client.repoAdapter = repoAdapter
@@ -127,7 +149,7 @@ func (c *Client) ValidateWorkflowStates(ctx context.Context, cfg domain.ServiceC
 
 // ListProjects returns the caller's accessible Linear projects for setup-time selection.
 func ListProjects(ctx context.Context, endpoint string, apiKey string) ([]ProjectSummary, error) {
-	client := newAPIClient(endpoint, apiKey)
+	client := newStaticAPIClient(endpoint, apiKey)
 
 	const query = `
 query ProjectList($after: String) {
@@ -208,14 +230,43 @@ query ProjectList($after: String) {
 	return projects, nil
 }
 
+func newConfiguredAPIClient(cfg domain.ServiceConfig) (*Client, error) {
+	endpoint := strings.TrimSpace(cfg.Tracker.Endpoint)
+	if endpoint == "" {
+		endpoint = defaultEndpoint
+	}
+	auth, err := newAuthorizationProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{
+		endpoint:     endpoint,
+		apiKey:       strings.TrimSpace(cfg.Tracker.APIKey),
+		auth:         auth,
+		labelIDs:     map[string]string{},
+		projectsByID: map[string]string{},
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}, nil
+}
+
 func newAPIClient(endpoint string, apiKey string) *Client {
+	return newStaticAPIClient(endpoint, apiKey)
+}
+
+func newStaticAPIClient(endpoint string, apiKey string) *Client {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
+	apiKey = strings.TrimSpace(apiKey)
 	return &Client{
-		endpoint:     endpoint,
-		apiKey:       apiKey,
+		endpoint: endpoint,
+		apiKey:   apiKey,
+		auth: &staticAuthorizationProvider{
+			value: apiKey,
+		},
 		labelIDs:     map[string]string{},
 		projectsByID: map[string]string{},
 		client: &http.Client{
@@ -230,6 +281,80 @@ func (c *Client) SetUIBaseURLResolver(resolver func(context.Context) string) {
 		return
 	}
 	c.uiBaseURLResolver = resolver
+}
+
+// ActorIdentity resolves the current Linear actor represented by the configured API key.
+func (c *Client) ActorIdentity(ctx context.Context) (linearActorIdentity, error) {
+	if c == nil {
+		return linearActorIdentity{}, errors.New("nil linear client")
+	}
+
+	c.actorMu.RLock()
+	if c.actorIdentity != nil {
+		identity := *c.actorIdentity
+		c.actorMu.RUnlock()
+		return identity, nil
+	}
+	c.actorMu.RUnlock()
+
+	const query = `
+query ViewerIdentity {
+  viewer {
+    id
+    name
+    displayName
+    app
+    supportsAgentSessions
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, nil)
+	if err != nil {
+		return linearActorIdentity{}, err
+	}
+	viewer, ok := nestedMap(resp, "data", "viewer")
+	if !ok {
+		return linearActorIdentity{}, ErrUnknownPayload
+	}
+
+	identity := linearActorIdentity{}
+	identity.ID, _ = stringValue(viewer["id"])
+	displayName, _ := stringValue(viewer["displayName"])
+	identity.Name = strings.TrimSpace(displayName)
+	if identity.Name == "" {
+		identity.Name, _ = stringValue(viewer["name"])
+	}
+	identity.IsApp, _ = viewer["app"].(bool)
+	identity.SupportsAgentSessions, _ = viewer["supportsAgentSessions"].(bool)
+	if strings.TrimSpace(identity.ID) == "" || strings.TrimSpace(identity.Name) == "" {
+		return linearActorIdentity{}, ErrUnknownPayload
+	}
+
+	c.actorMu.Lock()
+	c.actorIdentity = &identity
+	c.actorMu.Unlock()
+	return identity, nil
+}
+
+func (c *Client) actorIdentityID() string {
+	if c == nil {
+		return ""
+	}
+	c.actorMu.RLock()
+	defer c.actorMu.RUnlock()
+	if c.actorIdentity == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.actorIdentity.ID)
+}
+
+func (c *Client) clearActorIdentity() {
+	if c == nil {
+		return
+	}
+	c.actorMu.Lock()
+	defer c.actorMu.Unlock()
+	c.actorIdentity = nil
 }
 
 // WatchedProjectID returns the stable Linear project ID resolved from the configured project slug.
@@ -335,6 +460,9 @@ query IssueStates($ids: [ID!]!) {
         id
         slugId
       }
+      delegate {
+        id
+      }
       state { name }
       updatedAt
     }
@@ -351,7 +479,7 @@ query IssueStates($ids: [ID!]!) {
 	}
 	issues := make([]domain.Issue, 0, len(nodes))
 	for _, node := range nodes {
-		issue, err := normalizeIssueSnapshot(node)
+		issue, err := c.normalizeIssueSnapshot(node)
 		if err != nil {
 			return nil, err
 		}
@@ -379,6 +507,9 @@ query IssueByID($id: String!) {
     createdAt
     updatedAt
     state { name }
+    delegate {
+      id
+    }
     labels { nodes { name } }
     inverseRelations {
       nodes {
@@ -406,12 +537,20 @@ query IssueByID($id: String!) {
         body
         createdAt
         parentId
+        user {
+          id
+          app
+        }
         children(first: 50) {
           nodes {
             id
             body
             createdAt
             parentId
+            user {
+              id
+              app
+            }
           }
         }
       }
@@ -1029,6 +1168,9 @@ query CandidateIssueSnapshots($projectIDs: [ID!], $states: [String!], $after: St
       createdAt
       updatedAt
       state { name }
+      delegate {
+        id
+      }
       labels { nodes { name } }
       inverseRelations {
         nodes {
@@ -1061,7 +1203,7 @@ query CandidateIssueSnapshots($projectIDs: [ID!], $states: [String!], $after: St
 			return nil, ErrUnknownPayload
 		}
 		for _, node := range nodes {
-			issue, err := normalizeIssueSnapshot(node)
+			issue, err := c.normalizeIssueSnapshot(node)
 			if err != nil {
 				return nil, err
 			}
@@ -1287,24 +1429,9 @@ func (c *Client) doQuery(ctx context.Context, query string, variables map[string
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(data))
+	payload, err := c.doQueryPayload(ctx, data, false)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
-	}
-	req.Header.Set("Authorization", c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
-	}
-	defer resp.Body.Close()
-	c.captureRateLimitHeaders(resp.Header, time.Now().UTC())
-	payload, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: status=%d body=%s", ErrAPIStatus, resp.StatusCode, string(payload))
+		return nil, err
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
@@ -1317,6 +1444,48 @@ func (c *Client) doQuery(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("%w: %v", ErrGraphQLErrors, errorsField)
 	}
 	return decoded, nil
+}
+
+func (c *Client) doQueryPayload(ctx context.Context, data []byte, retried bool) ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("nil linear client")
+	}
+	if c.auth == nil {
+		if strings.TrimSpace(c.apiKey) == "" {
+			return nil, config.ErrMissingTrackerAPIKey
+		}
+		c.auth = &staticAuthorizationProvider{value: strings.TrimSpace(c.apiKey)}
+	}
+	authValue, err := c.auth.Authorization(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
+	}
+	req.Header.Set("Authorization", authValue)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
+	}
+	defer resp.Body.Close()
+	c.captureRateLimitHeaders(resp.Header, time.Now().UTC())
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAPIRequest, err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized && !retried {
+		if err := c.auth.Refresh(ctx); err == nil {
+			c.clearActorIdentity()
+			return c.doQueryPayload(ctx, data, true)
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: status=%d body=%s", ErrAPIStatus, resp.StatusCode, string(payload))
+	}
+	return payload, nil
 }
 
 func (c *Client) captureRateLimitHeaders(header http.Header, observedAt time.Time) {
@@ -1369,7 +1538,7 @@ func nextAllowedAt(observedAt, resetAt time.Time, remaining int64) time.Time {
 	return observedAt.Add(step)
 }
 
-func normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
+func (c *Client) normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
 	id, _ := stringValue(node["id"])
 	identifier, _ := stringValue(node["identifier"])
 	title, _ := stringValue(node["title"])
@@ -1382,6 +1551,9 @@ func normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
 		ProjectID:   strings.TrimSpace(projectID(node)),
 		ProjectSlug: strings.TrimSpace(projectSlug(node)),
 		State:       state,
+	}
+	if delegateID, ok := nestedString(node, "delegate", "id"); ok && strings.TrimSpace(delegateID) != "" {
+		issue.DelegatedToColin = strings.EqualFold(strings.TrimSpace(delegateID), c.actorIdentityID())
 	}
 	if value, ok := intValue(node["priority"]); ok {
 		issue.Priority = &value
@@ -1436,7 +1608,7 @@ func normalizeIssueSnapshot(node map[string]any) (domain.Issue, error) {
 }
 
 func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
-	issue, err := normalizeIssueSnapshot(node)
+	issue, err := c.normalizeIssueSnapshot(node)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -1452,7 +1624,7 @@ func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
 			ReturnedToTodoAt: end,
 		}
 	}
-	issue.ReviewFeedback = extractReviewFeedback(issue.State, node)
+	issue.ReviewFeedback = c.extractReviewFeedback(issue.State, node)
 	return issue, nil
 }
 
@@ -1471,6 +1643,8 @@ type linearComment struct {
 	Body      string
 	CreatedAt time.Time
 	ParentID  *string
+	UserID    string
+	UserIsApp bool
 }
 
 type linearStateChange struct {
@@ -1485,7 +1659,7 @@ type colinMetadataAttachment struct {
 	updatedAt *time.Time
 }
 
-func extractReviewFeedback(state string, node map[string]any) []domain.ReviewFeedback {
+func (c *Client) extractReviewFeedback(state string, node map[string]any) []domain.ReviewFeedback {
 	if !strings.EqualFold(strings.TrimSpace(state), "Todo") {
 		return nil
 	}
@@ -1506,7 +1680,7 @@ func extractReviewFeedback(state string, node map[string]any) []domain.ReviewFee
 			continue
 		}
 		body := strings.TrimSpace(comment.Body)
-		if body == "" || isColinComment(body) {
+		if body == "" || c.isColinComment(comment) {
 			continue
 		}
 		feedback = append(feedback, domain.ReviewFeedback{
@@ -1658,11 +1832,18 @@ func parseLinearComment(node map[string]any) (linearComment, bool) {
 	if parentID, ok := stringValue(node["parentId"]); ok && strings.TrimSpace(parentID) != "" {
 		comment.ParentID = &parentID
 	}
+	if userNode, ok := nestedMap(node, "user"); ok {
+		comment.UserID, _ = stringValue(userNode["id"])
+		comment.UserIsApp, _ = userNode["app"].(bool)
+	}
 	return comment, true
 }
 
-func isColinComment(body string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(body)), "[colin]")
+func (c *Client) isColinComment(comment linearComment) bool {
+	if c != nil && c.appMode && comment.UserIsApp && strings.EqualFold(strings.TrimSpace(comment.UserID), c.actorIdentityID()) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(comment.Body)), "[colin]")
 }
 
 func extractColinMetadata(node map[string]any) *domain.ColinMetadata {

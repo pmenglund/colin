@@ -690,6 +690,58 @@ func TestCreateIssueComment(t *testing.T) {
 	}
 }
 
+func TestActorIdentityReadsViewerAppState(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "ViewerIdentity") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"viewer": map[string]any{
+					"id":                    "app-user-1",
+					"name":                  "Colin",
+					"displayName":           "Colin Bot",
+					"app":                   true,
+					"supportsAgentSessions": true,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	identity, err := client.ActorIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("ActorIdentity() error = %v", err)
+	}
+	if identity.ID != "app-user-1" {
+		t.Fatalf("identity.ID = %q, want %q", identity.ID, "app-user-1")
+	}
+	if identity.Name != "Colin Bot" {
+		t.Fatalf("identity.Name = %q, want %q", identity.Name, "Colin Bot")
+	}
+	if !identity.IsApp {
+		t.Fatal("identity.IsApp = false, want true")
+	}
+	if !identity.SupportsAgentSessions {
+		t.Fatal("identity.SupportsAgentSessions = false, want true")
+	}
+}
+
 func TestCreateCommentReply(t *testing.T) {
 	t.Parallel()
 
@@ -3200,6 +3252,88 @@ func TestNormalizeIssueParsesAttachedPullRequestsWithConfiguredBackend(t *testin
 	}
 	if got.RepositoryOwner != "acme" || got.RepositoryName != "widgets" || got.Number != 17 {
 		t.Fatalf("AttachedPullRequests[0] = %+v, want acme/widgets#17", got)
+	}
+}
+
+func TestNormalizeIssueMarksDelegationToCurrentAppActor(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		appMode:       true,
+		actorIdentity: &linearActorIdentity{ID: "app-user-1", Name: "Colin", IsApp: true},
+	}
+	issue, err := client.normalizeIssue(map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-188",
+		"title":      "Linear app",
+		"state":      map[string]any{"name": "Todo"},
+		"project":    map[string]any{"id": "project-1", "slugId": "bothnia"},
+		"delegate":   map[string]any{"id": "app-user-1"},
+	})
+	if err != nil {
+		t.Fatalf("normalizeIssue() error = %v", err)
+	}
+	if !issue.DelegatedToColin {
+		t.Fatal("issue.DelegatedToColin = false, want true")
+	}
+}
+
+func TestNormalizeIssueFiltersAppAuthoredReviewFeedbackWithoutPrefix(t *testing.T) {
+	t.Parallel()
+
+	reviewStart := time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
+	reviewEnd := reviewStart.Add(10 * time.Minute)
+	client := &Client{
+		appMode:       true,
+		actorIdentity: &linearActorIdentity{ID: "app-user-1", Name: "Colin", IsApp: true},
+	}
+	issue, err := client.normalizeIssue(map[string]any{
+		"id":         "issue-1",
+		"identifier": "COLIN-188",
+		"title":      "Linear app",
+		"state":      map[string]any{"name": "Todo"},
+		"project":    map[string]any{"id": "project-1", "slugId": "bothnia"},
+		"comments": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"id":        "comment-app",
+					"body":      "Colin started work on this issue.",
+					"createdAt": reviewStart.Add(2 * time.Minute).Format(time.RFC3339),
+					"user":      map[string]any{"id": "app-user-1", "app": true},
+					"children":  map[string]any{"nodes": []any{}},
+				},
+				map[string]any{
+					"id":        "comment-human",
+					"body":      "Please also document the setup flow.",
+					"createdAt": reviewStart.Add(3 * time.Minute).Format(time.RFC3339),
+					"user":      map[string]any{"id": "user-1", "app": false},
+					"children":  map[string]any{"nodes": []any{}},
+				},
+			},
+		},
+		"history": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"createdAt": reviewStart.Add(-time.Minute).Format(time.RFC3339),
+					"fromState": map[string]any{"name": "In Progress"},
+					"toState":   map[string]any{"name": "Review"},
+				},
+				map[string]any{
+					"createdAt": reviewEnd.Format(time.RFC3339),
+					"fromState": map[string]any{"name": "Review"},
+					"toState":   map[string]any{"name": "Todo"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeIssue() error = %v", err)
+	}
+	if len(issue.ReviewFeedback) != 1 {
+		t.Fatalf("len(issue.ReviewFeedback) = %d, want 1", len(issue.ReviewFeedback))
+	}
+	if issue.ReviewFeedback[0].Body != "Please also document the setup flow." {
+		t.Fatalf("ReviewFeedback[0].Body = %q, want human comment", issue.ReviewFeedback[0].Body)
 	}
 }
 

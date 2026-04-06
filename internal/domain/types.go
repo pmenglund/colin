@@ -57,6 +57,7 @@ type Issue struct {
 	ProjectID            string
 	ProjectSlug          string
 	State                string
+	DelegatedToColin     bool
 	BranchName           *string
 	URL                  *string
 	Labels               []string
@@ -225,7 +226,9 @@ type WorkflowTrackerConfig struct {
 	Kind                 *string  `yaml:"kind"`
 	Endpoint             *string  `yaml:"endpoint"`
 	APIKey               *string  `yaml:"api_key"`
+	OAuthClientID        *string  `yaml:"oauth_client_id"`
 	WebhookSigningSecret *string  `yaml:"webhook_signing_secret"`
+	AppMode              *bool    `yaml:"app_mode"`
 	ProjectSlug          *string  `yaml:"project_slug"`
 	ActiveStates         []string `yaml:"active_states"`
 	TerminalStates       []string `yaml:"terminal_states"`
@@ -330,7 +333,9 @@ type TrackerConfig struct {
 	Kind                 string
 	Endpoint             string
 	APIKey               string
+	OAuthClientID        string
 	WebhookSigningSecret string
+	AppMode              bool
 	ProjectSlug          string
 	ActiveStates         []string
 	TerminalStates       []string
@@ -545,23 +550,26 @@ type SetupCheck struct {
 
 // FunnelSetupStatus describes Colin's current Tailscale Funnel readiness.
 type FunnelSetupStatus struct {
-	GeneratedAt           time.Time    `json:"generated_at"`
-	Ready                 bool         `json:"ready"`
-	PublicURLSource       string       `json:"public_url_source,omitempty"`
-	LocalBaseURL          string       `json:"local_base_url,omitempty"`
-	LocalWebhookBaseURL   string       `json:"local_webhook_base_url,omitempty"`
-	TailnetUIBaseURL      string       `json:"tailnet_ui_base_url,omitempty"`
-	LocalSetupURL         string       `json:"local_setup_url,omitempty"`
-	LocalReadyURL         string       `json:"local_ready_url,omitempty"`
-	PublicBaseURL         string       `json:"public_base_url,omitempty"`
-	PublicSetupURL        string       `json:"public_setup_url,omitempty"`
-	PublicReadyURL        string       `json:"public_ready_url,omitempty"`
-	DetectedFunnelURL     string       `json:"detected_funnel_url,omitempty"`
-	SuggestedServeCommand string       `json:"suggested_serve_command,omitempty"`
-	SuggestedCommand      string       `json:"suggested_command,omitempty"`
-	LinearWebhookURL      string       `json:"linear_webhook_url,omitempty"`
-	GitHubWebhookURL      string       `json:"github_webhook_url,omitempty"`
-	Checks                []SetupCheck `json:"checks,omitempty"`
+	GeneratedAt            time.Time    `json:"generated_at"`
+	Ready                  bool         `json:"ready"`
+	PublicURLSource        string       `json:"public_url_source,omitempty"`
+	LocalBaseURL           string       `json:"local_base_url,omitempty"`
+	LocalWebhookBaseURL    string       `json:"local_webhook_base_url,omitempty"`
+	TailnetUIBaseURL       string       `json:"tailnet_ui_base_url,omitempty"`
+	LocalSetupURL          string       `json:"local_setup_url,omitempty"`
+	LocalLinearOAuthURL    string       `json:"local_linear_oauth_url,omitempty"`
+	LocalReadyURL          string       `json:"local_ready_url,omitempty"`
+	PublicBaseURL          string       `json:"public_base_url,omitempty"`
+	PublicSetupURL         string       `json:"public_setup_url,omitempty"`
+	PublicReadyURL         string       `json:"public_ready_url,omitempty"`
+	DetectedFunnelURL      string       `json:"detected_funnel_url,omitempty"`
+	LinearOAuthConnectURL  string       `json:"linear_oauth_connect_url,omitempty"`
+	LinearOAuthCallbackURL string       `json:"linear_oauth_callback_url,omitempty"`
+	SuggestedServeCommand  string       `json:"suggested_serve_command,omitempty"`
+	SuggestedCommand       string       `json:"suggested_command,omitempty"`
+	LinearWebhookURL       string       `json:"linear_webhook_url,omitempty"`
+	GitHubWebhookURL       string       `json:"github_webhook_url,omitempty"`
+	Checks                 []SetupCheck `json:"checks,omitempty"`
 }
 
 // Workspace describes a prepared per-issue workspace directory.

@@ -160,6 +160,29 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesTrackerAppMode(t *testing.T) {
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":            "linear",
+			"project_slug":    "cli",
+			"api_key":         "token",
+			"oauth_client_id": "client-123",
+			"app_mode":        true,
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !cfg.Tracker.AppMode {
+		t.Fatal("cfg.Tracker.AppMode = false, want true")
+	}
+	if cfg.Tracker.OAuthClientID != "client-123" {
+		t.Fatalf("cfg.Tracker.OAuthClientID = %q, want %q", cfg.Tracker.OAuthClientID, "client-123")
+	}
+}
+
 func TestBuildAllowsExplicitMergeConcurrencyOverride(t *testing.T) {
 	t.Parallel()
 

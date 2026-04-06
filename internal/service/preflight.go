@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -94,6 +95,22 @@ func PreflightTrackerConfig(ctx context.Context, cfg domain.ServiceConfig) (*lin
 	}
 	report.Checks[1].Status = PreflightStatusOK
 	report.Checks[1].Detail = "Configured project states are available."
+
+	if cfg.Tracker.AppMode {
+		identity, err := trackerClient.ActorIdentity(ctx)
+		if err != nil {
+			report.Checks[0].Status = PreflightStatusError
+			report.Checks[0].Detail = fmt.Sprintf("failed to resolve Linear actor identity: %v", err)
+			return nil, report, err
+		}
+		if !identity.IsApp {
+			err := fmt.Errorf("tracker.app_mode requires Linear app credentials; current actor %q is a %s", identity.Name, identity.Type())
+			report.Checks[0].Status = PreflightStatusError
+			report.Checks[0].Detail = err.Error()
+			return nil, report, err
+		}
+		report.Checks[0].Detail = fmt.Sprintf("Tracker credentials are configured and resolve to the Linear app actor %q.", identity.Name)
+	}
 
 	if err := ensureManagedIssueLabels(ctx, trackerClient); err != nil {
 		report.Checks[2].Status = PreflightStatusError

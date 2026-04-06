@@ -159,9 +159,6 @@ func ValidateDispatch(cfg domain.ServiceConfig) error {
 	if strings.ToLower(cfg.Tracker.Kind) != "linear" {
 		return ErrUnsupportedTrackerKind
 	}
-	if cfg.Tracker.APIKey == "" {
-		return ErrMissingTrackerAPIKey
-	}
 	if len(cfg.Targets) == 0 && cfg.Tracker.ProjectSlug == "" {
 		return ErrMissingTrackerProject
 	}
@@ -362,8 +359,14 @@ func applyTrackerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTrackerCon
 	if value := stringValue(raw.APIKey); value != "" {
 		cfg.Tracker.APIKey = resolveEnvToken(value)
 	}
+	if value := stringValue(raw.OAuthClientID); value != "" {
+		cfg.Tracker.OAuthClientID = resolveEnvToken(value)
+	}
 	if value := stringValue(raw.WebhookSigningSecret); value != "" {
 		cfg.Tracker.WebhookSigningSecret = resolveEnvToken(value)
+	}
+	if value, ok := boolValue(raw.AppMode); ok {
+		cfg.Tracker.AppMode = value
 	}
 	if value := stringValue(raw.ProjectSlug); value != "" {
 		cfg.Tracker.ProjectSlug = value
@@ -376,6 +379,9 @@ func applyTrackerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTrackerCon
 	}
 	if cfg.Tracker.APIKey == "" {
 		cfg.Tracker.APIKey = strings.TrimSpace(os.Getenv("LINEAR_API_KEY"))
+	}
+	if cfg.Tracker.OAuthClientID == "" {
+		cfg.Tracker.OAuthClientID = strings.TrimSpace(os.Getenv("LINEAR_OAUTH_CLIENT_ID"))
 	}
 	return nil
 }

@@ -761,6 +761,20 @@ func shouldQueueImmediateLinearRefresh(event app.LinearWebhookEvent, watchedProj
 		default:
 			return false
 		}
+	case "agentsessionevent":
+		projectID := strings.TrimSpace(event.ProjectID)
+		if projectID == "" || !matchesWatchedProject(projectID, watchedProjectIDs) {
+			return false
+		}
+		if strings.TrimSpace(event.IssueID) == "" {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(event.Action)) {
+		case "created", "prompted":
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}

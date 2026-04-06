@@ -12,6 +12,8 @@ Before you run Colin, make sure you have:
 - a repository backend token available to Colin via `repo.api_token`, `GITHUB_TOKEN`, or `GH_TOKEN` so publish and merge automation can talk to the configured backend API; today the only supported backend is GitHub, `GITHUB_TOKEN` is the recommended env var, and when a token is configured Colin validates it during startup and workflow reload so broken credentials fail fast
 - a Linear project and workflow with the states Colin uses for active work and handoffs
 
+If you want Colin to run as a first-class Linear app user, enable `tracker.app_mode: true` in `WORKFLOW.md`. You can either keep using a static `LINEAR_API_KEY` that belongs to the Linear app actor, or configure `tracker.oauth_client_id` and run `colin setup linear app --connect` so Colin stores the resulting app credentials in `.colin/auth.json`. In app mode Colin only starts active work for issues delegated to the app.
+
 Optional but encouraged:
 
 - [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests, with `repo.codex_pr_reviews_enabled: true` set in `WORKFLOW.md` when you want Colin to wait for that review before merging
@@ -29,7 +31,7 @@ Colin actively works issues in these coding states:
 - `Todo`
 - `In Progress`
 
-When Colin starts a `Todo` issue, it moves it to `In Progress`, keeps retrying while the issue remains active, and stops work if the issue leaves the active state set. If a reviewed issue is moved from `Review` back to `Todo` on the same PR, Colin resumes work immediately, reuses the same persisted Codex thread for that issue when available, and reuses any review feedback or still-open review threads it can already see. Colin can also move a `Review` issue back to `Todo` automatically when a GitHub collaborator reacts with `+1` to an invited Codex PR review comment; in that case Colin scopes the follow-up to that reacted review thread, resolves it, and returns the issue to `Review`. For issues backed by a stored ExecPlan, Colin also keeps the ExecPlan's `## Progress` section up to date during implementation and will not hand the issue to `Review` until every listed task is complete.
+When Colin starts a `Todo` issue, it moves it to `In Progress`, keeps retrying while the issue remains active, and stops work if the issue leaves the active state set. If `tracker.app_mode: true` is enabled, Colin only starts `Todo` or `In Progress` work for issues whose Linear `delegate` is the Colin app user; non-delegated active issues are ignored. If a reviewed issue is moved from `Review` back to `Todo` on the same PR, Colin resumes work immediately, reuses the same persisted Codex thread for that issue when available, and reuses any review feedback or still-open review threads it can already see. Colin can also move a `Review` issue back to `Todo` automatically when a GitHub collaborator reacts with `+1` to an invited Codex PR review comment; in that case Colin scopes the follow-up to that reacted review thread, resolves it, and returns the issue to `Review`. For issues backed by a stored ExecPlan, Colin also keeps the ExecPlan's `## Progress` section up to date during implementation and will not hand the issue to `Review` until every listed task is complete.
 
 Colin uses these handoff states:
 
@@ -42,7 +44,7 @@ Colin uses these handoff states:
 
 By default Colin serializes `Merge` work even when other states run in parallel. That default reduces merge-conflict ping-pong on a moving base branch while still allowing `Todo`, `In Progress`, and `Review` work to use the wider global concurrency budget. If you want parallel merge automation anyway, override `agent.max_concurrent_agents_by_state.Merge` in `WORKFLOW.md`.
 
-Colin's `[colin]` comments are meant to make the next step explicit. Colin keeps one Linear progress thread per issue and continues replying in that same thread across retries, review returns, and merge follow-up until the issue reaches `Refine` or a terminal state. When an issue returns from `Review` to `Todo`, Colin says whether it is still waiting for GitHub review threads to sync or whether more PR feedback still needs to be addressed. When the return was triggered by a detected `+1` reaction on an invited Codex PR review comment, Colin says that it is addressing only that reacted thread and leaves unrelated unresolved PR review threads alone. When an issue is in `Merge`, Colin says whether it is retrying automatically while Codex review is pending, or whether a human needs to resolve review feedback or a merge problem before moving the issue forward again.
+In legacy human-token workflows, Colin prefixes its Linear comments with `[colin]` so they are easy to spot. In Linear app mode, Colin omits that prefix because Linear already shows the app actor as the comment author. Colin keeps one Linear progress thread per issue and continues replying in that same thread across retries, review returns, and merge follow-up until the issue reaches `Refine` or a terminal state. When an issue returns from `Review` to `Todo`, Colin says whether it is still waiting for GitHub review threads to sync or whether more PR feedback still needs to be addressed. When the return was triggered by a detected `+1` reaction on an invited Codex PR review comment, Colin says that it is addressing only that reacted thread and leaves unrelated unresolved PR review threads alone. When an issue is in `Merge`, Colin says whether it is retrying automatically while Codex review is pending, or whether a human needs to resolve review feedback or a merge problem before moving the issue forward again.
 
 When Slack support is enabled, Colin mirrors that same high-level workflow view into Slack in two places. Each tracked issue gets one Slack message that updates in place as the issue moves through the workflow. The message shows the issue state and next action directly, and links to Linear, the PR, Colin metadata, and the stored ExecPlan instead of inlining those details. The Slack app Home tab also shows a read-only list of watched issues that are still in flight, grouped by state, so operators can see the current queue without scanning a channel history.
 
@@ -85,7 +87,7 @@ The fastest way to get Colin running is:
 
 Run these commands from the root of the git repository Colin should manage so `WORKFLOW.md` and any git-derived defaults apply to the correct checkout.
 
-1. Export a valid `LINEAR_API_KEY` and `GITHUB_TOKEN` in your shell.
+1. Export a valid `GITHUB_TOKEN` in your shell. For Linear, either export `LINEAR_API_KEY` or configure app-mode OAuth as described below.
 2. Run `colin config` to generate `WORKFLOW.md`.
 3. Start Colin with `colin`.
 4. Optionally set up Tailscale plus the watched-project Linear and GitHub webhooks if you want immediate refreshes between polling intervals.
@@ -110,7 +112,7 @@ In an interactive terminal, `colin config` launches a Bubble Tea wizard that:
 
 ![`colin config` starting the interactive setup wizard before guiding the operator through project selection, validation, and workflow creation](docs/wizard.gif)
 
-The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. New workflows write `repo.backend: github` explicitly so the repository backend is no longer implicit. Valid Linear keys must start with `lin_api_`, and GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
+The setup wizard generates `WORKFLOW.md` and explains what still needs to be configured in the shell. It reads `LINEAR_API_KEY` and `GITHUB_TOKEN` from the current environment when available, and if either one is missing it can ask for a session-only value without writing that secret into `WORKFLOW.md`. New workflows write `repo.backend: github` explicitly so the repository backend is no longer implicit. Valid Linear keys must start with `lin_api_`, and GitHub tokens can be either fine-grained `github_pat_...` tokens or classic `ghp_...` tokens. The wizard does not enable Linear app mode automatically; when you want Colin to act as its own Linear app user, add `tracker.app_mode: true` to `WORKFLOW.md`, set `tracker.oauth_client_id` or export `LINEAR_OAUTH_CLIENT_ID`, and then verify the OAuth and webhook settings with `colin setup linear app`. In non-interactive contexts, Colin falls back to the line-oriented prompt flow so pipes and scripted tests still work.
 
 ### 1. Export the required secrets
 
@@ -118,6 +120,7 @@ Colin keeps secrets out of `WORKFLOW.md`. Export them in your shell before runni
 
 ```bash
 export LINEAR_API_KEY=lin_api_...
+export LINEAR_OAUTH_CLIENT_ID=lin_oauth_client_...
 export GITHUB_TOKEN=github_pat_...
 export LINEAR_WEBHOOK_SECRET=...
 export GITHUB_WEBHOOK_SECRET=...
@@ -127,6 +130,8 @@ export SLACK_SIGNING_SECRET=...
 ```
 
 `GITHUB_TOKEN` is the recommended variable name, though Colin also accepts `GH_TOKEN`. Fine-grained `github_pat_...` tokens are preferred, but classic `ghp_...` PATs also work.
+
+If `tracker.app_mode: true` is enabled, Colin must resolve Linear app credentials rather than a normal user token. You can provide those credentials either through `LINEAR_API_KEY` or through `.colin/auth.json` populated by `colin setup linear app --connect`. Colin validates that at startup and fails fast if the resolved actor still belongs to a normal user.
 
 If you enable the optional `slack` section in `WORKFLOW.md`, Colin requires `slack.bot_token`, `slack.app_token`, and `slack.channel_id` for issue summaries plus interactive buttons. Export both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, enable Socket Mode for the Slack app, and keep interactivity enabled so Slack button clicks can be acknowledged without a public Slack interactivity URL. If you also want Colin to publish the Slack app Home tab through the webhook server, export `SLACK_SIGNING_SECRET` so Colin can verify inbound Slack webhook requests.
 
@@ -152,7 +157,17 @@ Once the review passes, the wizard writes `WORKFLOW.md`.
 
 For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, and `base_ref`. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
 
-Once the workflow file and `LINEAR_API_KEY` are available, Colin validates that the configured Linear states exist and ensures its managed labels exist before startup completes.
+To enable app mode after the wizard runs, edit `WORKFLOW.md` and set:
+
+```yaml
+tracker:
+  app_mode: true
+  oauth_client_id: $LINEAR_OAUTH_CLIENT_ID
+```
+
+Then run `colin setup linear app --connect` to serve the tailnet-only `/setup/linear/app` and `/callbacks/linear` routes long enough to complete Linear OAuth into `.colin/auth.json`. After that, rerun `colin setup linear app` to confirm the stored auth resolves to the expected app actor before you start Colin.
+
+Once the workflow file and either `LINEAR_API_KEY` or `.colin/auth.json` are available, Colin validates that the configured Linear states exist and ensures its managed labels exist before startup completes. When `tracker.app_mode: true` is enabled, Colin also validates that the resolved credentials map to a Linear app actor instead of a normal user.
 
 ### 3. Create the repository backend token if you do not already have one
 
@@ -226,11 +241,11 @@ colin setup linear app
 colin setup github webhook
 ```
 
-Once those webhooks are configured, Colin acknowledges `POST` requests to `/webhooks/linear` and `/webhooks/github`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and uses relevant watched-project Linear issue deliveries, watched-team Linear issue-label deliveries, plus relevant watched-repository GitHub pull-request review deliveries to queue best-effort immediate reconciliation. GitHub does not expose a repository webhook for PR review-comment reactions, so collaborator `+1` approvals on invited Codex PR review comments are detected during Colin's normal poll loop instead, which can then move a `Review` issue back to `Todo` for a scoped follow-up on that single thread. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
+Once those webhooks are configured, Colin acknowledges `POST` requests to `/webhooks/linear` and `/webhooks/github`, verifies `Linear-Signature` when `tracker.webhook_signing_secret` is configured, verifies `X-Hub-Signature-256` when `repo.webhook_signing_secret` is configured, and uses relevant watched-project Linear issue deliveries, watched-team Linear issue-label deliveries, relevant `AgentSessionEvent` deliveries for the Colin app, plus relevant watched-repository GitHub pull-request review deliveries to queue best-effort immediate reconciliation. GitHub does not expose a repository webhook for PR review-comment reactions, so collaborator `+1` approvals on invited Codex PR review comments are detected during Colin's normal poll loop instead, which can then move a `Review` issue back to `Todo` for a scoped follow-up on that single thread. The webhook never dispatches workers directly, and polling remains the fallback path if a webhook is delayed, dropped, or arrives before the orchestrator is ready to accept immediate refreshes.
 
-`colin setup linear app` prints the current self-hosted Linear app sketch for this workflow: use an assignable app user, point the app at the same `/webhooks/linear` endpoint, subscribe the app to `AgentSessionEvent`, and keep the existing issue-webhook wake-up path enabled. The answer to "should it disable the webhook?" is no. App-triggered sessions should be additive to Colin's current poll-plus-webhook scheduling, not a replacement for it.
+`colin setup linear app` prints the current self-hosted Linear app sketch for this workflow: it resolves the current auth source, shows whether `tracker.app_mode` is enabled, reports the current actor name and type, prints the tailnet-only OAuth connect and callback URLs, points the app at the same `/webhooks/linear` endpoint, subscribes the app to `AgentSessionEvent`, and reminds you to keep the existing issue-webhook wake-up path enabled. Running `colin setup linear app --connect` starts a temporary local server on `server.port` so Tailscale Serve can expose `/setup/linear/app` and `/callbacks/linear` while you complete OAuth. The answer to "should it disable the webhook?" is no. App-triggered sessions should be additive to Colin's current poll-plus-webhook scheduling, not a replacement for it.
 
-`server.port` controls the local Colin UI. When webhook setup is enabled, `colin config` also writes `server.webhook_port`, which defaults to `8998`, so Tailscale Serve can proxy the UI while Tailscale Funnel proxies `/webhooks` on a separate public HTTPS port such as `8443`.
+`server.port` controls the local Colin UI and the temporary tailnet-only OAuth callback server started by `colin setup linear app --connect`. When webhook setup is enabled, `colin config` also writes `server.webhook_port`, which defaults to `8998`, so Tailscale Serve can proxy the UI while Tailscale Funnel proxies `/webhooks` on a separate public HTTPS port such as `8443`.
 
 Linear metadata attachments point at `server.ui_url` when configured. If that is unset but Tailscale Serve proxies Colin from `/`, Colin uses the preferred Tailscale Serve URL for metadata links, favoring HTTPS when available; otherwise it falls back to the local loopback dashboard URL.
 

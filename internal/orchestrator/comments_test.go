@@ -14,7 +14,7 @@ import (
 func TestColinCommentBodyPrefixesMessages(t *testing.T) {
 	t.Parallel()
 
-	got := colinCommentBody("Run completed successfully.")
+	got := colinCommentBody("Run completed successfully.", false)
 	want := "[colin] Run completed successfully."
 	if got != want {
 		t.Fatalf("colinCommentBody() = %q, want %q", got, want)
@@ -24,7 +24,7 @@ func TestColinCommentBodyPrefixesMessages(t *testing.T) {
 func TestColinCommentBodyDoesNotDoublePrefix(t *testing.T) {
 	t.Parallel()
 
-	got := colinCommentBody("[colin] Run completed successfully.")
+	got := colinCommentBody("[colin] Run completed successfully.", false)
 	want := "[colin] Run completed successfully."
 	if got != want {
 		t.Fatalf("colinCommentBody() = %q, want %q", got, want)
@@ -34,8 +34,18 @@ func TestColinCommentBodyDoesNotDoublePrefix(t *testing.T) {
 func TestColinCommentBodyPlacesHeadingOnNewLine(t *testing.T) {
 	t.Parallel()
 
-	got := colinCommentBody("## Why\n\nInteractive sessions render markdown headings.")
+	got := colinCommentBody("## Why\n\nInteractive sessions render markdown headings.", false)
 	want := "[colin]\n## Why\n\nInteractive sessions render markdown headings."
+	if got != want {
+		t.Fatalf("colinCommentBody() = %q, want %q", got, want)
+	}
+}
+
+func TestColinCommentBodyOmitsPrefixInAppMode(t *testing.T) {
+	t.Parallel()
+
+	got := colinCommentBody("Run completed successfully.", true)
+	want := "Run completed successfully."
 	if got != want {
 		t.Fatalf("colinCommentBody() = %q, want %q", got, want)
 	}

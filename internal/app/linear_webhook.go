@@ -219,6 +219,16 @@ func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
 		default:
 			return false
 		}
+	case "agentsessionevent":
+		if strings.TrimSpace(event.IssueID) == "" || strings.TrimSpace(event.ProjectID) == "" {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(event.Action)) {
+		case "created", "prompted":
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -228,6 +238,8 @@ func parseLinearWebhookSubjectData(resourceType string, raw json.RawMessage) (is
 	switch strings.ToLower(strings.TrimSpace(resourceType)) {
 	case "issuelabel":
 		return parseLinearWebhookIssueLabelData(raw)
+	case "agentsessionevent":
+		return parseLinearWebhookAgentSessionData(raw)
 	default:
 		return parseLinearWebhookIssueData(raw)
 	}
@@ -271,6 +283,27 @@ func parseLinearWebhookIssueLabelData(raw json.RawMessage) (issueID string, proj
 		projectID = strings.TrimSpace(payload.Issue.ProjectID)
 	}
 	return issueID, projectID
+}
+
+func parseLinearWebhookAgentSessionData(raw json.RawMessage) (issueID string, projectID string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var payload struct {
+		IssueID string `json:"issueId"`
+		Issue   struct {
+			ID        string `json:"id"`
+			ProjectID string `json:"projectId"`
+		} `json:"issue"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", ""
+	}
+	issueID = strings.TrimSpace(payload.IssueID)
+	if issueID == "" {
+		issueID = strings.TrimSpace(payload.Issue.ID)
+	}
+	return issueID, strings.TrimSpace(payload.Issue.ProjectID)
 }
 
 func parseLinearWebhookChangedFields(raw json.RawMessage) []string {

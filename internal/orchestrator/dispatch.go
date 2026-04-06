@@ -21,6 +21,9 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	if o.isTerminal(issue.State) || !o.isDispatchable(issue.State) {
 		return false
 	}
+	if o.runtime.Config.Tracker.AppMode && o.isActive(issue.State) && !issue.DelegatedToColin {
+		return false
+	}
 	if hasIssueLabel(issue, domain.PausedIssueLabel) {
 		return false
 	}

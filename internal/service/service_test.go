@@ -294,6 +294,107 @@ func TestPreflightTrackerConfigReturnsGitHubValidationError(t *testing.T) {
 	}
 }
 
+func TestPreflightTrackerConfigRejectsUserTokenInAppMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "ProjectTeamStates"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"nodes": []map[string]any{{
+							"id": "project-1",
+							"teams": map[string]any{
+								"nodes": []map[string]any{{
+									"id":   "team-1",
+									"name": "Colin",
+									"states": map[string]any{
+										"nodes": []map[string]any{
+											{"name": "Todo"},
+											{"name": "In Progress"},
+											{"name": "Review"},
+											{"name": "Merge"},
+											{"name": "Done"},
+											{"name": "Refine"},
+										},
+									},
+								}},
+							},
+						}},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "ViewerIdentity"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"viewer": map[string]any{
+						"id":                    "user-1",
+						"name":                  "Pat Engineer",
+						"displayName":           "Pat Engineer",
+						"app":                   false,
+						"supportsAgentSessions": false,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			name, _ := request.Variables["name"].(string)
+			nodes := []map[string]any{}
+			if name == domain.PausedIssueLabel {
+				nodes = append(nodes, map[string]any{
+					"id":   "label-existing",
+					"name": domain.PausedIssueLabel,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{
+						"nodes": nodes,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation CreateIssueLabel"):
+			input, _ := request.Variables["input"].(map[string]any)
+			name, _ := input["name"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabelCreate": map[string]any{
+						"success": true,
+						"issueLabel": map[string]any{
+							"id":   "label-" + name,
+							"name": name,
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testServicePreflightConfig(server.URL)
+	cfg.Tracker.AppMode = true
+
+	_, report, err := PreflightTrackerConfig(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("PreflightTrackerConfig() error = nil, want app actor validation error")
+	}
+	if !strings.Contains(err.Error(), "tracker.app_mode requires Linear app credentials") {
+		t.Fatalf("PreflightTrackerConfig() error = %v, want app actor validation", err)
+	}
+	if got := report.Checks[0].Status; got != PreflightStatusError {
+		t.Fatalf("dispatch check status = %q, want %q", got, PreflightStatusError)
+	}
+}
+
 func TestNewEnsuresManagedLabelsDuringStartupPreflight(t *testing.T) {
 	t.Parallel()
 
@@ -336,6 +437,42 @@ func TestNewEnsuresManagedLabelsDuringStartupPreflight(t *testing.T) {
 								},
 							},
 						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "ViewerIdentity"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"viewer": map[string]any{
+						"id":                    "user-1",
+						"name":                  "Pat Engineer",
+						"displayName":           "Pat Engineer",
+						"app":                   false,
+						"supportsAgentSessions": false,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "ViewerIdentity"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"viewer": map[string]any{
+						"id":                    "user-1",
+						"name":                  "Pat Engineer",
+						"displayName":           "Pat Engineer",
+						"app":                   false,
+						"supportsAgentSessions": false,
+					},
+				},
+			})
+		case strings.Contains(request.Query, "ViewerIdentity"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"viewer": map[string]any{
+						"id":                    "user-1",
+						"name":                  "Pat Engineer",
+						"displayName":           "Pat Engineer",
+						"app":                   false,
+						"supportsAgentSessions": false,
 					},
 				},
 			})
@@ -957,10 +1094,36 @@ Work on {{ .issue.identifier }}.
 }
 
 func TestLoadLinearAppSetupUsesPublicWebhookURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if !strings.Contains(request.Query, "ViewerIdentity") {
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"viewer": map[string]any{
+					"id":                    "app-user-1",
+					"name":                  "Colin",
+					"displayName":           "Colin",
+					"app":                   true,
+					"supportsAgentSessions": true,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
 	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
 	workflow := `---
 tracker:
   kind: linear
+  endpoint: ` + server.URL + `
   api_key: test-linear-key
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
   project_slug: test-project
@@ -989,6 +1152,12 @@ Work on {{ .issue.identifier }}.
 	if result.ActorType != "app" {
 		t.Fatalf("ActorType = %q, want %q", result.ActorType, "app")
 	}
+	if result.ActorName != "Colin" {
+		t.Fatalf("ActorName = %q, want %q", result.ActorName, "Colin")
+	}
+	if !result.SupportsAgentSessions {
+		t.Fatal("SupportsAgentSessions = false, want true")
+	}
 	if !result.SigningSecretConfigured {
 		t.Fatal("SigningSecretConfigured = false, want true")
 	}
@@ -1003,7 +1172,7 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
-func TestLoadLinearAppSetupRequiresPublicWebhookURL(t *testing.T) {
+func TestLoadLinearAppSetupAllowsMissingPublicWebhookURL(t *testing.T) {
 	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
 	workflow := `---
 tracker:
@@ -1019,9 +1188,44 @@ Work on {{ .issue.identifier }}.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := LoadLinearAppSetup(context.Background(), workflowPath)
-	if !errors.Is(err, ErrMissingWebhookPublicURL) {
-		t.Fatalf("LoadLinearAppSetup() error = %v, want ErrMissingWebhookPublicURL", err)
+	result, err := LoadLinearAppSetup(context.Background(), workflowPath)
+	if err != nil {
+		t.Fatalf("LoadLinearAppSetup() error = %v", err)
+	}
+	if result.WebhookURL != "" {
+		t.Fatalf("WebhookURL = %q, want empty when public webhook URL is not configured", result.WebhookURL)
+	}
+}
+
+func TestLinearOAuthHTTPHandlerStartPersistsPendingState(t *testing.T) {
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	handler := NewLinearOAuthHTTPHandler(LinearOAuthHTTPHandlerConfig{
+		WorkflowPath:    workflowPath,
+		Endpoint:        "https://api.linear.app/graphql",
+		OAuthClientID:   "client-123",
+		CallbackBaseURL: "https://colin.tail.example.ts.net",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, linearOAuthSetupPath, nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+	location := recorder.Header().Get("Location")
+	if !strings.Contains(location, "client_id=client-123") {
+		t.Fatalf("Location = %q, want client_id query parameter", location)
+	}
+	authFile, err := linear.LoadAuthFile(workflowPath)
+	if err != nil {
+		t.Fatalf("LoadAuthFile() error = %v", err)
+	}
+	if authFile.Linear.PendingOAuth == nil {
+		t.Fatal("PendingOAuth = nil, want saved state")
+	}
+	if got := authFile.Linear.PendingOAuth.RedirectURI; got != "https://colin.tail.example.ts.net/callbacks/linear" {
+		t.Fatalf("RedirectURI = %q, want tailnet callback URL", got)
 	}
 }
 
@@ -1440,6 +1644,17 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 			},
 			projectID: "project-1",
 			want:      false,
+		},
+		{
+			name: "agent session event in watched project",
+			event: app.LinearWebhookEvent{
+				ResourceType: "AgentSessionEvent",
+				Action:       "created",
+				IssueID:      "issue-1",
+				ProjectID:    "project-1",
+			},
+			projectID: "project-1",
+			want:      true,
 		},
 	}
 

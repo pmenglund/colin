@@ -12,8 +12,13 @@ const defaultWorkflowTemplate = `---
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
+  # Optional for the tailnet-only OAuth install flow driven by ` + "`colin setup linear app`" + `.
+  # oauth_client_id: $LINEAR_OAUTH_CLIENT_ID
   # Optional once you create a Linear webhook with ` + "`colin setup linear webhook`" + `.
   webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
+  # Set to true only when LINEAR_API_KEY belongs to a Linear app user and you want
+  # Colin to start active work only for issues delegated to that app.
+  # app_mode: true
   project_slug: {{yaml .ProjectSlug}}
   active_states:
     - Todo

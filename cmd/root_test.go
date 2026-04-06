@@ -250,6 +250,7 @@ func TestRunRejectsExtraSetupTailscaleArgs(t *testing.T) {
 func TestRunUsesDefaultWorkflowFlag(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
+	t.Setenv(workflow.WorkflowPathEnvVar, "")
 	if err := os.WriteFile(filepath.Join(tempDir, "WORKFLOW.md"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -866,7 +867,7 @@ func TestRunPassesWorkflowFlagToSetupLinearAppSubcommand(t *testing.T) {
 			t.Fatal("runConfig should not be called")
 			return 0
 		},
-		runSetupLinearApp: func(cmd *cobra.Command, workflowPath string) int {
+		runSetupLinearApp: func(cmd *cobra.Command, workflowPath string, connect bool) int {
 			gotWorkflow = workflowPath
 			return 0
 		},
@@ -1071,6 +1072,7 @@ func TestRenderSetupStatusColorizesCheckLabels(t *testing.T) {
 func TestRunConfigCommandWritesWorkflow(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
+	t.Setenv(workflow.WorkflowPathEnvVar, "")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1400,6 +1402,7 @@ func TestRunWithMissingWorkflowFailsClearlyWhenNonInteractive(t *testing.T) {
 func TestConfigCommandDeclinesOverwrite(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
+	t.Setenv(workflow.WorkflowPathEnvVar, "")
 	if err := os.WriteFile(filepath.Join(tempDir, "WORKFLOW.md"), []byte("original\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
