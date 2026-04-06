@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
@@ -41,16 +42,34 @@ func (e *AmbiguousResumeThreadError) Unwrap() error {
 	return ErrAmbiguousResumeThread
 }
 
+type ResumeIssueNotFoundError struct {
+	Identifier string
+}
+
+func (e *ResumeIssueNotFoundError) Error() string {
+	return fmt.Sprintf("Linear issue %q is not a watched Colin issue in this workflow", e.Identifier)
+}
+
+type ResumeIssueHasNoThreadError struct {
+	Identifier string
+}
+
+func (e *ResumeIssueHasNoThreadError) Error() string {
+	return fmt.Sprintf("Linear issue %q does not have a persisted Codex thread in Colin metadata yet", e.Identifier)
+}
+
 type ResumeSession struct {
 	Issue         domain.Issue
+	ThreadID      string
 	WorkspacePath string
 	CLICommand    string
 }
 
-// LoadResumeSession resolves the Colin issue and local workspace for a persisted Codex thread id.
-func LoadResumeSession(ctx context.Context, workflowPath string, threadID string) (ResumeSession, error) {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
+// LoadResumeSession resolves the Colin issue, persisted Codex thread id, and local workspace for a selector.
+// The selector may be either a persisted Codex thread id or a watched Linear issue identifier.
+func LoadResumeSession(ctx context.Context, workflowPath string, selector string) (ResumeSession, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
 		return ResumeSession{}, &ResumeThreadNotFoundError{}
 	}
 
@@ -70,21 +89,9 @@ func LoadResumeSession(ctx context.Context, workflowPath string, threadID string
 		return ResumeSession{}, err
 	}
 
-	issue, err := trackerClient.FindIssueByCodexThreadID(ctx, threadID)
+	issue, threadID, err := resolveResumeSelector(ctx, trackerClient, selector)
 	if err != nil {
-		switch {
-		case errors.Is(err, lineartracker.ErrCodexThreadNotFound):
-			return ResumeSession{}, &ResumeThreadNotFoundError{ThreadID: threadID}
-		default:
-			var ambiguousErr *lineartracker.AmbiguousCodexThreadError
-			if errors.As(err, &ambiguousErr) {
-				return ResumeSession{}, &AmbiguousResumeThreadError{
-					ThreadID:         threadID,
-					IssueIdentifiers: append([]string(nil), ambiguousErr.IssueIdentifiers...),
-				}
-			}
-			return ResumeSession{}, err
-		}
+		return ResumeSession{}, err
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -96,7 +103,76 @@ func LoadResumeSession(ctx context.Context, workflowPath string, threadID string
 
 	return ResumeSession{
 		Issue:         issue,
+		ThreadID:      threadID,
 		WorkspacePath: ws.Path,
 		CLICommand:    strings.TrimSpace(cfg.Codex.CLICommand),
 	}, nil
+}
+
+func resolveResumeSelector(ctx context.Context, trackerClient *lineartracker.Client, selector string) (domain.Issue, string, error) {
+	issue, err := trackerClient.FindIssueByCodexThreadID(ctx, selector)
+	if err == nil {
+		return issue, selector, nil
+	}
+
+	var ambiguousErr *lineartracker.AmbiguousCodexThreadError
+	switch {
+	case errors.As(err, &ambiguousErr):
+		return domain.Issue{}, "", &AmbiguousResumeThreadError{
+			ThreadID:         selector,
+			IssueIdentifiers: append([]string(nil), ambiguousErr.IssueIdentifiers...),
+		}
+	case !errors.Is(err, lineartracker.ErrCodexThreadNotFound):
+		return domain.Issue{}, "", err
+	}
+
+	issue, err = trackerClient.FindIssueByIdentifier(ctx, selector)
+	if err != nil {
+		if errors.Is(err, lineartracker.ErrIssueIdentifierNotFound) {
+			if looksLikeIssueIdentifier(selector) {
+				return domain.Issue{}, "", &ResumeIssueNotFoundError{Identifier: selector}
+			}
+			return domain.Issue{}, "", &ResumeThreadNotFoundError{ThreadID: selector}
+		}
+		return domain.Issue{}, "", err
+	}
+
+	threadID := ""
+	if issue.ColinMetadata != nil {
+		threadID = strings.TrimSpace(issue.ColinMetadata.CodexThreadID)
+	}
+	if threadID == "" {
+		return domain.Issue{}, "", &ResumeIssueHasNoThreadError{Identifier: issue.Identifier}
+	}
+	return issue, threadID, nil
+}
+
+func looksLikeIssueIdentifier(value string) bool {
+	value = strings.TrimSpace(value)
+	dash := strings.LastIndex(value, "-")
+	if dash <= 0 || dash == len(value)-1 {
+		return false
+	}
+
+	key := value[:dash]
+	number := value[dash+1:]
+	hasUpper := false
+	for _, r := range key {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r), unicode.IsDigit(r), r == '_':
+		default:
+			return false
+		}
+	}
+	if !hasUpper {
+		return false
+	}
+	for _, r := range number {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
 }

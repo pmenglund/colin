@@ -24,14 +24,15 @@ import (
 )
 
 var (
-	ErrAPIRequest           = errors.New("linear_api_request")
-	ErrAPIStatus            = errors.New("linear_api_status")
-	ErrGraphQLErrors        = errors.New("linear_graphql_errors")
-	ErrUnknownPayload       = errors.New("linear_unknown_payload")
-	ErrMissingEndCursor     = errors.New("linear_missing_end_cursor")
-	ErrUnknownState         = errors.New("linear_unknown_state")
-	ErrMissingWorkflowState = errors.New("linear_missing_workflow_state")
-	ErrCodexThreadNotFound  = errors.New("linear_codex_thread_not_found")
+	ErrAPIRequest              = errors.New("linear_api_request")
+	ErrAPIStatus               = errors.New("linear_api_status")
+	ErrGraphQLErrors           = errors.New("linear_graphql_errors")
+	ErrUnknownPayload          = errors.New("linear_unknown_payload")
+	ErrMissingEndCursor        = errors.New("linear_missing_end_cursor")
+	ErrUnknownState            = errors.New("linear_unknown_state")
+	ErrMissingWorkflowState    = errors.New("linear_missing_workflow_state")
+	ErrCodexThreadNotFound     = errors.New("linear_codex_thread_not_found")
+	ErrIssueIdentifierNotFound = errors.New("linear_issue_identifier_not_found")
 )
 
 type AmbiguousCodexThreadError struct {
@@ -42,6 +43,80 @@ type AmbiguousCodexThreadError struct {
 func (e *AmbiguousCodexThreadError) Error() string {
 	return fmt.Sprintf("codex thread %q is linked from multiple watched issues: %s", e.ThreadID, strings.Join(e.IssueIdentifiers, ", "))
 }
+
+const watchedIssuesQuery = `
+query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
+  issues(
+    first: 50
+    after: $after
+    filter: {
+      project: { id: { in: $projectIDs } }
+    }
+  ) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      identifier
+      title
+      description
+      priority
+      project {
+        id
+        slugId
+      }
+      branchName
+      url
+      createdAt
+      updatedAt
+      state { name }
+      labels { nodes { name } }
+      inverseRelations {
+        nodes {
+          type
+          issue {
+            id
+            identifier
+            state { name }
+          }
+        }
+      }
+      attachments(first: 50) {
+        nodes {
+          id
+          title
+          url
+          createdAt
+          updatedAt
+          metadata
+        }
+      }
+      comments(first: 50) {
+        nodes {
+          id
+          body
+          createdAt
+          parentId
+          children(first: 50) {
+            nodes {
+              id
+              body
+              createdAt
+              parentId
+            }
+          }
+        }
+      }
+      history(first: 100) {
+        nodes {
+          createdAt
+          fromState { name }
+          toState { name }
+        }
+      }
+    }
+  }
+}
+`
 
 const (
 	defaultEndpoint              = "https://api.linear.app/graphql"
@@ -444,87 +519,45 @@ func (c *Client) FindIssueByCodexThreadID(ctx context.Context, threadID string) 
 		return domain.Issue{}, fmt.Errorf("%w: thread id is required", ErrCodexThreadNotFound)
 	}
 
-	const query = `
-query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
-  issues(
-    first: 50
-    after: $after
-    filter: {
-      project: { id: { in: $projectIDs } }
-    }
-  ) {
-    pageInfo { hasNextPage endCursor }
-    nodes {
-      id
-      identifier
-      title
-      description
-      priority
-      project {
-        id
-        slugId
-      }
-      branchName
-      url
-      createdAt
-      updatedAt
-      state { name }
-      labels { nodes { name } }
-      inverseRelations {
-        nodes {
-          type
-          issue {
-            id
-            identifier
-            state { name }
-          }
-        }
-      }
-      attachments(first: 50) {
-        nodes {
-          id
-          title
-          url
-          createdAt
-          updatedAt
-          metadata
-        }
-      }
-      comments(first: 50) {
-        nodes {
-          id
-          body
-          createdAt
-          parentId
-          children(first: 50) {
-            nodes {
-              id
-              body
-              createdAt
-              parentId
-            }
-          }
-        }
-      }
-      history(first: 100) {
-        nodes {
-          createdAt
-          fromState { name }
-          toState { name }
-        }
-      }
-    }
-  }
+	return c.findWatchedIssue(ctx, func(issue domain.Issue) bool {
+		return issue.ColinMetadata != nil && strings.TrimSpace(issue.ColinMetadata.CodexThreadID) == threadID
+	}, func() error {
+		return fmt.Errorf("%w: %s", ErrCodexThreadNotFound, threadID)
+	}, func(duplicates []string) error {
+		return &AmbiguousCodexThreadError{
+			ThreadID:         threadID,
+			IssueIdentifiers: duplicates,
+		}
+	})
 }
-`
 
+// FindIssueByIdentifier returns the watched issue whose Linear identifier matches the supplied identifier.
+func (c *Client) FindIssueByIdentifier(ctx context.Context, identifier string) (domain.Issue, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return domain.Issue{}, fmt.Errorf("%w: issue identifier is required", ErrIssueIdentifierNotFound)
+	}
+
+	return c.findWatchedIssue(ctx, func(issue domain.Issue) bool {
+		return strings.EqualFold(strings.TrimSpace(issue.Identifier), identifier)
+	}, func() error {
+		return fmt.Errorf("%w: %s", ErrIssueIdentifierNotFound, identifier)
+	}, nil)
+}
+
+func (c *Client) findWatchedIssue(
+	ctx context.Context,
+	matchIssue func(domain.Issue) bool,
+	notFound func() error,
+	ambiguous func([]string) error,
+) (domain.Issue, error) {
 	var (
 		after      *string
 		match      *domain.Issue
 		duplicates []string
 	)
 	for {
-		resp, err := c.doQuery(ctx, query, map[string]any{
+		resp, err := c.doQuery(ctx, watchedIssuesQuery, map[string]any{
 			"projectIDs": c.watchedProjectIDs,
 			"after":      after,
 		})
@@ -540,7 +573,7 @@ query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
 			if err != nil {
 				return domain.Issue{}, err
 			}
-			if issue.ColinMetadata == nil || strings.TrimSpace(issue.ColinMetadata.CodexThreadID) != threadID {
+			if !matchIssue(issue) {
 				continue
 			}
 			if match == nil {
@@ -550,10 +583,10 @@ query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
 				continue
 			}
 			duplicates = append(duplicates, issue.Identifier)
-			return domain.Issue{}, &AmbiguousCodexThreadError{
-				ThreadID:         threadID,
-				IssueIdentifiers: duplicates,
+			if ambiguous == nil {
+				return domain.Issue{}, ErrUnknownPayload
 			}
+			return domain.Issue{}, ambiguous(duplicates)
 		}
 		hasNextPage, _ := nestedBool(resp, "data", "issues", "pageInfo", "hasNextPage")
 		if !hasNextPage {
@@ -566,7 +599,7 @@ query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
 		after = &cursor
 	}
 	if match == nil {
-		return domain.Issue{}, fmt.Errorf("%w: %s", ErrCodexThreadNotFound, threadID)
+		return domain.Issue{}, notFound()
 	}
 	return *match, nil
 }

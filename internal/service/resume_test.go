@@ -48,6 +48,9 @@ func TestLoadResumeSessionPreparesWorkspaceAndUsesDefaultCLICommand(t *testing.T
 	if got := session.CLICommand; got != "codex" {
 		t.Fatalf("CLICommand = %q, want %q", got, "codex")
 	}
+	if got := session.ThreadID; got != "thread-123" {
+		t.Fatalf("ThreadID = %q, want %q", got, "thread-123")
+	}
 	if _, err := os.Stat(session.WorkspacePath); err != nil {
 		t.Fatalf("workspace path %q was not created: %v", session.WorkspacePath, err)
 	}
@@ -115,6 +118,98 @@ func TestLoadResumeSessionReturnsAmbiguousError(t *testing.T) {
 	}
 	if got := strings.Join(ambiguousErr.IssueIdentifiers, ","); got != "COLIN-123,COLIN-456" {
 		t.Fatalf("IssueIdentifiers = %q, want %q", got, "COLIN-123,COLIN-456")
+	}
+}
+
+func TestLoadResumeSessionResolvesLinearIssueIdentifier(t *testing.T) {
+	t.Parallel()
+
+	server := newResumeTestLinearServer(t, func(w http.ResponseWriter, request map[string]any) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						resumeTestIssueNode("issue-1", "COLIN-123", "thread-123"),
+					},
+				},
+			},
+		})
+	})
+	defer server.Close()
+
+	workflowPath := writeResumeTestWorkflow(t, server.URL, "")
+
+	session, err := LoadResumeSession(context.Background(), workflowPath, "COLIN-123")
+	if err != nil {
+		t.Fatalf("LoadResumeSession() error = %v", err)
+	}
+	if got := session.Issue.Identifier; got != "COLIN-123" {
+		t.Fatalf("Issue.Identifier = %q, want %q", got, "COLIN-123")
+	}
+	if got := session.ThreadID; got != "thread-123" {
+		t.Fatalf("ThreadID = %q, want %q", got, "thread-123")
+	}
+}
+
+func TestLoadResumeSessionReturnsIssueNotFoundForIssueSelector(t *testing.T) {
+	t.Parallel()
+
+	server := newResumeTestLinearServer(t, func(w http.ResponseWriter, request map[string]any) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						resumeTestIssueNode("issue-1", "COLIN-999", "thread-999"),
+					},
+				},
+			},
+		})
+	})
+	defer server.Close()
+
+	workflowPath := writeResumeTestWorkflow(t, server.URL, "")
+
+	_, err := LoadResumeSession(context.Background(), workflowPath, "COLIN-123")
+	var issueErr *ResumeIssueNotFoundError
+	if !errors.As(err, &issueErr) {
+		t.Fatalf("LoadResumeSession() error = %v, want ResumeIssueNotFoundError", err)
+	}
+}
+
+func TestLoadResumeSessionReturnsIssueHasNoThreadError(t *testing.T) {
+	t.Parallel()
+
+	server := newResumeTestLinearServer(t, func(w http.ResponseWriter, request map[string]any) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						resumeTestIssueNode("issue-1", "COLIN-123", ""),
+					},
+				},
+			},
+		})
+	})
+	defer server.Close()
+
+	workflowPath := writeResumeTestWorkflow(t, server.URL, "")
+
+	_, err := LoadResumeSession(context.Background(), workflowPath, "COLIN-123")
+	var noThreadErr *ResumeIssueHasNoThreadError
+	if !errors.As(err, &noThreadErr) {
+		t.Fatalf("LoadResumeSession() error = %v, want ResumeIssueHasNoThreadError", err)
 	}
 }
 

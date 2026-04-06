@@ -20,21 +20,21 @@ var (
 
 func newResumeCmd(stdin io.Reader, stdout, stderr io.Writer, opts *rootOptions, deps commandDeps) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "resume <thread-id>",
+		Use:           "resume <thread-id-or-issue-id>",
 		Short:         "Resume a Colin-managed Codex thread locally",
-		Long:          "Resolve a Colin-managed Codex thread through Linear metadata, prepare the owning issue workspace locally, and launch an interactive `codex resume` session in that workspace.",
+		Long:          "Resolve a Colin-managed Codex thread or Linear issue through Colin's Linear metadata, prepare the owning issue workspace locally, and launch an interactive `codex resume` session in that workspace.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return exitCode(deps.runResume(cmd, resumeOptions{
 				workflowPath: opts.resolvedWorkflowPath(),
-				threadID:     args[0],
+				target:       args[0],
 			}))
 		},
 	}
 	configureCommand(cmd, stdin, stdout, stderr)
-	cmd.Example = "  colin resume thread-123\n  colin --workflow /path/to/WORKFLOW.md resume thread-123"
+	cmd.Example = "  colin resume thread-123\n  colin resume COLIN-123\n  colin --workflow /path/to/WORKFLOW.md resume COLIN-123"
 	return cmd
 }
 
@@ -42,14 +42,14 @@ func runResume(cmd *cobra.Command, opts resumeOptions) int {
 	ctx, stop := signalContext(cmd.Context())
 	defer stop()
 
-	session, err := loadResumeSession(ctx, opts.workflowPath, opts.threadID)
+	session, err := loadResumeSession(ctx, opts.workflowPath, opts.target)
 	if err != nil {
 		cmd.PrintErrln(service.DescribeStartupError(err))
 		return 1
 	}
 
 	cmd.Printf("Resuming %s in %s\n", session.Issue.Identifier, session.WorkspacePath)
-	args, err := buildResumeArgs(session.CLICommand, opts.threadID, session.WorkspacePath)
+	args, err := buildResumeArgs(session.CLICommand, session.ThreadID, session.WorkspacePath)
 	if err != nil {
 		cmd.PrintErrln(err)
 		return 1

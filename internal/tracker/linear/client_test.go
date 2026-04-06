@@ -460,6 +460,70 @@ func TestFindIssueByCodexThreadIDReturnsAmbiguousMatch(t *testing.T) {
 	}
 }
 
+func TestFindIssueByIdentifier(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						testLinearIssueNode("issue-1", "COLIN-1", "thread-1"),
+						testLinearIssueNode("issue-2", "COLIN-2", "thread-2"),
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newAPIClient(server.URL, "token")
+	client.watchedProjectIDs = []string{"project-1"}
+
+	issue, err := client.FindIssueByIdentifier(context.Background(), "colin-2")
+	if err != nil {
+		t.Fatalf("FindIssueByIdentifier() error = %v", err)
+	}
+	if got := issue.Identifier; got != "COLIN-2" {
+		t.Fatalf("issue.Identifier = %q, want %q", got, "COLIN-2")
+	}
+}
+
+func TestFindIssueByIdentifierReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   nil,
+					},
+					"nodes": []map[string]any{
+						testLinearIssueNode("issue-1", "COLIN-1", "thread-1"),
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newAPIClient(server.URL, "token")
+	client.watchedProjectIDs = []string{"project-1"}
+
+	_, err := client.FindIssueByIdentifier(context.Background(), "COLIN-2")
+	if !errors.Is(err, ErrIssueIdentifierNotFound) {
+		t.Fatalf("FindIssueByIdentifier() error = %v, want ErrIssueIdentifierNotFound", err)
+	}
+}
+
 func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	t.Parallel()
 

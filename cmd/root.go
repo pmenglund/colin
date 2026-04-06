@@ -40,7 +40,7 @@ type configOptions struct {
 
 type resumeOptions struct {
 	workflowPath string
-	threadID     string
+	target       string
 }
 
 type usageError struct {

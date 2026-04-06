@@ -30,6 +30,7 @@ func TestRunResumeLaunchesResolvedThread(t *testing.T) {
 			Issue: domain.Issue{
 				Identifier: "COLIN-123",
 			},
+			ThreadID:      "thread'123",
 			WorkspacePath: "/tmp/work tree",
 			CLICommand:    "codex --profile local",
 		}, nil
@@ -41,7 +42,7 @@ func TestRunResumeLaunchesResolvedThread(t *testing.T) {
 		return nil
 	}
 
-	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", threadID: "thread'123"}); code != 0 {
+	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", target: "thread'123"}); code != 0 {
 		t.Fatalf("runResume() exit code = %d, want 0", code)
 	}
 	if got := strings.Join(gotArgs, "\n"); got != "codex\n--profile\nlocal\nresume\nthread'123\n-C\n/tmp/work tree" {
@@ -68,6 +69,7 @@ func TestRunResumePropagatesChildExitCode(t *testing.T) {
 	loadResumeSession = func(ctx context.Context, workflowPath string, threadID string) (service.ResumeSession, error) {
 		return service.ResumeSession{
 			Issue:         domain.Issue{Identifier: "COLIN-123"},
+			ThreadID:      "thread-123",
 			WorkspacePath: "/tmp/workspace",
 			CLICommand:    "codex",
 		}, nil
@@ -76,7 +78,7 @@ func TestRunResumePropagatesChildExitCode(t *testing.T) {
 		return exec.Command("bash", "-lc", "exit 7").Run()
 	}
 
-	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", threadID: "thread-123"}); code != 7 {
+	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", target: "thread-123"}); code != 7 {
 		t.Fatalf("runResume() exit code = %d, want 7", code)
 	}
 }
@@ -96,11 +98,49 @@ func TestRunResumePrintsLookupError(t *testing.T) {
 		return service.ResumeSession{}, &service.ResumeThreadNotFoundError{ThreadID: threadID}
 	}
 
-	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", threadID: "thread-123"}); code != 1 {
+	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", target: "thread-123"}); code != 1 {
 		t.Fatalf("runResume() exit code = %d, want 1", code)
 	}
 	if got := stderr.String(); !strings.Contains(got, "codex thread \"thread-123\" is not linked") {
 		t.Fatalf("stderr = %q, want lookup guidance", got)
+	}
+}
+
+func TestRunResumeLaunchesThreadResolvedFromIssueIdentifier(t *testing.T) {
+	restore := patchResumeSeams(t)
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	loadResumeSession = func(ctx context.Context, workflowPath string, target string) (service.ResumeSession, error) {
+		if target != "COLIN-123" {
+			t.Fatalf("target = %q, want COLIN-123", target)
+		}
+		return service.ResumeSession{
+			Issue:         domain.Issue{Identifier: "COLIN-123"},
+			ThreadID:      "thread-123",
+			WorkspacePath: "/tmp/workspace",
+			CLICommand:    "codex",
+		}, nil
+	}
+
+	var gotArgs []string
+	execResumeCommand = func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []string) error {
+		gotArgs = append([]string(nil), args...)
+		return nil
+	}
+
+	if code := runResume(cmd, resumeOptions{workflowPath: "WORKFLOW.md", target: "COLIN-123"}); code != 0 {
+		t.Fatalf("runResume() exit code = %d, want 0", code)
+	}
+	if got := strings.Join(gotArgs, "\n"); got != "codex\nresume\nthread-123\n-C\n/tmp/workspace" {
+		t.Fatalf("args = %#v", gotArgs)
 	}
 }
 

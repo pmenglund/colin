@@ -167,7 +167,7 @@ func TestRunRejectsExtraRootArgs(t *testing.T) {
 	}
 }
 
-func TestRunRejectsResumeWithoutThreadID(t *testing.T) {
+func TestRunRejectsResumeWithoutTarget(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
@@ -204,8 +204,8 @@ func TestRunDispatchesResumeCommand(t *testing.T) {
 	if got.workflowPath != "custom.md" {
 		t.Fatalf("workflowPath = %q, want %q", got.workflowPath, "custom.md")
 	}
-	if got.threadID != "thread-123" {
-		t.Fatalf("threadID = %q, want %q", got.threadID, "thread-123")
+	if got.target != "thread-123" {
+		t.Fatalf("target = %q, want %q", got.target, "thread-123")
 	}
 }
 
