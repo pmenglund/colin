@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -97,6 +98,11 @@ type SlackWebhookPublisher func(context.Context, SlackWebhookEvent) error
 // SlackWebhookSecretProvider returns the configured Slack webhook secret for request validation.
 type SlackWebhookSecretProvider func(context.Context) string
 
+type issueOutputStreamPayload struct {
+	Cursor string `json:"cursor"`
+	HTML   string `json:"html,omitempty"`
+}
+
 // NewServer returns a self-contained dashboard server with demo data for tests and previews.
 func NewServer() (http.Handler, error) {
 	source := newDemoSnapshotSource()
@@ -156,6 +162,104 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 	mux.HandleFunc("/github", notFoundHandler)
 	mux.HandleFunc("/slack", notFoundHandler)
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
+	mux.HandleFunc("/api/v1/issues/", func(w http.ResponseWriter, r *http.Request) {
+		issueID, streamEvents := domain.ParseColinCodexOutputEventsPath(r.URL.EscapedPath())
+		if !streamEvents {
+			var ok bool
+			issueID, ok = domain.ParseColinCodexOutputPath(r.URL.EscapedPath())
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		if issueProvider == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		if streamEvents {
+			if r.Method != http.MethodGet {
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+				return
+			}
+
+			identifier, log, _, err := currentStreamIssueOutput(r.Context(), provider, issueID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			afterCursor := strings.TrimSpace(r.URL.Query().Get("after"))
+
+			initial, updates, err := streamProvider(r.Context())
+			if err != nil {
+				writeJSONError(w, http.StatusInternalServerError, err)
+				return
+			}
+			_ = initial
+
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("X-Accel-Buffering", "no")
+
+			currentCursor := latestOutputCursor(log)
+			if err := writeJSONSSEEvent(w, "ready", issueOutputStreamPayload{Cursor: currentCursor}); err != nil {
+				return
+			}
+			currentCursor, err = writeIssueOutputDelta(w, identifier, log, afterCursor)
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+
+			keepalive := time.NewTicker(15 * time.Second)
+			defer keepalive.Stop()
+
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-updates:
+					identifier, log, _, err = currentStreamIssueOutput(r.Context(), provider, issueID)
+					if err != nil {
+						return
+					}
+					currentCursor, err = writeIssueOutputDelta(w, identifier, log, currentCursor)
+					if err != nil {
+						return
+					}
+					flusher.Flush()
+				case <-keepalive.C:
+					if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+						return
+					}
+					flusher.Flush()
+				}
+			}
+		}
+
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		issue, log, err := currentIssueOutput(r.Context(), provider, issueProvider, issueID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		if err := ui.WorkerOutputList(issueOutputIdentifier(issue), log).Render(w); err != nil && !errors.Is(err, context.Canceled) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
 	mux.HandleFunc("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -421,6 +525,33 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+func currentIssueOutput(ctx context.Context, provider SnapshotProvider, issueProvider IssueProvider, issueID string) (domain.Issue, []domain.OutputLog, error) {
+	issue, err := issueProvider(ctx, issueID)
+	if err != nil {
+		return domain.Issue{}, nil, err
+	}
+	snapshot, err := provider(ctx)
+	if err != nil {
+		return domain.Issue{}, nil, err
+	}
+	mergeLiveIssueOutput(&issue, snapshot)
+	return issue, issueOutputLog(issue), nil
+}
+
+func currentStreamIssueOutput(ctx context.Context, provider SnapshotProvider, issueID string) (string, []domain.OutputLog, bool, error) {
+	snapshot, err := provider(ctx)
+	if err != nil {
+		return "", nil, false, err
+	}
+	for _, entry := range snapshot.Running {
+		if entry.IssueID != issueID {
+			continue
+		}
+		return issueOutputIdentifier(domain.Issue{ID: entry.IssueID, Identifier: entry.Identifier}), append([]domain.OutputLog(nil), entry.OutputLog...), true, nil
+	}
+	return issueID, nil, false, nil
+}
+
 func mergeLiveIssueOutput(issue *domain.Issue, snapshot domain.Snapshot) {
 	if issue == nil {
 		return
@@ -435,6 +566,84 @@ func mergeLiveIssueOutput(issue *domain.Issue, snapshot domain.Snapshot) {
 		issue.ColinMetadata.CodexOutput = append([]domain.OutputLog(nil), entry.OutputLog...)
 		return
 	}
+}
+
+func issueOutputLog(issue domain.Issue) []domain.OutputLog {
+	if issue.ColinMetadata == nil {
+		return nil
+	}
+	return append([]domain.OutputLog(nil), issue.ColinMetadata.CodexOutput...)
+}
+
+func issueOutputIdentifier(issue domain.Issue) string {
+	if value := strings.TrimSpace(issue.Identifier); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(issue.ID); value != "" {
+		return value
+	}
+	return "unknown"
+}
+
+func outputCursor(item domain.OutputLog) string {
+	return item.Timestamp.UTC().Format(time.RFC3339Nano) + "|" + item.Event + "|" + item.Message
+}
+
+func latestOutputCursor(log []domain.OutputLog) string {
+	if len(log) == 0 {
+		return ""
+	}
+	return outputCursor(log[len(log)-1])
+}
+
+func outputEntriesAfterCursor(log []domain.OutputLog, cursor string) ([]domain.OutputLog, bool) {
+	if strings.TrimSpace(cursor) == "" {
+		return append([]domain.OutputLog(nil), log...), true
+	}
+	for i := len(log) - 1; i >= 0; i-- {
+		if outputCursor(log[i]) != cursor {
+			continue
+		}
+		if i+1 >= len(log) {
+			return nil, true
+		}
+		return append([]domain.OutputLog(nil), log[i+1:]...), true
+	}
+	return nil, false
+}
+
+func writeIssueOutputDelta(w io.Writer, identifier string, log []domain.OutputLog, afterCursor string) (string, error) {
+	currentCursor := latestOutputCursor(log)
+	entries, found := outputEntriesAfterCursor(log, afterCursor)
+	if strings.TrimSpace(afterCursor) != "" && !found {
+		html, err := renderNodeHTML(ui.WorkerOutputList(identifier, log))
+		if err != nil {
+			return currentCursor, err
+		}
+		if err := writeJSONSSEEvent(w, "reset", issueOutputStreamPayload{Cursor: currentCursor, HTML: html}); err != nil {
+			return currentCursor, err
+		}
+		return currentCursor, nil
+	}
+
+	for _, item := range entries {
+		html, err := renderNodeHTML(ui.WorkerOutputEntry(item))
+		if err != nil {
+			return currentCursor, err
+		}
+		if err := writeJSONSSEEvent(w, "output_entry", issueOutputStreamPayload{Cursor: outputCursor(item), HTML: html}); err != nil {
+			return currentCursor, err
+		}
+	}
+	return currentCursor, nil
+}
+
+func renderNodeHTML(node interface{ Render(io.Writer) error }) (string, error) {
+	var builder strings.Builder
+	if err := node.Render(&builder); err != nil {
+		return "", err
+	}
+	return builder.String(), nil
 }
 
 func isHXRequest(r *http.Request) bool {
@@ -464,6 +673,10 @@ func writeJSONError(w http.ResponseWriter, status int, err error) {
 }
 
 func writeSSEEvent(w http.ResponseWriter, name string, payload domain.SnapshotUpdate) error {
+	return writeJSONSSEEvent(w, name, payload)
+}
+
+func writeJSONSSEEvent(w io.Writer, name string, payload any) error {
 	if _, err := fmt.Fprintf(w, "event: %s\n", name); err != nil {
 		return err
 	}
@@ -499,7 +712,7 @@ func parseLogLevel(raw string) (*slog.Level, error) {
 }
 
 type demoSnapshotSource struct {
-	requests atomic.Int64
+	revision atomic.Int64
 }
 
 func newDemoSnapshotSource() *demoSnapshotSource {
@@ -521,6 +734,7 @@ func (s *demoSnapshotSource) Stream(ctx context.Context) (domain.SnapshotUpdate,
 			case <-ctx.Done():
 				return
 			case now := <-ticker.C:
+				s.revision.Add(1)
 				update := domain.SnapshotUpdate{GeneratedAt: now.UTC()}
 				select {
 				case updates <- update:
@@ -542,9 +756,21 @@ func (s *demoSnapshotSource) Stream(ctx context.Context) (domain.SnapshotUpdate,
 }
 
 func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) {
-	request := s.requests.Add(1)
 	now := time.Now().UTC()
 	issueURL := "https://linear.app/example/issue/COLIN-7"
+	revision := s.revision.Load()
+	outputLog := []domain.OutputLog{
+		{Timestamp: now.Add(-25 * time.Second), Event: "session_started", Message: "session started"},
+		{Timestamp: now.Add(-12 * time.Second), Event: "other_message", Message: "Inspecting the orchestrator snapshot path."},
+		{Timestamp: now.Add(-2 * time.Second), Event: "turn_completed", Message: "Refreshed the task view fragment."},
+	}
+	for i := int64(0); i < revision; i++ {
+		outputLog = append(outputLog, domain.OutputLog{
+			Timestamp: now.Add(-time.Duration(revision-i) * 200 * time.Millisecond),
+			Event:     "other_message",
+			Message:   fmt.Sprintf("Streaming follow-up update %d.", i+1),
+		})
+	}
 
 	return domain.Snapshot{
 		GeneratedAt: now,
@@ -590,7 +816,7 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 				URL:           &issueURL,
 				State:         "In Progress",
 				SessionID:     "session-demo",
-				TurnCount:     int(request),
+				TurnCount:     int(revision) + 1,
 				LastEvent:     "turn_completed",
 				LastMessage:   "Refreshed the task view fragment.",
 				StartedAt:     now.Add(-7 * time.Minute),
@@ -599,11 +825,7 @@ func (s *demoSnapshotSource) Snapshot(context.Context) (domain.Snapshot, error) 
 				OutputTokens:  1800,
 				TotalTokens:   5000,
 				ContextWindow: &domain.ContextWindowUsage{UsedTokens: 78400, LimitTokens: 258000},
-				OutputLog: []domain.OutputLog{
-					{Timestamp: now.Add(-25 * time.Second), Event: "session_started", Message: "session started"},
-					{Timestamp: now.Add(-12 * time.Second), Event: "other_message", Message: "Inspecting the orchestrator snapshot path."},
-					{Timestamp: now.Add(-2 * time.Second), Event: "turn_completed", Message: "Refreshed the task view fragment."},
-				},
+				OutputLog:     outputLog,
 			},
 		},
 		Retrying: []domain.RetryEntry{

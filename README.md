@@ -57,7 +57,7 @@ Colin treats these as terminal states and stops work when an issue enters them:
 
 ## Operate Many Tasks At Once
 
-Colin is built to supervise a queue, not a single foreground session. It keeps one workspace per issue, tracks retries and rate limits, and gives operators a live dashboard so they can monitor fleet-level progress instead of watching individual coding runs. The web UI now uses Server-Sent Events to learn when a newer snapshot exists, then refreshes the rendered HTML without waiting for a fixed polling interval. Colin itself is also developed using Colin, so the workflow is exercised continuously in the project that builds it.
+Colin is built to supervise a queue, not a single foreground session. It keeps one workspace per issue, tracks retries and rate limits, and gives operators a live dashboard so they can monitor fleet-level progress instead of watching individual coding runs. The web UI now uses Server-Sent Events to learn when a newer snapshot exists, then refreshes the rendered HTML without waiting for a fixed polling interval. Dashboard `Codex output` panels lazy-load their current history when opened and then keep streaming only new entries at the top, which avoids re-fetch flicker while the surrounding dashboard keeps updating. Colin itself is also developed using Colin, so the workflow is exercised continuously in the project that builds it.
 
 When Colin is running, it also starts a local [`gops`](https://github.com/google/gops) agent so you can inspect the live process with commands such as `gops`, `gops stack <pid>`, or `gops memstats <pid>` without changing Colin's normal startup or shutdown flow.
 

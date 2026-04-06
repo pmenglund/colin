@@ -118,59 +118,65 @@ test("dashboard renders and CSS asset is reachable", async ({ page, request }) =
   await expect(page.getByTestId("issue-metadata-panel")).toBeVisible();
 });
 
-test("dashboard refreshes from SSE and pause or resume preserves expanded state", async ({ page }) => {
+test("dashboard codex output loads once and streams new entries without flicker", async ({ page }) => {
+  await page.goto("/");
+  const details = page.locator("#worker-output-details-COLIN-7");
+  let fragmentRequests = 0;
+  await page.route("**/api/v1/issues/issue-demo-1/codex-output", async (route) => {
+    fragmentRequests += 1;
+    await route.continue();
+  });
+
+  const before = await page.getByTestId("turn-count-COLIN-7").textContent();
+  await details.locator("summary").click();
+  await expect(details).toHaveJSProperty("open", true);
+  await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Refreshed the task view fragment.");
+  await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Inspecting the orchestrator snapshot path.");
+  await expect(page.getByTestId("worker-output-COLIN-7").locator(".worker-output-entry").first()).toContainText(
+    "Refreshed the task view fragment.",
+  );
+  await expect.poll(() => fragmentRequests).toBe(1);
+
+  await expect(page.getByTestId("turn-count-COLIN-7")).not.toHaveText(before ?? "");
+  await expect(details).toHaveJSProperty("open", true);
+  await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Refreshed the task view fragment.");
+  await expect.poll(async () => {
+    return page.getByTestId("worker-output-COLIN-7").locator(".worker-output-entry").first().textContent();
+  }).toMatch(/Streaming follow-up update \d+\./);
+  await expect.poll(() => fragmentRequests).toBe(1);
+});
+
+test("paused dashboard still lazy-loads codex output history and resumes streaming later", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("refresh-button").click();
   await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
 
-  const before = await page.getByTestId("turn-count-COLIN-7").textContent();
   const details = page.locator("#worker-output-details-COLIN-7");
-  const stateIssuesDetails = page.locator("#state-issues-details-in-progress");
-  const outputPre = page.getByTestId("worker-output-COLIN-7").locator("pre").first();
-  const outputTime = page.getByTestId("worker-output-COLIN-7").locator("[data-local-time]").first();
+  let fragmentRequests = 0;
+  let eventsRequests = 0;
+  await page.route("**/api/v1/issues/issue-demo-1/codex-output", async (route) => {
+    fragmentRequests += 1;
+    await route.continue();
+  });
+  await page.route("**/api/v1/issues/issue-demo-1/codex-output/events**", async (route) => {
+    eventsRequests += 1;
+    await route.continue();
+  });
 
-  await details.evaluate((node: HTMLDetailsElement) => {
-    node.open = true;
-  });
+  await details.locator("summary").click();
   await expect(details).toHaveJSProperty("open", true);
-  await stateIssuesDetails.evaluate((node: HTMLDetailsElement) => {
-    node.open = true;
-  });
-  await expect(stateIssuesDetails).toHaveJSProperty("open", true);
   await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Refreshed the task view fragment.");
-  await expect(outputPre).toHaveCSS("white-space", "pre-wrap");
-  const timestamp = await outputTime.getAttribute("data-timestamp");
-  if (!timestamp) {
-    throw new Error("missing output timestamp");
-  }
-  const expectedLocalTime = await page.evaluate((value) => {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZoneName: "short",
-    }).format(new Date(value));
-  }, timestamp);
-  await expect(outputTime).toHaveText(expectedLocalTime);
+  await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Inspecting the orchestrator snapshot path.");
+  await expect.poll(() => fragmentRequests).toBe(1);
+  await expect.poll(() => eventsRequests).toBe(0);
 
   await page.getByTestId("refresh-button").click();
   await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Pause automatic refresh");
-  await expect(page.getByTestId("turn-count-COLIN-7")).not.toHaveText(before ?? "");
-  await expect(details).toHaveJSProperty("open", true);
-  await expect(stateIssuesDetails).toHaveJSProperty("open", true);
-  const refreshedTimestamp = await outputTime.getAttribute("data-timestamp");
-  if (!refreshedTimestamp) {
-    throw new Error("missing refreshed output timestamp");
-  }
-  const expectedRefreshedLocalTime = await page.evaluate((value) => {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZoneName: "short",
-    }).format(new Date(value));
-  }, refreshedTimestamp);
-  await expect(outputTime).toHaveText(expectedRefreshedLocalTime);
+  await expect.poll(() => eventsRequests).toBeGreaterThan(0);
+  await expect.poll(async () => {
+    return page.getByTestId("worker-output-COLIN-7").locator(".worker-output-entry").first().textContent();
+  }).toMatch(/Streaming follow-up update \d+\./);
+  await expect.poll(() => fragmentRequests).toBe(1);
 });
 
 test("dashboard marks the view stale when the SSE stream fails and recovers after reconnect", async ({ page }) => {

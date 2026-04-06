@@ -61,6 +61,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 			},
 		},
 		Running: []domain.SnapshotRunning{{
+			IssueID:       "issue-1",
 			Identifier:    "COLIN-93",
 			Title:         "Add live dashboard",
 			URL:           &issueURL,
@@ -75,10 +76,6 @@ func TestPageRendersDashboardShell(t *testing.T) {
 			OutputTokens:  22,
 			TotalTokens:   33,
 			ContextWindow: &domain.ContextWindowUsage{UsedTokens: 78400, LimitTokens: 258000},
-			OutputLog: []domain.OutputLog{
-				{Timestamp: time.Date(2026, 3, 28, 11, 58, 1, 0, time.UTC), Event: "session_started", Message: "session started"},
-				{Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC), Event: "turn_completed", Message: "Still working"},
-			},
 		}},
 		Retrying: []domain.RetryEntry{{
 			Identifier: "COLIN-91",
@@ -116,6 +113,11 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-testid="context-window-COLIN-93"`,
 		`data-testid="context-window-bar-COLIN-93"`,
 		`data-testid="worker-output-COLIN-93"`,
+		`data-codex-output-panel="true"`,
+		`data-codex-output-issue-id="issue-1"`,
+		`data-codex-output-load-url="/api/v1/issues/issue-1/codex-output"`,
+		`data-codex-output-events-url="/api/v1/issues/issue-1/codex-output/events"`,
+		`Open to load Codex output.`,
 		`hx-get="/"`,
 		`/api/v1/state`,
 		`/api/v1/logs`,
@@ -163,13 +165,6 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`resets in 5h32m`,
 		`resets in 1w`,
 		`next request in 3s`,
-		`data-local-time="true"`,
-		`data-timestamp="2026-03-28T11:58:01Z"`,
-		`11:58:01 UTC`,
-		`session_started`,
-		`data-timestamp="2026-03-28T11:59:02Z"`,
-		`11:59:02 UTC`,
-		`turn_completed`,
 		`Context window: 70% left (78.4K used / 258K)`,
 		`aria-valuenow="30"`,
 	} {
@@ -276,15 +271,37 @@ func TestStateIssuePopoverRendersLinks(t *testing.T) {
 	}
 }
 
-func TestWorkerOutputRendersOnePrePerMessage(t *testing.T) {
+func TestWorkerOutputShellUsesLazyLoadEndpoints(t *testing.T) {
 	t.Parallel()
 
 	html := renderNode(t, workerOutput(domain.SnapshotRunning{
+		IssueID:    "issue-1",
 		Identifier: "COLIN-93",
-		OutputLog: []domain.OutputLog{
-			{Timestamp: time.Date(2026, 3, 28, 11, 58, 1, 0, time.UTC), Event: "session_started", Message: "session started"},
-			{Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC), Event: "turn_completed", Message: "Still working"},
-		},
+	}))
+
+	for _, want := range []string{
+		`data-codex-output-panel="true"`,
+		`data-codex-output-issue-id="issue-1"`,
+		`data-codex-output-load-url="/api/v1/issues/issue-1/codex-output"`,
+		`data-codex-output-events-url="/api/v1/issues/issue-1/codex-output/events"`,
+		`data-codex-output-loaded="false"`,
+		`Open to load Codex output.`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("worker output shell missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, `class="worker-output-entry"`) {
+		t.Fatalf("worker output shell should not embed entries before hydration\n%s", html)
+	}
+}
+
+func TestWorkerOutputListRendersNewestEntryFirst(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, WorkerOutputList("COLIN-93", []domain.OutputLog{
+		{Timestamp: time.Date(2026, 3, 28, 11, 58, 1, 0, time.UTC), Event: "session_started", Message: "session started"},
+		{Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC), Event: "turn_completed", Message: "Still working"},
 	}))
 
 	if got := strings.Count(html, `class="worker-output-entry"`); got != 2 {
@@ -316,11 +333,10 @@ func TestWorkerOutputRendersOnePrePerMessage(t *testing.T) {
 func TestWorkerOutputSkipsRedundantTurnCompletedMessageBody(t *testing.T) {
 	t.Parallel()
 
-	html := renderNode(t, workerOutput(domain.SnapshotRunning{
-		Identifier: "COLIN-93",
-		OutputLog: []domain.OutputLog{
-			{Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC), Event: "turn_completed", Message: "turn_completed"},
-		},
+	html := renderNode(t, WorkerOutputEntry(domain.OutputLog{
+		Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC),
+		Event:     "turn_completed",
+		Message:   "turn_completed",
 	}))
 
 	if strings.Contains(html, `<pre class="mockup-code">turn_completed</pre>`) {
