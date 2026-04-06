@@ -146,6 +146,39 @@ test("dashboard codex output loads once and streams new entries without flicker"
   await expect.poll(() => fragmentRequests).toBe(1);
 });
 
+test("paused dashboard still lazy-loads codex output history and resumes streaming later", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("refresh-button").click();
+  await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
+
+  const details = page.locator("#worker-output-details-COLIN-7");
+  let fragmentRequests = 0;
+  let eventsRequests = 0;
+  await page.route("**/api/v1/issues/issue-demo-1/codex-output", async (route) => {
+    fragmentRequests += 1;
+    await route.continue();
+  });
+  await page.route("**/api/v1/issues/issue-demo-1/codex-output/events**", async (route) => {
+    eventsRequests += 1;
+    await route.continue();
+  });
+
+  await details.locator("summary").click();
+  await expect(details).toHaveJSProperty("open", true);
+  await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Refreshed the task view fragment.");
+  await expect(page.getByTestId("worker-output-COLIN-7")).toContainText("Inspecting the orchestrator snapshot path.");
+  await expect.poll(() => fragmentRequests).toBe(1);
+  await expect.poll(() => eventsRequests).toBe(0);
+
+  await page.getByTestId("refresh-button").click();
+  await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Pause automatic refresh");
+  await expect.poll(() => eventsRequests).toBeGreaterThan(0);
+  await expect.poll(async () => {
+    return page.getByTestId("worker-output-COLIN-7").locator(".worker-output-entry").first().textContent();
+  }).toMatch(/Streaming follow-up update \d+\./);
+  await expect.poll(() => fragmentRequests).toBe(1);
+});
+
 test("dashboard marks the view stale when the SSE stream fails and recovers after reconnect", async ({ page }) => {
   await page.goto("/");
 
