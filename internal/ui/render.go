@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -580,8 +581,12 @@ func metadataStatCard(title, value string) g.Node {
 }
 
 func metadataLinkStatCard(title, href, empty string) g.Node {
-	if strings.TrimSpace(href) == "" {
+	href = strings.TrimSpace(href)
+	if href == "" {
 		return metadataStatCard(title, empty)
+	}
+	if !safeExternalURLScheme(href) {
+		return metadataStatCard(title, href)
 	}
 	return metadataStatCardContent(
 		title,
@@ -591,6 +596,19 @@ func metadataLinkStatCard(title, href, empty string) g.Node {
 			g.Text(href),
 		),
 	)
+}
+
+func safeExternalURLScheme(raw string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
 }
 
 func metadataStatCardContent(title string, content g.Node) g.Node {
