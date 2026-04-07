@@ -1799,6 +1799,12 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	if !result.Relevant {
 		t.Fatal("Relevant = false, want true")
 	}
+	if got := len(tracker.agentActivities); got != 1 {
+		t.Fatalf("agentActivities length = %d, want 1", got)
+	}
+	if !strings.Contains(tracker.agentActivities[0], "will start work") {
+		t.Fatalf("agent activity = %q, want start-work acknowledgement", tracker.agentActivities[0])
+	}
 	if got := len(tracker.issueComments); got != 1 {
 		t.Fatalf("issueComments length = %d, want 1", got)
 	}
@@ -1833,6 +1839,9 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	})
 	if !result.Relevant {
 		t.Fatal("Relevant after duplicate session = false, want true")
+	}
+	if got := len(tracker.agentActivities); got != 1 {
+		t.Fatalf("agentActivities length after duplicate session = %d, want 1", got)
 	}
 	if got := len(tracker.issueComments); got != 1 {
 		t.Fatalf("issueComments length after duplicate session = %d, want 1", got)
@@ -2213,6 +2222,7 @@ type serviceTrackerStub struct {
 	issuesByState     []domain.Issue
 	stateNames        []string
 	issueByID         map[string]domain.Issue
+	agentActivities   []string
 	issueComments     []string
 	commentReplies    []string
 	watchedProjectIDs []string
@@ -2458,6 +2468,11 @@ func (s *serviceTrackerStub) CreateIssueComment(_ context.Context, _ string, bod
 func (s *serviceTrackerStub) CreateCommentReply(_ context.Context, _ string, _ string, body string) (string, error) {
 	s.commentReplies = append(s.commentReplies, body)
 	return "reply", nil
+}
+
+func (s *serviceTrackerStub) CreateAgentActivityThought(_ context.Context, _ string, body string) error {
+	s.agentActivities = append(s.agentActivities, body)
+	return nil
 }
 
 func (s *serviceTrackerStub) UpsertIssueMetadata(_ context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {

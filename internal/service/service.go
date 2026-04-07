@@ -593,6 +593,7 @@ func (s *Service) linearWebhookTrigger() app.LinearWebhookTrigger {
 		if !shouldQueueImmediateLinearRefresh(event, watchedProjectIDs(runtime.Tracker)) {
 			return app.LinearWebhookTriggerResult{}
 		}
+		s.acknowledgeLinearAgentSession(ctx, runtime, event, hydratedIssue)
 		s.acknowledgeDelegatedLinearIssue(ctx, runtime, event, hydratedIssue)
 		reason := fmt.Sprintf("linear webhook delivery=%s event=%s action=%s resource_type=%s", event.DeliveryID, event.Event, event.Action, event.ResourceType)
 		if event.IssueID != "" {
@@ -639,6 +640,47 @@ func (s *Service) hydrateLinearWebhookEvent(ctx context.Context, runtime orchest
 	}
 	event.ProjectID = strings.TrimSpace(issue.ProjectID)
 	return event, &issue
+}
+
+func (s *Service) acknowledgeLinearAgentSession(ctx context.Context, runtime orchestrator.Runtime, event app.LinearWebhookEvent, hydratedIssue *domain.Issue) {
+	if runtime.Tracker == nil || !runtime.Config.Tracker.AppMode {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.ResourceType), "AgentSessionEvent") {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.Action), "created") {
+		return
+	}
+	if strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.IssueID) == "" {
+		return
+	}
+
+	ackCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	issue := domain.Issue{}
+	if hydratedIssue != nil {
+		issue = *hydratedIssue
+	} else {
+		var err error
+		issue, err = runtime.Tracker.FetchIssueByID(ackCtx, event.IssueID)
+		if err != nil {
+			s.logger.Warn("failed to load delegated Linear issue for agent-session acknowledgement", "issue_id", event.IssueID, "error", err)
+			return
+		}
+	}
+	if strings.TrimSpace(issue.ID) == "" || !issue.DelegatedToColin {
+		return
+	}
+
+	_, body := delegationAcknowledgement(runtime.Config, issue)
+	if strings.TrimSpace(body) == "" {
+		return
+	}
+	if err := runtime.Tracker.CreateAgentActivityThought(ackCtx, event.SessionID, body); err != nil {
+		s.logger.Warn("failed to create Linear agent-session acknowledgement activity", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "session_id", event.SessionID, "error", err)
+	}
 }
 
 func (s *Service) acknowledgeDelegatedLinearIssue(ctx context.Context, runtime orchestrator.Runtime, event app.LinearWebhookEvent, hydratedIssue *domain.Issue) {

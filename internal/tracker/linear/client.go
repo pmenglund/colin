@@ -1004,6 +1004,34 @@ mutation CreateCommentReply($input: CommentCreateInput!) {
 	return parseCreatedCommentID(resp)
 }
 
+// CreateAgentActivityThought records an immediate acknowledgement activity on a Linear agent session.
+func (c *Client) CreateAgentActivityThought(ctx context.Context, sessionID string, body string) error {
+	const query = `
+mutation CreateAgentActivityThought($input: AgentActivityCreateInput!) {
+  agentActivityCreate(input: $input) {
+    success
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{
+		"input": map[string]any{
+			"agentSessionId": sessionID,
+			"content": map[string]any{
+				"type": "thought",
+				"body": body,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	success, _ := nestedBool(resp, "data", "agentActivityCreate", "success")
+	if !success {
+		return ErrUnknownPayload
+	}
+	return nil
+}
+
 // UpsertIssueMetadata stores Colin-specific metadata on the Linear issue via a dedicated attachment.
 func (c *Client) UpsertIssueMetadata(ctx context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
 	existingMetadata, err := c.fetchIssueMetadataAttachments(ctx, issueID)

@@ -150,6 +150,10 @@ func (s *trackerStub) CreateCommentReply(_ context.Context, _ string, _ string, 
 	return "reply", nil
 }
 
+func (s *trackerStub) CreateAgentActivityThought(context.Context, string, string) error {
+	return nil
+}
+
 func (s *trackerStub) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
 	if metadataClearsLoopState(metadata) && metadataTouchesCommentState(metadata) {
 		metadata.LoopFailureFingerprint = s.metadata.LoopFailureFingerprint
