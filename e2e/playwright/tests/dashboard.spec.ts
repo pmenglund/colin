@@ -204,7 +204,7 @@ test("dashboard marks the view stale when the SSE stream fails and recovers afte
   await page.getByTestId("refresh-button").click();
   await expect(refreshStatus).not.toHaveAttribute("data-refresh-status", "stale");
   await expect(refreshStatus).toHaveAttribute("data-refresh-status", "stale");
-  await expect(refreshStatus).toHaveText("Stale data");
+  await expect(refreshStatus).toHaveText("Stale");
   await expect(page.getByTestId("worker-card-COLIN-7")).toBeVisible();
 
   await page.unroute("**/api/v1/events", routeHandler);
@@ -212,7 +212,7 @@ test("dashboard marks the view stale when the SSE stream fails and recovers afte
   await expect(page.getByTestId("refresh-button")).toHaveAttribute("aria-label", "Resume automatic refresh");
   await page.getByTestId("refresh-button").click();
   await expect(refreshStatus).toHaveAttribute("data-refresh-status", "live");
-  await expect(refreshStatus).toHaveText("Live data");
+  await expect(refreshStatus).toHaveText("Live");
 });
 
 test("issue metadata page reloads when the live stream reports a new snapshot", async ({ page }) => {
