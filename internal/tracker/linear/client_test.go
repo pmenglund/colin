@@ -853,6 +853,58 @@ func TestCreateCommentReply(t *testing.T) {
 	}
 }
 
+func TestCreateAgentActivityThought(t *testing.T) {
+	t.Parallel()
+
+	var (
+		gotSessionID   string
+		gotContentType string
+		gotBody        string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		input, _ := request.Variables["input"].(map[string]any)
+		gotSessionID, _ = input["agentSessionId"].(string)
+		content, _ := input["content"].(map[string]any)
+		gotContentType, _ = content["type"].(string)
+		gotBody, _ = content["body"].(string)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"agentActivityCreate": map[string]any{
+					"success": true,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	if err := client.CreateAgentActivityThought(context.Background(), "session-1", "Colin is assigned and will start work."); err != nil {
+		t.Fatalf("CreateAgentActivityThought() error = %v", err)
+	}
+	if gotSessionID != "session-1" {
+		t.Fatalf("agentSessionId = %q, want %q", gotSessionID, "session-1")
+	}
+	if gotContentType != "thought" {
+		t.Fatalf("content.type = %q, want %q", gotContentType, "thought")
+	}
+	if gotBody != "Colin is assigned and will start work." {
+		t.Fatalf("content.body = %q, want %q", gotBody, "Colin is assigned and will start work.")
+	}
+}
+
 func TestEnsureProjectIssueWebhookCreatesMissingWebhook(t *testing.T) {
 	t.Parallel()
 

@@ -2821,6 +2821,10 @@ func (s *stubTracker) CreateCommentReply(_ context.Context, _ string, _ string, 
 	return "", nil
 }
 
+func (s *stubTracker) CreateAgentActivityThought(context.Context, string, string) error {
+	return nil
+}
+
 func (s *stubTracker) UpsertIssueMetadata(_ context.Context, _ string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
 	s.metadata = metadata
 	return metadata, nil
