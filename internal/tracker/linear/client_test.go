@@ -616,8 +616,9 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 						},
 						"nodes": []map[string]any{
 							{
-								"id":   "team-1",
-								"name": "Platform",
+								"id":       "team-1",
+								"name":     "Platform",
+								"children": []map[string]any{},
 							},
 						},
 					},
@@ -786,6 +787,16 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 							{
 								"id":   "team-parent",
 								"name": "Parent",
+								"children": []map[string]any{
+									{
+										"id":   "team-stale",
+										"name": "Stale Subteam",
+									},
+									{
+										"id":   "team-child",
+										"name": "Subteam",
+									},
+								},
 							},
 						},
 					},
@@ -794,18 +805,7 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 		case strings.Contains(request.Query, "query TeamChildren"):
 			switch got, _ := request.Variables["teamID"].(string); got {
 			case "team-parent":
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"data": map[string]any{
-						"team": map[string]any{
-							"children": []map[string]any{
-								{
-									"id":   "team-child",
-									"name": "Subteam",
-								},
-							},
-						},
-					},
-				})
+				t.Fatalf("parent children should come from TeamProjectList when parent lookup is missing")
 			case "team-child":
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"data": map[string]any{
@@ -814,6 +814,8 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 						},
 					},
 				})
+			case "team-stale":
+				t.Fatalf("stale child team should be skipped before fetching children")
 			default:
 				t.Fatalf("teamID = %q for children request, want parent or child", got)
 			}
@@ -825,14 +827,13 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 			switch teamID {
 			case "team-parent":
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"data": map[string]any{
-						"team": map[string]any{
-							"projects": map[string]any{
-								"pageInfo": map[string]any{
-									"hasNextPage": false,
-									"endCursor":   nil,
-								},
-								"nodes": []map[string]any{},
+					"errors": []map[string]any{
+						{
+							"message": "Entity not found: Team",
+							"path":    []any{"team"},
+							"extensions": map[string]any{
+								"code":                   "INPUT_ERROR",
+								"userPresentableMessage": "Could not find referenced Team.",
 							},
 						},
 					},
@@ -855,6 +856,19 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 										},
 									},
 								},
+							},
+						},
+					},
+				})
+			case "team-stale":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"errors": []map[string]any{
+						{
+							"message": "Entity not found: Team",
+							"path":    []any{"team"},
+							"extensions": map[string]any{
+								"code":                   "INPUT_ERROR",
+								"userPresentableMessage": "Could not find referenced Team.",
 							},
 						},
 					},

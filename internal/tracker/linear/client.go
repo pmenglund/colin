@@ -308,6 +308,10 @@ query TeamProjectList($after: String) {
     nodes {
       id
       name
+      children {
+        id
+        name
+      }
     }
   }
 }
@@ -328,6 +332,14 @@ query TeamProjectList($after: String) {
 			teamID, _ := stringValue(teamNode["id"])
 			if err := c.appendTeamAndChildProjects(ctx, projects, teamID, seenTeamIDs); err != nil {
 				return err
+			}
+			if childNodes, ok := nestedSlice(teamNode, "children"); ok {
+				for _, childNode := range childNodes {
+					childID, _ := stringValue(childNode["id"])
+					if err := c.appendTeamAndChildProjects(ctx, projects, childID, seenTeamIDs); err != nil {
+						return err
+					}
+				}
 			}
 		}
 
@@ -355,9 +367,18 @@ func (c *Client) appendTeamAndChildProjects(ctx context.Context, projects map[st
 	seenTeamIDs[teamID] = struct{}{}
 
 	if err := c.appendTeamProjectPages(ctx, projects, teamID, nil); err != nil {
+		if isMissingTeamLookupError(err) {
+			return nil
+		}
 		return err
 	}
-	return c.appendChildTeamProjects(ctx, projects, teamID, seenTeamIDs)
+	if err := c.appendChildTeamProjects(ctx, projects, teamID, seenTeamIDs); err != nil {
+		if isMissingTeamLookupError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) appendChildTeamProjects(ctx context.Context, projects map[string]ProjectSummary, teamID string, seenTeamIDs map[string]struct{}) error {
@@ -391,6 +412,42 @@ query TeamChildren($teamID: String!) {
 		}
 	}
 	return nil
+}
+
+func isMissingTeamLookupError(err error) bool {
+	if err == nil || !errors.Is(err, ErrGraphQLErrors) {
+		return false
+	}
+	var response *graphQLErrorResponse
+	if !errors.As(err, &response) || len(response.raw) == 0 {
+		return false
+	}
+	for _, item := range response.raw {
+		if !isMissingTeamLookupEntry(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func isMissingTeamLookupEntry(item map[string]any) bool {
+	message, _ := stringValue(item["message"])
+	message = strings.ToLower(strings.TrimSpace(message))
+	if !strings.Contains(message, "team") || !strings.Contains(message, "not found") {
+		return false
+	}
+
+	path, ok := item["path"].([]any)
+	if !ok {
+		return true
+	}
+	for _, part := range path {
+		value, _ := stringValue(part)
+		if value == "team" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) appendTeamProjectPages(ctx context.Context, projects map[string]ProjectSummary, teamID string, after any) error {
