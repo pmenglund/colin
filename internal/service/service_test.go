@@ -1833,21 +1833,21 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 
 	result = svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
 		ResourceType: "AgentSessionEvent",
-		Action:       "prompted",
+		Action:       "created",
 		IssueID:      "issue-1",
 		SessionID:    "session-1",
 	})
 	if !result.Relevant {
-		t.Fatal("Relevant after duplicate session = false, want true")
+		t.Fatal("Relevant after duplicate created delivery = false, want true")
 	}
 	if got := len(tracker.agentActivities); got != 1 {
-		t.Fatalf("agentActivities length after duplicate session = %d, want 1", got)
+		t.Fatalf("agentActivities length after duplicate created delivery = %d, want 1", got)
 	}
 	if got := len(tracker.issueComments); got != 1 {
-		t.Fatalf("issueComments length after duplicate session = %d, want 1", got)
+		t.Fatalf("issueComments length after duplicate created delivery = %d, want 1", got)
 	}
 	if got := len(tracker.commentReplies); got != 0 {
-		t.Fatalf("commentReplies length after duplicate session = %d, want 0", got)
+		t.Fatalf("commentReplies length after duplicate created delivery = %d, want 0", got)
 	}
 }
 

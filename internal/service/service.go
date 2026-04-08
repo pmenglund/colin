@@ -674,8 +674,11 @@ func (s *Service) acknowledgeLinearAgentSession(ctx context.Context, runtime orc
 		return
 	}
 
-	_, body := delegationAcknowledgement(runtime.Config, issue)
+	ackKind, body := delegationAcknowledgement(runtime.Config, issue)
 	if strings.TrimSpace(body) == "" {
+		return
+	}
+	if !shouldPostDelegationAcknowledgement(issue.ColinMetadata, issue.State, ackKind, event.SessionID) {
 		return
 	}
 	if err := runtime.Tracker.CreateAgentActivityThought(ackCtx, event.SessionID, body); err != nil {
