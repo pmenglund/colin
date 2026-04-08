@@ -26,6 +26,10 @@ Put work into `Todo`, let Colin pull it into `In Progress`, and let the board te
 
 ![Linear board showing Colin-managed issues moving through active and handoff states](docs/board.png)
 
+Each Linear issue becomes the shared handoff record for the work. Colin links the pull request, metadata page, and stored ExecPlan as issue resources when they are available, then keeps posting progress in the same activity thread so reviewers can see what started, what changed, and why the issue is waiting in its current state.
+
+![Linear issue showing Colin metadata, ExecPlan resources, review state, and progress activity](docs/issue.png)
+
 Colin actively works issues in these coding states:
 
 - `Todo`
