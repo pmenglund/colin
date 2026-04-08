@@ -9,9 +9,54 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	gothalert "github.com/pmenglund/goth/components/alert"
+	gothbadge "github.com/pmenglund/goth/components/badge"
+	gothbutton "github.com/pmenglund/goth/components/button"
+	gothcard "github.com/pmenglund/goth/components/card"
+	"github.com/pmenglund/goth/components/classmode"
+	gothtable "github.com/pmenglund/goth/components/table"
+	gothhtmx "github.com/pmenglund/goth/htmx"
 	g "maragu.dev/gomponents"
 	h "maragu.dev/gomponents/html"
 )
+
+func colinCard(className string, children ...g.Node) g.Node {
+	return colinCardWith(gothcard.Props{Class: className}, children...)
+}
+
+func colinCardWith(props gothcard.Props, children ...g.Node) g.Node {
+	props.ClassMode = classmode.ClassReplace
+	return gothcard.Card(props, children...)
+}
+
+func colinAlertWith(props gothalert.Props, children ...g.Node) g.Node {
+	props.ClassMode = classmode.ClassReplace
+	return gothalert.Alert(props, children...)
+}
+
+func colinButtonWith(props gothbutton.Props, children ...g.Node) g.Node {
+	props.ClassMode = classmode.ClassReplace
+	return gothbutton.Button(props, children...)
+}
+
+func colinBadge(className string, children ...g.Node) g.Node {
+	return gothbadge.Badge(gothbadge.Props{
+		ClassMode: classmode.ClassReplace,
+		Class:     className,
+	}, children...)
+}
+
+func colinBadgeWith(props gothbadge.Props, children ...g.Node) g.Node {
+	props.ClassMode = classmode.ClassReplace
+	return gothbadge.Badge(props, children...)
+}
+
+func appScripts() g.Node {
+	return g.Group([]g.Node{
+		gothhtmx.Script(gothhtmx.ScriptProps{}),
+		h.Script(h.Src("/assets/app.js"), h.Defer()),
+	})
+}
 
 // Page renders the full document shell for the dashboard.
 func Page(snapshot domain.Snapshot, _ time.Time) g.Node {
@@ -22,7 +67,7 @@ func Page(snapshot domain.Snapshot, _ time.Time) g.Node {
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
 			h.Title("Colin Live Tasks"),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
-			h.Script(h.Src("/assets/htmx.min.js"), h.Defer()),
+			appScripts(),
 		),
 		h.Body(
 			h.Class("page-shell"),
@@ -76,7 +121,7 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
 			h.Title("Colin Metadata: "+title),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
-			h.Script(h.Src("/assets/htmx.min.js"), h.Defer()),
+			appScripts(),
 		),
 		h.Body(
 			h.Class("page-shell"),
@@ -94,10 +139,9 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 						),
 						h.Div(
 							h.Class("shell-meta"),
-							h.Div(
-								h.Class("card"),
-								h.Data("testid", "metadata-rendered-at"),
-								h.Span(h.Class("badge badge-info"), g.Text("Rendered")),
+							colinCardWith(
+								gothcard.Props{Class: "card", DataTestID: "metadata-rendered-at"},
+								colinBadge("badge badge-info", g.Text("Rendered")),
 								h.Div(h.Class("issue-title"), g.Text(shellRenderedAt.UTC().Format(time.RFC3339))),
 							),
 						),
@@ -105,9 +149,8 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 				),
 				h.Main(
 					h.Class("dashboard-root"),
-					h.Section(
-						h.Class("table-card"),
-						h.Data("testid", "issue-metadata-panel"),
+					colinCardWith(
+						gothcard.Props{Class: "table-card", DataTestID: "issue-metadata-panel"},
 						h.H3(g.Text("Issue")),
 						h.Div(
 							h.Class("worker-grid"),
@@ -124,9 +167,8 @@ func IssueMetadataPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 						),
 						issueLinks(issue),
 					),
-					h.Section(
-						h.Class("table-card"),
-						h.Data("testid", "issue-metadata-output"),
+					colinCardWith(
+						gothcard.Props{Class: "table-card", DataTestID: "issue-metadata-output"},
 						h.H3(g.Text("Codex output")),
 						h.P(g.Text("Captured output for the latest Colin run on this issue.")),
 						WorkerOutputList(issue.Identifier, metadataOutput(metadata)),
@@ -159,7 +201,7 @@ func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
 			h.Title("Colin ExecPlan: "+title),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
-			h.Script(h.Src("/assets/htmx.min.js"), h.Defer()),
+			appScripts(),
 		),
 		h.Body(
 			h.Class("page-shell"),
@@ -177,10 +219,9 @@ func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 						),
 						h.Div(
 							h.Class("shell-meta"),
-							h.Div(
-								h.Class("card"),
-								h.Data("testid", "exec-plan-rendered-at"),
-								h.Span(h.Class("badge badge-info"), g.Text("Rendered")),
+							colinCardWith(
+								gothcard.Props{Class: "card", DataTestID: "exec-plan-rendered-at"},
+								colinBadge("badge badge-info", g.Text("Rendered")),
 								h.Div(h.Class("issue-title"), g.Text(shellRenderedAt.UTC().Format(time.RFC3339))),
 							),
 						),
@@ -188,9 +229,8 @@ func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 				),
 				h.Main(
 					h.Class("dashboard-root"),
-					h.Section(
-						h.Class("table-card"),
-						h.Data("testid", "issue-exec-plan-panel"),
+					colinCardWith(
+						gothcard.Props{Class: "table-card", DataTestID: "issue-exec-plan-panel"},
 						h.H3(g.Text("Issue")),
 						h.Div(
 							h.Class("worker-grid"),
@@ -201,9 +241,8 @@ func ExecPlanPage(issue domain.Issue, shellRenderedAt time.Time) g.Node {
 						),
 						issueLinks(issue),
 					),
-					h.Section(
-						h.Class("table-card"),
-						h.Data("testid", "issue-exec-plan-body"),
+					colinCardWith(
+						gothcard.Props{Class: "table-card", DataTestID: "issue-exec-plan-body"},
 						h.H3(g.Text("ExecPlan")),
 						h.P(g.Text("This is the canonical plan Colin stored on the Linear issue.")),
 						renderExecPlanBody(plan),
@@ -232,6 +271,7 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 			h.Meta(h.Name("viewport"), h.Content("width=device-width, initial-scale=1")),
 			h.Title("Colin Webhook Setup"),
 			h.Link(h.Rel("stylesheet"), h.Href("/assets/app.css")),
+			appScripts(),
 		),
 		h.Body(
 			h.Class("page-shell"),
@@ -248,10 +288,9 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 						),
 						h.Div(
 							h.Class("shell-meta"),
-							h.Div(
-								h.Class("card"),
-								h.Data("testid", "funnel-status"),
-								h.Span(h.Class("badge badge-info"), g.Text(stateText)),
+							colinCardWith(
+								gothcard.Props{Class: "card", DataTestID: "funnel-status"},
+								colinBadge("badge badge-info", g.Text(stateText)),
 								h.Div(h.Class("issue-title"), g.Text(shellRenderedAt.UTC().Format(time.RFC3339))),
 							),
 						),
@@ -259,9 +298,8 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 				),
 				h.Main(
 					h.Class("dashboard-root"),
-					h.Section(
-						h.Class("table-card"),
-						h.Data("testid", "funnel-urls"),
+					colinCardWith(
+						gothcard.Props{Class: "table-card", DataTestID: "funnel-urls"},
 						h.H3(g.Text("URLs")),
 						h.Div(
 							h.Class("worker-grid"),
@@ -276,37 +314,10 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 						h.P(g.Text("Suggested Serve command: "), h.Code(g.Text(fallback(status.SuggestedServeCommand, "none")))),
 						h.P(g.Text("Suggested Funnel command: "), h.Code(g.Text(fallback(status.SuggestedCommand, "none")))),
 					),
-					h.Section(
-						h.Class("table-card"),
-						h.Data("testid", "funnel-checks"),
+					colinCardWith(
+						gothcard.Props{Class: "table-card", DataTestID: "funnel-checks"},
 						h.H3(g.Text("Checks")),
-						h.Div(
-							h.Class("table-wrap"),
-							h.Table(
-								h.Class("table"),
-								h.THead(
-									h.Tr(
-										h.Th(g.Text("Check")),
-										h.Th(g.Text("Status")),
-										h.Th(g.Text("Detail")),
-									),
-								),
-								h.TBody(g.Map(status.Checks, func(check domain.SetupCheck) g.Node {
-									detail := check.Detail
-									if detail == "" {
-										detail = check.Remediation
-									} else if check.Remediation != "" {
-										detail += " " + check.Remediation
-									}
-									return h.Tr(
-										h.Data("testid", "funnel-check-"+check.ID),
-										h.Td(g.Text(check.Label)),
-										h.Td(g.Text(strings.ToUpper(check.Status))),
-										h.Td(g.Text(fallback(detail, "none"))),
-									)
-								})),
-							),
-						),
+						funnelChecksTable(status.Checks),
 					),
 				),
 				h.Footer(
@@ -320,6 +331,37 @@ func FunnelSetupPage(status domain.FunnelSetupStatus, shellRenderedAt time.Time)
 	))
 }
 
+func funnelChecksTable(checks []domain.SetupCheck) g.Node {
+	rows := make([]gothtable.Row, 0, len(checks))
+	for _, check := range checks {
+		detail := check.Detail
+		if detail == "" {
+			detail = check.Remediation
+		} else if check.Remediation != "" {
+			detail += " " + check.Remediation
+		}
+		rows = append(rows, gothtable.Row{
+			DataTestID: "funnel-check-" + check.ID,
+			CellItems: []gothtable.Cell{
+				{Content: g.Text(check.Label)},
+				{Content: g.Text(strings.ToUpper(check.Status))},
+				{Content: g.Text(fallback(detail, "none"))},
+			},
+		})
+	}
+	return gothtable.Table(gothtable.Props{
+		ClassMode:  classmode.ClassReplace,
+		Class:      "table-wrap",
+		TableClass: "table",
+		Columns: []gothtable.Column{
+			{Header: "Check"},
+			{Header: "Status"},
+			{Header: "Detail"},
+		},
+		Rows: rows,
+	})
+}
+
 // Dashboard renders the HTMX-replaceable dashboard fragment.
 func Dashboard(snapshot domain.Snapshot) g.Node {
 	return h.Main(
@@ -328,6 +370,7 @@ func Dashboard(snapshot domain.Snapshot) g.Node {
 		h.Data("testid", "dashboard-root"),
 		g.Attr("data-live-refresh-mode", "fragment"),
 		g.Attr("hx-get", "/"),
+		g.Attr("hx-trigger", "colin:refresh"),
 		g.Attr("hx-target", "#dashboard-root"),
 		g.Attr("hx-swap", "outerHTML"),
 		toolbar(snapshot),
@@ -348,14 +391,16 @@ func shutdownAlert(snapshot domain.Snapshot) g.Node {
 		return nil
 	}
 
-	return h.Section(
-		h.Class("alert"),
-		h.Class("alert-warning"),
-		h.Data("testid", "shutdown-alert"),
-		g.Attr("aria-live", "polite"),
+	return colinAlertWith(gothalert.Props{
+		Class:      "alert alert-warning",
+		DataTestID: "shutdown-alert",
+		Attributes: []g.Node{
+			g.Attr("aria-live", "polite"),
+		},
+	},
 		h.Div(
 			h.Class("alert-header"),
-			h.Span(h.Class("badge"), h.Class("badge-warning"), h.Data("testid", "shutdown-alert-badge"), g.Text("Warning")),
+			colinBadgeWith(gothbadge.Props{Class: "badge badge-warning", DataTestID: "shutdown-alert-badge"}, g.Text("Warning")),
 			h.Div(h.Class("alert-title"), g.Text("Shutdown in progress")),
 		),
 		h.P(g.Text("Shutdown has begun. Colin will not start new work, and active workers are draining before exit.")),
@@ -364,8 +409,7 @@ func shutdownAlert(snapshot domain.Snapshot) g.Node {
 
 func toolbar(snapshot domain.Snapshot) g.Node {
 	generatedAt := snapshot.GeneratedAt.UTC().Format(time.RFC3339)
-	return h.Section(
-		h.Class("card dashboard-toolbar"),
+	return colinCard("card dashboard-toolbar",
 		h.Div(
 			h.Class("dashboard-title"),
 			h.H2(g.Text("Current task surface")),
@@ -373,23 +417,41 @@ func toolbar(snapshot domain.Snapshot) g.Node {
 		),
 		h.Div(
 			h.Class("toolbar-actions"),
-			h.Span(h.Class("badge badge-success"), h.Data("testid", "refresh-status"), g.Attr("data-refresh-status", "live"), g.Attr("data-generated-at", generatedAt), g.Attr("aria-live", "polite"), g.Attr("title", "Last successful update at "+generatedAt), g.Text("Live data")),
-			h.Span(
-				h.Class("badge badge-accent"),
-				h.Data("testid", "snapshot-age"),
-				g.Attr("data-data-age", "true"),
-				g.Attr("data-generated-at", generatedAt),
-				g.Attr("title", "Snapshot generated at "+generatedAt),
+			colinBadgeWith(
+				gothbadge.Props{
+					Class:      "badge badge-success",
+					DataTestID: "refresh-status",
+					Attributes: []g.Node{
+						g.Attr("data-refresh-status", "live"),
+						g.Attr("data-generated-at", generatedAt),
+						g.Attr("aria-live", "polite"),
+						g.Attr("title", "Last successful update at "+generatedAt),
+					},
+				},
+				g.Text("Live data"),
+			),
+			colinBadgeWith(
+				gothbadge.Props{
+					Class:      "badge badge-accent",
+					DataTestID: "snapshot-age",
+					Attributes: []g.Node{
+						g.Attr("data-data-age", "true"),
+						g.Attr("data-generated-at", generatedAt),
+						g.Attr("title", "Snapshot generated at "+generatedAt),
+					},
+				},
 				g.Text("0s old"),
 			),
-			h.Button(
-				h.Type("button"),
-				h.Class("btn"),
-				h.Class("refresh-toggle"),
-				h.Data("testid", "refresh-button"),
-				g.Attr("data-refresh-toggle", "true"),
-				g.Attr("aria-label", "Pause automatic refresh"),
-				g.Attr("title", "Pause automatic refresh"),
+			colinButtonWith(
+				gothbutton.Props{
+					Class:      "btn refresh-toggle",
+					DataTestID: "refresh-button",
+					Attributes: []g.Node{
+						g.Attr("data-refresh-toggle", "true"),
+						g.Attr("aria-label", "Pause automatic refresh"),
+						g.Attr("title", "Pause automatic refresh"),
+					},
+				},
 				g.Text("❚❚"),
 			),
 		),
@@ -397,8 +459,7 @@ func toolbar(snapshot domain.Snapshot) g.Node {
 }
 
 func statsGrid(snapshot domain.Snapshot) g.Node {
-	return h.Section(
-		h.Class("stats"),
+	return colinCard("stats",
 		statCard("Running", strconv.Itoa(snapshot.Counts["running"]), "active issue workspaces"),
 		statCard("Retrying", strconv.Itoa(snapshot.Counts["retrying"]), "queued follow-up attempts"),
 		statCard("Total Tokens", formatInt(snapshot.CodexTotals.TotalTokens), "aggregate across active runs"),
@@ -407,9 +468,8 @@ func statsGrid(snapshot domain.Snapshot) g.Node {
 }
 
 func stateCountsPanel(snapshot domain.Snapshot) g.Node {
-	return h.Section(
-		h.Class("table-card"),
-		h.Data("testid", "linear-state-counts"),
+	return colinCardWith(
+		gothcard.Props{Class: "table-card", DataTestID: "linear-state-counts"},
 		h.H3(g.Text("Linear issues")),
 		h.P(g.Text("Tracked Linear issues in the active handoff pipeline.")),
 		h.Div(
@@ -441,8 +501,7 @@ func stateDescription(state string) string {
 }
 
 func statCard(title, value, desc string) g.Node {
-	return h.Div(
-		h.Class("stat"),
+	return colinCard("stat",
 		h.Div(h.Class("stat-title"), g.Text(title)),
 		h.Div(h.Class("stat-value"), g.Text(value)),
 		h.Div(h.Class("stat-desc"), g.Text(desc)),
@@ -450,9 +509,7 @@ func statCard(title, value, desc string) g.Node {
 }
 
 func stateCountCard(state string, total int, issues []domain.StateIssueSummary, paused domain.PausedStateSummary) g.Node {
-	return h.Div(
-		h.Class("stat"),
-		h.Class("state-card"),
+	return colinCard("stat state-card",
 		h.Div(h.Class("stat-title"), g.Text(state)),
 		stateCountValue(state, total, issues),
 		h.Div(h.Class("stat-desc"), g.Text(stateDescription(state))),
@@ -489,7 +546,7 @@ func stateIssuesPopover(state string, total int, issues []domain.StateIssueSumma
 			h.Data("testid", "state-issues-"+slug),
 			h.Div(
 				h.Class("state-issues-header"),
-				h.Span(h.Class("badge badge-info"), g.Text(state)),
+				colinBadge("badge badge-info", g.Text(state)),
 				h.Span(h.Class("state-issues-count"), g.Text(label)),
 			),
 			renderStateIssueList(state, issues),
@@ -520,6 +577,7 @@ func renderStateIssueList(state string, issues []domain.StateIssueSummary) g.Nod
 			h.THead(
 				h.Tr(
 					h.Th(g.Text("Issue ID")),
+					h.Th(g.Text("Project")),
 					h.Th(g.Text("Title")),
 				),
 			),
@@ -541,12 +599,49 @@ func renderStateIssueList(state string, issues []domain.StateIssueSummary) g.Nod
 						h.Class("state-issue-row"),
 						h.Data("testid", "state-issue-"+slug+"-"+issue.Identifier),
 						h.Td(issueID),
+						h.Td(g.Text(projectLabel(issue))),
 						h.Td(issueTitle),
 					)
 				}),
 			),
 		),
 	)
+}
+
+func projectLabel(issue domain.StateIssueSummary) string {
+	if label := projectLabelValue(issue.ProjectName); label != "" {
+		return label
+	}
+	if label := projectLabelValue(issue.ProjectSlug); label != "" {
+		return label
+	}
+	return "unknown"
+}
+
+func projectLabelValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) > 13 && value[len(value)-13] == '-' && isHex(value[len(value)-12:]) {
+		return strings.TrimSpace(value[:len(value)-13])
+	}
+	if len(value) == 12 && isHex(value) {
+		return ""
+	}
+	return value
+}
+
+func isHex(value string) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func pausedIndicator(state string, paused domain.PausedStateSummary) g.Node {
@@ -576,8 +671,7 @@ func stateSlug(state string) string {
 }
 
 func metadataStatCard(title, value string) g.Node {
-	return h.Div(
-		h.Class("card"),
+	return colinCard("card",
 		h.Div(h.Class("stat-title"), g.Text(title)),
 		h.Div(h.Class("issue-title"), g.Text(value)),
 	)
@@ -650,9 +744,8 @@ func runningPanel(snapshot domain.Snapshot) g.Node {
 		return emptyPanel("Running tasks", "No active tasks are running at the moment.")
 	}
 
-	return h.Section(
-		h.Class("table-card"),
-		h.Data("testid", "running-panel"),
+	return colinCardWith(
+		gothcard.Props{Class: "table-card", DataTestID: "running-panel"},
 		h.H3(g.Text("Running tasks")),
 		h.P(g.Text("Each worker card shows its live state, token usage, and an expandable Codex event stream.")),
 		h.Div(
@@ -668,44 +761,41 @@ func retryingPanel(snapshot domain.Snapshot) g.Node {
 	}
 
 	now := snapshot.GeneratedAt
-	return h.Section(
-		h.Class("table-card"),
-		h.Data("testid", "retry-panel"),
+	rows := make([]gothtable.Row, 0, len(snapshot.Retrying))
+	for _, entry := range snapshot.Retrying {
+		rows = append(rows, gothtable.Row{
+			DataTestID: "retry-row-" + entry.Identifier,
+			CellItems: []gothtable.Cell{
+				{Content: colinBadge("badge badge-warning", g.Text(entry.Identifier))},
+				{Content: g.Text(strconv.Itoa(entry.Attempt))},
+				{Content: g.Text(formatDuration(entry.DueAt.Sub(now)))},
+				{Content: g.Text(fallback(entry.Error, "waiting for next attempt"))},
+			},
+		})
+	}
+	return colinCardWith(
+		gothcard.Props{Class: "table-card", DataTestID: "retry-panel"},
 		h.H3(g.Text("Retry queue")),
 		h.P(g.Text("Queued issues waiting for the next retry window or open slot.")),
-		h.Div(
-			h.Class("table-wrap"),
-			h.Table(
-				h.Class("table"),
-				h.THead(
-					h.Tr(
-						h.Th(g.Text("Issue")),
-						h.Th(g.Text("Attempt")),
-						h.Th(g.Text("Due")),
-						h.Th(g.Text("Reason")),
-					),
-				),
-				h.TBody(g.Map(snapshot.Retrying, func(entry domain.RetryEntry) g.Node {
-					return h.Tr(
-						h.Data("testid", "retry-row-"+entry.Identifier),
-						h.Td(
-							h.Span(h.Class("badge badge-warning"), g.Text(entry.Identifier)),
-						),
-						h.Td(g.Text(strconv.Itoa(entry.Attempt))),
-						h.Td(g.Text(formatDuration(entry.DueAt.Sub(now)))),
-						h.Td(g.Text(fallback(entry.Error, "waiting for next attempt"))),
-					)
-				})),
-			),
-		),
+		gothtable.Table(gothtable.Props{
+			ClassMode:  classmode.ClassReplace,
+			Class:      "table-wrap",
+			TableClass: "table",
+			Columns: []gothtable.Column{
+				{Header: "Issue"},
+				{Header: "Attempt"},
+				{Header: "Due"},
+				{Header: "Reason"},
+			},
+			Rows: rows,
+		}),
 	)
 }
 
 func rateLimitsPanel(snapshot domain.Snapshot) g.Node {
 	codexLimits, linearLimits := rateLimitRows(snapshot.GeneratedAt, snapshot.RateLimits)
 
-	return h.Section(
-		h.Class("table-card"),
+	return colinCard("table-card",
 		h.H3(g.Text("Rate limits")),
 		h.P(g.Text("Latest limits reported by Codex and Linear.")),
 		h.Div(
@@ -880,8 +970,7 @@ func rateLimitNextAllowed(limit domain.RateLimitWindow) (time.Time, bool) {
 }
 
 func emptyPanel(title, body string) g.Node {
-	return h.Section(
-		h.Class("alert empty-state"),
+	return colinAlertWith(gothalert.Props{Class: "alert empty-state"},
 		h.H3(g.Text(title)),
 		h.P(g.Text(body)),
 	)
@@ -894,7 +983,7 @@ func runningCard(entry domain.SnapshotRunning) g.Node {
 	}
 	issueNode := h.Div(
 		h.Class("worker-issue"),
-		h.Span(h.Class("badge badge-info"), g.Text(entry.Identifier)),
+		colinBadge("badge badge-info", g.Text(entry.Identifier)),
 		titleNode,
 	)
 
@@ -909,25 +998,22 @@ func runningCard(entry domain.SnapshotRunning) g.Node {
 		h.Div(
 			h.Class("worker-header"),
 			issueNode,
-			h.Span(h.Class(stateBadgeClass(entry.State)), g.Text(entry.State)),
+			colinBadge(stateBadgeClass(entry.State), g.Text(entry.State)),
 		),
 		h.Div(
 			h.Class("worker-metrics"),
-			h.Div(
-				h.Class("card"),
+			colinCard("card",
 				h.H3(g.Text("Session")),
 				h.Div(h.Class("metric-line"), g.Text("Session: "+fallback(entry.SessionID, "not assigned"))),
 				h.Div(h.Class("metric-line"), g.Text("Turns: "+strconv.Itoa(entry.TurnCount))),
 				h.Div(h.Class("metric-line"), g.Text("Started: "+entry.StartedAt.Format(time.RFC3339))),
 			),
-			h.Div(
-				h.Class("card"),
+			colinCard("card",
 				h.H3(g.Text("Activity")),
 				h.Div(h.Class("metric-line"), g.Text(fallback(entry.LastMessage, "no message"))),
 				h.Div(h.Class("metric-line"), g.Text("Last event at: "+lastEventAt)),
 			),
-			h.Div(
-				h.Class("card"),
+			colinCard("card",
 				h.H3(g.Text("Usage")),
 				h.Div(h.Class("metric-line"), h.Data("testid", "turn-count-"+entry.Identifier), g.Text("Turns: "+strconv.Itoa(entry.TurnCount))),
 				h.Div(h.Class("metric-line"), g.Text("Input: "+formatInt(entry.InputTokens))),
@@ -1031,7 +1117,7 @@ func WorkerOutputEntry(item domain.OutputLog) g.Node {
 				g.Attr("data-timestamp", timestamp),
 				g.Text(item.Timestamp.UTC().Format("15:04:05 MST")),
 			),
-			h.Span(h.Class(outputEventBadgeClass(item.Event)), g.Text(item.Event)),
+			colinBadge(outputEventBadgeClass(item.Event), g.Text(item.Event)),
 		),
 	}
 	if outputMessageAddsDetail(item.Event, message) {

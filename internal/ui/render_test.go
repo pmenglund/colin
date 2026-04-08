@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	gothhtmx "github.com/pmenglund/goth/htmx"
 	g "maragu.dev/gomponents"
 )
 
@@ -89,6 +90,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	for _, want := range []string{
 		`data-testid="dashboard-root"`,
 		`data-live-refresh-mode="fragment"`,
+		`hx-trigger="colin:refresh"`,
+		`src="` + gothhtmx.ScriptPath + `"`,
+		`src="/assets/app.js"`,
 		`data-testid="refresh-button"`,
 		`data-testid="refresh-status"`,
 		`data-testid="snapshot-age"`,
@@ -178,6 +182,9 @@ func TestPageRendersDashboardShell(t *testing.T) {
 	if strings.Contains(html, `hx-trigger="every 5s"`) {
 		t.Fatalf("render should not include timer-driven polling\n%s", html)
 	}
+	if strings.Contains(html, `src="/assets/htmx.min.js"`) {
+		t.Fatalf("render should not include Colin's former HTMX shim asset\n%s", html)
+	}
 	if strings.Contains(html, "Tracked Issues") {
 		t.Fatalf("render should not include tracked issues summary card\n%s", html)
 	}
@@ -245,10 +252,12 @@ func TestStateIssuePopoverRendersLinks(t *testing.T) {
 
 	html := renderNode(t, stateCountCard("Review", 1, []domain.StateIssueSummary{
 		{
-			ID:         "issue-2",
-			Identifier: "COLIN-94",
-			Title:      "Polish review labels",
-			URL:        "https://linear.app/example/issue/COLIN-94",
+			ID:          "issue-2",
+			Identifier:  "COLIN-94",
+			ProjectName: "goth",
+			ProjectSlug: "goth-be879f2c89f9",
+			Title:       "Polish review labels",
+			URL:         "https://linear.app/example/issue/COLIN-94",
 		},
 	}, domain.PausedStateSummary{}))
 
@@ -258,9 +267,11 @@ func TestStateIssuePopoverRendersLinks(t *testing.T) {
 		`class="table-wrap state-issues-table-wrap"`,
 		`class="table state-issues-table"`,
 		`Issue ID`,
+		`Project`,
 		`Title`,
 		`data-testid="state-issue-review-COLIN-94"`,
 		`class="state-issue-id-link" href="https://linear.app/example/issue/COLIN-94"`,
+		`<td>goth</td>`,
 		`href="/linear/issues/issue-2/metadata"`,
 		`>COLIN-94</a>`,
 		`>Polish review labels</a>`,
@@ -268,6 +279,44 @@ func TestStateIssuePopoverRendersLinks(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)
 		}
+	}
+	for _, unwanted := range []string{`goth-be879f2c89f9`, `be879f2c89f9`} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("render should not expose raw project slug %q\n%s", unwanted, html)
+		}
+	}
+}
+
+func TestProjectLabelStripsLinearHashSuffix(t *testing.T) {
+	t.Parallel()
+
+	got := projectLabel(domain.StateIssueSummary{ProjectSlug: "goth-be879f2c89f9"})
+	if got != "goth" {
+		t.Fatalf("projectLabel() = %q, want goth", got)
+	}
+}
+
+func TestProjectLabelStripsDefaultProjectNameHashSuffix(t *testing.T) {
+	t.Parallel()
+
+	got := projectLabel(domain.StateIssueSummary{
+		ProjectName: "goth-be879f2c89f9",
+		ProjectSlug: "goth-be879f2c89f9",
+	})
+	if got != "goth" {
+		t.Fatalf("projectLabel() = %q, want goth", got)
+	}
+}
+
+func TestProjectLabelDoesNotExposeOpaqueHash(t *testing.T) {
+	t.Parallel()
+
+	got := projectLabel(domain.StateIssueSummary{
+		ProjectName: "be879f2c89f9",
+		ProjectSlug: "be879f2c89f9",
+	})
+	if got != "unknown" {
+		t.Fatalf("projectLabel() = %q, want unknown", got)
 	}
 }
 
@@ -379,6 +428,9 @@ func TestDashboardFragmentOmitsDocumentShell(t *testing.T) {
 	if !strings.Contains(html, `data-live-refresh-mode="fragment"`) {
 		t.Fatalf("fragment missing live refresh mode:\n%s", html)
 	}
+	if !strings.Contains(html, `hx-trigger="colin:refresh"`) {
+		t.Fatalf("fragment missing explicit live refresh trigger:\n%s", html)
+	}
 	if strings.Contains(html, `hx-trigger="every 5s"`) {
 		t.Fatalf("fragment should not render timer-driven polling:\n%s", html)
 	}
@@ -445,7 +497,8 @@ func TestIssueMetadataPageRendersIssueAndOutput(t *testing.T) {
 		`data-testid="issue-metadata-panel"`,
 		`data-testid="issue-metadata-output"`,
 		`data-live-refresh-mode="reload"`,
-		`src="/assets/htmx.min.js"`,
+		`src="` + gothhtmx.ScriptPath + `"`,
+		`src="/assets/app.js"`,
 		`COLIN-111 - Update metadata link`,
 		`ExecPlan decision`,
 		`one_shot`,
@@ -489,7 +542,8 @@ func TestExecPlanPageRendersStoredPlan(t *testing.T) {
 		`data-testid="issue-exec-plan-panel"`,
 		`data-testid="issue-exec-plan-body"`,
 		`data-live-refresh-mode="reload"`,
-		`src="/assets/htmx.min.js"`,
+		`src="` + gothhtmx.ScriptPath + `"`,
+		`src="/assets/app.js"`,
 		`COLIN-135 - ExecPlan attachment`,
 		`attachment-99`,
 		`# Plan`,

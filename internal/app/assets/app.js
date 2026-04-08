@@ -6,19 +6,14 @@
   const dataAgeSelector = "[data-data-age][data-generated-at]";
   const localTimeSelector = "[data-local-time][data-timestamp]";
   const liveRefreshSelector = "[data-live-refresh-mode]";
+  const liveRefreshEvent = "colin:refresh";
   const codexOutputPanelSelector = "[data-codex-output-panel]";
   const codexOutputBodySelector = "[data-codex-output-body]";
   let liveEventSource = null;
-  let refreshInFlight = false;
-  let refreshQueued = false;
   let staleTimer = null;
   let ageTimerStarted = false;
   const codexOutputStreams = new Map();
   const preservedCodexOutputPanels = new Map();
-
-  function findHXTargets(root) {
-    return Array.from(root.querySelectorAll("[hx-get]")).filter((element) => !element.dataset.hxBound);
-  }
 
   function preserveDetailsState(root) {
     Array.from(root.querySelectorAll("details[data-preserve-open]")).forEach((element) => {
@@ -34,62 +29,6 @@
       });
       element.dataset.detailsBound = "true";
     });
-  }
-
-  function requestFragment(element, event) {
-    if (refreshInFlight) {
-      refreshQueued = true;
-      return Promise.resolve();
-    }
-
-    const targetSelector = element.getAttribute("hx-target");
-    const target = targetSelector ? document.querySelector(targetSelector) : element;
-    const swapMode = (element.getAttribute("hx-swap") || "innerHTML").toLowerCase();
-    if (!target) {
-      return Promise.resolve();
-    }
-
-    refreshInFlight = true;
-    return fetch(element.getAttribute("hx-get"), {
-      headers: { "HX-Request": "true" },
-    })
-      .then((response) => {
-        if (!response.ok) {
-          markRefreshStale(`Refresh failed: HTTP ${response.status}`);
-          return null;
-        }
-        return response.text();
-      })
-      .then((html) => {
-        if (html === null) {
-          return;
-        }
-        captureHydratedCodexOutputPanels(target);
-        if (swapMode === "outerhtml") {
-          target.outerHTML = html;
-        } else {
-          target.innerHTML = html;
-        }
-        restoreHydratedCodexOutputPanels(document);
-        if (event) {
-          event.preventDefault();
-        }
-        setTimeout(() => initialize(document), 0);
-      })
-      .catch((error) => {
-        const message = error && error.message ? error.message : "Disconnected while refreshing";
-        markRefreshStale(message);
-      })
-      .finally(() => {
-        refreshInFlight = false;
-        if (refreshQueued) {
-          refreshQueued = false;
-          const nextTarget = currentLiveRefreshTarget() || element;
-          if (nextTarget) {
-            requestFragment(nextTarget);
-          }
-        }
-      });
   }
 
   function refreshStatusBadge() {
@@ -132,27 +71,6 @@
     staleTimer = window.setTimeout(() => {
       markRefreshStale(reason);
     }, 2000);
-  }
-
-  function allowsClickTrigger(element) {
-    const triggers = (element.getAttribute("hx-trigger") || "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return triggers.includes("click");
-  }
-
-  function bindHXClicks(root) {
-    findHXTargets(root).forEach((element) => {
-      element.dataset.hxBound = "true";
-      if (!allowsClickTrigger(element)) {
-        return;
-      }
-      element.addEventListener("click", (event) => {
-        event.preventDefault();
-        requestFragment(element, event);
-      });
-    });
   }
 
   function autoRefreshPaused() {
@@ -394,7 +312,11 @@
     }
     const mode = target.getAttribute("data-live-refresh-mode");
     if (mode === "fragment") {
-      requestFragment(target);
+      if (window.htmx && typeof window.htmx.trigger === "function") {
+        window.htmx.trigger(target, liveRefreshEvent);
+      } else {
+        target.dispatchEvent(new CustomEvent(liveRefreshEvent, { bubbles: true }));
+      }
       return;
     }
     if (mode === "reload") {
@@ -539,7 +461,6 @@
   }
 
   function initialize(root) {
-    bindHXClicks(root);
     preserveDetailsState(root);
     applyRefreshToggle(root);
     bindCodexOutputPanels(root);
@@ -549,9 +470,40 @@
     syncLiveEventSource();
   }
 
+  function htmxRefreshTarget(event) {
+    const target = event.detail && event.detail.target;
+    if (target && target.matches && target.matches(liveRefreshSelector)) {
+      return target;
+    }
+    return null;
+  }
+
+  function markHTMXRefreshStale(event) {
+    const target = htmxRefreshTarget(event);
+    if (!target) {
+      return;
+    }
+    const xhr = event.detail && event.detail.xhr;
+    const status = xhr && xhr.status ? `HTTP ${xhr.status}` : "request failed";
+    markRefreshStale(`Refresh failed: ${status}`);
+  }
+
   window.addEventListener("beforeunload", () => {
     closeAllCodexOutputStreams();
     closeLiveEventSource();
   });
+  document.body.addEventListener("htmx:beforeSwap", (event) => {
+    const target = htmxRefreshTarget(event);
+    if (target) {
+      captureHydratedCodexOutputPanels(target);
+    }
+  });
+  document.body.addEventListener("htmx:afterSwap", () => {
+    restoreHydratedCodexOutputPanels(document);
+    initialize(document);
+  });
+  document.body.addEventListener("htmx:responseError", markHTMXRefreshStale);
+  document.body.addEventListener("htmx:sendError", markHTMXRefreshStale);
+  document.body.addEventListener("htmx:timeout", markHTMXRefreshStale);
   document.addEventListener("DOMContentLoaded", () => initialize(document));
 })();

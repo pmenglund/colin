@@ -3505,6 +3505,67 @@ func TestAppendOutputSkipsAdjacentTerminalDuplicateMessage(t *testing.T) {
 	}
 }
 
+func TestStateIssueSummaryUsesTargetNameForProjectLabel(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo: domain.RepoConfig{Backend: "github"},
+				Targets: []domain.TargetConfig{
+					{
+						Name:        "goth",
+						ProjectSlug: "be879f2c89f9",
+						RepoURL:     "https://github.com/pmenglund/goth",
+					},
+				},
+			},
+		},
+	}
+
+	summary := orch.stateIssueSummary(domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-1",
+		ProjectSlug: "be879f2c89f9",
+		Title:       "Use goth htmx",
+	})
+	if summary.ProjectName != "goth" {
+		t.Fatalf("ProjectName = %q, want goth", summary.ProjectName)
+	}
+	if summary.ProjectSlug != "be879f2c89f9" {
+		t.Fatalf("ProjectSlug = %q, want be879f2c89f9", summary.ProjectSlug)
+	}
+}
+
+func TestStateIssueSummaryDerivesProjectNameFromRepoForOpaqueSlug(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		runtime: Runtime{
+			Config: domain.ServiceConfig{
+				Repo: domain.RepoConfig{Backend: "github"},
+				Targets: []domain.TargetConfig{
+					{
+						Name:        "be879f2c89f9",
+						ProjectSlug: "be879f2c89f9",
+						RepoURL:     "https://github.com/pmenglund/goth",
+					},
+				},
+			},
+		},
+	}
+
+	summary := orch.stateIssueSummary(domain.Issue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-1",
+		ProjectSlug: "be879f2c89f9",
+		Title:       "Use goth htmx",
+	})
+	if summary.ProjectName != "goth" {
+		t.Fatalf("ProjectName = %q, want goth", summary.ProjectName)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }
