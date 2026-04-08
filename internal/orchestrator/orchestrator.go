@@ -332,7 +332,7 @@ func (o *Orchestrator) refreshIssueStateCounts(ctx context.Context) []domain.Iss
 	for _, issue := range issues {
 		counts[issue.State]++
 		if config.ContainsState(dashboardStates, issue.State) {
-			stateIssues[issue.State] = append(stateIssues[issue.State], stateIssueSummary(issue))
+			stateIssues[issue.State] = append(stateIssues[issue.State], o.stateIssueSummary(issue))
 		}
 		if !hasIssueLabel(issue, domain.PausedIssueLabel) {
 			continue
@@ -676,7 +676,7 @@ func (o *Orchestrator) applyObservedStateIssueTransition(issue domain.Issue, pre
 		return
 	}
 
-	summary := stateIssueSummary(issue)
+	summary := o.stateIssueSummary(issue)
 	if strings.TrimSpace(summary.Identifier) == "" {
 		return
 	}
@@ -716,16 +716,88 @@ func (o *Orchestrator) applyObservedStateIssueTransition(issue domain.Issue, pre
 	})
 }
 
-func stateIssueSummary(issue domain.Issue) domain.StateIssueSummary {
+func (o *Orchestrator) stateIssueSummary(issue domain.Issue) domain.StateIssueSummary {
 	summary := domain.StateIssueSummary{
-		ID:         strings.TrimSpace(issue.ID),
-		Identifier: strings.TrimSpace(issue.Identifier),
-		Title:      strings.TrimSpace(issue.Title),
+		ID:          strings.TrimSpace(issue.ID),
+		Identifier:  strings.TrimSpace(issue.Identifier),
+		ProjectSlug: strings.TrimSpace(issue.ProjectSlug),
+		Title:       strings.TrimSpace(issue.Title),
+	}
+	if o != nil {
+		if target, err := domain.ResolveTargetForIssue(o.runtime.Config, issue); err == nil {
+			summary.ProjectName = o.targetProjectDisplayName(target)
+			if strings.TrimSpace(summary.ProjectSlug) == "" {
+				summary.ProjectSlug = strings.TrimSpace(target.ProjectSlug)
+			}
+		}
 	}
 	if issue.URL != nil {
 		summary.URL = strings.TrimSpace(*issue.URL)
 	}
 	return summary
+}
+
+func (o *Orchestrator) targetProjectDisplayName(target domain.TargetConfig) string {
+	if label := friendlyProjectLabel(target.Name); label != "" {
+		return label
+	}
+	if label := friendlyProjectLabel(target.ProjectSlug); label != "" {
+		return label
+	}
+	if o != nil {
+		if adapter, err := repohost.Lookup(o.runtime.Config.Repo.Backend); err == nil {
+			if repo, err := adapter.ParseRepositoryURL(strings.TrimSpace(target.RepoURL)); err == nil {
+				if label := strings.TrimSpace(repo.Name); label != "" {
+					return label
+				}
+			}
+		}
+	}
+	if label := strings.TrimSpace(target.Name); label != "" {
+		return label
+	}
+	return strings.TrimSpace(target.ProjectSlug)
+}
+
+func friendlyProjectLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if prefix, ok := trimProjectHashSuffix(value); ok && prefix != "" {
+		return prefix
+	}
+	if isProjectHash(value) {
+		return ""
+	}
+	return value
+}
+
+func trimProjectHashSuffix(value string) (string, bool) {
+	if len(value) <= 13 || value[len(value)-13] != '-' {
+		return "", false
+	}
+	suffix := value[len(value)-12:]
+	if !isHexString(suffix) {
+		return "", false
+	}
+	return strings.TrimSpace(value[:len(value)-13]), true
+}
+
+func isProjectHash(value string) bool {
+	return len(value) == 12 && isHexString(value)
+}
+
+func isHexString(value string) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func sameStateIssueSummary(left domain.StateIssueSummary, right domain.StateIssueSummary) bool {

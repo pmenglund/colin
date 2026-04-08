@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	gothhtmx "github.com/pmenglund/goth/htmx"
 )
 
 func TestObservabilityServerRoutes(t *testing.T) {
@@ -55,18 +56,20 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			StateIssues: map[string][]domain.StateIssueSummary{
 				"In Progress": {
 					{
-						ID:         "issue-1",
-						Identifier: "COLIN-93",
-						Title:      "Add dashboard",
-						URL:        "https://linear.app/example/issue/COLIN-93",
+						ID:          "issue-1",
+						Identifier:  "COLIN-93",
+						ProjectSlug: "dashboard",
+						Title:       "Add dashboard",
+						URL:         "https://linear.app/example/issue/COLIN-93",
 					},
 				},
 				"Review": {
 					{
-						ID:         "issue-2",
-						Identifier: "COLIN-94",
-						Title:      "Sync review labels",
-						URL:        "https://linear.app/example/issue/COLIN-94",
+						ID:          "issue-2",
+						Identifier:  "COLIN-94",
+						ProjectSlug: "review",
+						Title:       "Sync review labels",
+						URL:         "https://linear.app/example/issue/COLIN-94",
 					},
 				},
 			},
@@ -539,7 +542,15 @@ func TestObservabilityServerRoutes(t *testing.T) {
 	})
 
 	t.Run("assets", func(t *testing.T) {
-		for _, path := range []string{"/assets/app.css", "/assets/htmx.min.js"} {
+		for _, asset := range []struct {
+			path     string
+			contains string
+		}{
+			{path: "/assets/app.css", contains: "--bg"},
+			{path: "/assets/app.js", contains: "colin:refresh"},
+			{path: gothhtmx.ScriptPath, contains: `version:"` + gothhtmx.Version + `"`},
+		} {
+			path := asset.path
 			resp, err := http.Get(server.URL + path)
 			if err != nil {
 				t.Fatalf("GET %s error = %v", path, err)
@@ -551,6 +562,9 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			}
 			if len(body) == 0 {
 				t.Fatalf("%s returned empty body", path)
+			}
+			if !strings.Contains(string(body), asset.contains) {
+				t.Fatalf("%s body missing %q", path, asset.contains)
 			}
 		}
 	})

@@ -3,5 +3,6 @@
 .WORKFLOW.md
 colin
 dist/
+node_modules/
 e2e/playwright/node_modules/**
 WIZARD.md

@@ -15,6 +15,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/ui"
+	gothhtmx "github.com/pmenglund/goth/htmx"
 )
 
 const projectURL = "https://github.com/pmenglund/colin"
@@ -163,6 +164,7 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 	mux.HandleFunc("/linear", notFoundHandler)
 	mux.HandleFunc("/github", notFoundHandler)
 	mux.HandleFunc("/slack", notFoundHandler)
+	mux.Handle(gothhtmx.ScriptPath, gothhtmx.Handler())
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	mux.HandleFunc("/api/v1/issues/", func(w http.ResponseWriter, r *http.Request) {
 		issueID, streamEvents := domain.ParseColinCodexOutputEventsPath(r.URL.EscapedPath())
