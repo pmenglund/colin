@@ -326,8 +326,8 @@ github.com/pierrec/lz4/v4 v4.1.25 h1:kocOqRffaIbU5djlIBr7Wh+cx82C0vtFb0fOurZHqD0
 github.com/pierrec/lz4/v4 v4.1.25/go.mod h1:EoQMVJgeeEOMsCqCzqFm2O0cJvljX2nGZjcRIPL34O4=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgmp0tecUJ0sJuv4pzYCqS9+RGSn52M3FUwPs+uo=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
-github.com/pmenglund/codex-sdk-go v0.0.0-20260207194110-0c4886f6e0ee h1:0iGmYRVxy9HyhW9krTCoE434002UaBHuTT8VF99odqo=
-github.com/pmenglund/codex-sdk-go v0.0.0-20260207194110-0c4886f6e0ee/go.mod h1:CCeCbibaIzsdmyONL6tcIvVYieia0TGRnKThsLvazt0=
+github.com/pmenglund/codex-sdk-go v0.0.0-20260408030246-85726cab232d h1:RrjUW3SaSx4hQ8H0Hwu4h1Ybix7/29A4lXa2pP+FrDU=
+github.com/pmenglund/codex-sdk-go v0.0.0-20260408030246-85726cab232d/go.mod h1:CCeCbibaIzsdmyONL6tcIvVYieia0TGRnKThsLvazt0=
 github.com/pmenglund/goth v0.0.0-20260408022522-c5a67d016da2 h1:G2T/qiFtNFupcX+OdimiBpLDJ3MtYdo4ikWZO0gwzz8=
 github.com/pmenglund/goth v0.0.0-20260408022522-c5a67d016da2/go.mod h1:H1ZQoaBpmfUXbg+A1AWjPN3nGD+x007OuUjZx2NaQMM=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=

@@ -340,6 +340,12 @@ type approvalHandler struct {
 	pid    *int
 }
 
+var _ sdkrpc.ServerRequestHandler = approvalHandler{}
+
+func (h approvalHandler) AccountChatgptAuthTokensRefresh(ctx context.Context, params sdkprotocol.ChatgptAuthTokensRefreshParams) (*sdkprotocol.ChatgptAuthTokensRefreshResponse, error) {
+	return sdk.AutoApproveHandler{Logger: h.logger}.AccountChatgptAuthTokensRefresh(ctx, params)
+}
+
 func (h approvalHandler) ApplyPatchApproval(ctx context.Context, params sdkprotocol.ApplyPatchApprovalParams) (*sdkprotocol.ApplyPatchApprovalResponse, error) {
 	h.emitApproval()
 	return sdk.AutoApproveHandler{Logger: h.logger}.ApplyPatchApproval(ctx, params)
@@ -360,6 +366,15 @@ func (h approvalHandler) ItemFileChangeRequestApproval(ctx context.Context, para
 	return sdk.AutoApproveHandler{Logger: h.logger}.ItemFileChangeRequestApproval(ctx, params)
 }
 
+func (h approvalHandler) ItemPermissionsRequestApproval(ctx context.Context, params sdkprotocol.PermissionsRequestApprovalParams) (*sdkprotocol.PermissionsRequestApprovalResponse, error) {
+	h.emitApproval()
+	return sdk.AutoApproveHandler{Logger: h.logger}.ItemPermissionsRequestApproval(ctx, params)
+}
+
+func (h approvalHandler) ItemToolCall(ctx context.Context, params sdkprotocol.DynamicToolCallParams) (*sdkprotocol.DynamicToolCallResponse, error) {
+	return sdk.AutoApproveHandler{Logger: h.logger}.ItemToolCall(ctx, params)
+}
+
 func (h approvalHandler) ItemToolRequestUserInput(context.Context, sdkprotocol.ToolRequestUserInputParams) (*sdkprotocol.ToolRequestUserInputResponse, error) {
 	if h.emit != nil {
 		h.emit(Event{
@@ -369,6 +384,10 @@ func (h approvalHandler) ItemToolRequestUserInput(context.Context, sdkprotocol.T
 		})
 	}
 	return nil, ErrTurnInputNeeded
+}
+
+func (h approvalHandler) McpServerElicitationRequest(ctx context.Context, params sdkprotocol.McpServerElicitationRequestParams) (*sdkprotocol.McpServerElicitationRequestResponse, error) {
+	return sdk.AutoApproveHandler{Logger: h.logger}.McpServerElicitationRequest(ctx, params)
 }
 
 func (h approvalHandler) emitApproval() {
