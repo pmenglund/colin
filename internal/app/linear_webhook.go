@@ -219,16 +219,17 @@ func linearWebhookEventFromRequest(r *http.Request, envelope linearWebhookEnvelo
 	if len(subjectData) == 0 {
 		subjectData = envelope.Raw
 	}
-	sessionID, issueID, projectID := parseLinearWebhookSubjectData(resourceType, subjectData)
+	sessionID, sourceCommentID, issueID, projectID := parseLinearWebhookSubjectData(resourceType, subjectData)
 	return LinearWebhookEvent{
-		DeliveryID:    deliveryID,
-		Event:         eventName,
-		Action:        strings.TrimSpace(envelope.Action),
-		ResourceType:  resourceType,
-		SessionID:     sessionID,
-		IssueID:       issueID,
-		ProjectID:     projectID,
-		ChangedFields: parseLinearWebhookChangedFields(envelope.UpdatedFrom),
+		DeliveryID:      deliveryID,
+		Event:           eventName,
+		Action:          strings.TrimSpace(envelope.Action),
+		ResourceType:    resourceType,
+		SessionID:       sessionID,
+		SourceCommentID: sourceCommentID,
+		IssueID:         issueID,
+		ProjectID:       projectID,
+		ChangedFields:   parseLinearWebhookChangedFields(envelope.UpdatedFrom),
 	}
 }
 
@@ -269,16 +270,16 @@ func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
 	}
 }
 
-func parseLinearWebhookSubjectData(resourceType string, raw json.RawMessage) (sessionID string, issueID string, projectID string) {
+func parseLinearWebhookSubjectData(resourceType string, raw json.RawMessage) (sessionID string, sourceCommentID string, issueID string, projectID string) {
 	switch strings.ToLower(strings.TrimSpace(resourceType)) {
 	case "issuelabel":
 		issueID, projectID = parseLinearWebhookIssueLabelData(raw)
-		return "", issueID, projectID
+		return "", "", issueID, projectID
 	case "agentsessionevent":
 		return parseLinearWebhookAgentSessionData(raw)
 	default:
 		issueID, projectID = parseLinearWebhookIssueData(raw)
-		return "", issueID, projectID
+		return "", "", issueID, projectID
 	}
 }
 
@@ -322,9 +323,9 @@ func parseLinearWebhookIssueLabelData(raw json.RawMessage) (issueID string, proj
 	return issueID, projectID
 }
 
-func parseLinearWebhookAgentSessionData(raw json.RawMessage) (sessionID string, issueID string, projectID string) {
+func parseLinearWebhookAgentSessionData(raw json.RawMessage) (sessionID string, sourceCommentID string, issueID string, projectID string) {
 	if len(raw) == 0 {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	var payload struct {
 		ID        string `json:"id"`
@@ -341,6 +342,7 @@ func parseLinearWebhookAgentSessionData(raw json.RawMessage) (sessionID string, 
 			ID      string `json:"id"`
 			IssueID string `json:"issueId"`
 			Comment struct {
+				ID      string `json:"id"`
 				IssueID string `json:"issueId"`
 			} `json:"comment"`
 			Issue struct {
@@ -354,12 +356,13 @@ func parseLinearWebhookAgentSessionData(raw json.RawMessage) (sessionID string, 
 		PromptContext string `json:"promptContext"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	sessionID = strings.TrimSpace(payload.AgentSession.ID)
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(payload.ID)
 	}
+	sourceCommentID = strings.TrimSpace(payload.AgentSession.Comment.ID)
 
 	issueID = firstNonEmptyTrimmed(
 		payload.IssueID,
@@ -375,7 +378,7 @@ func parseLinearWebhookAgentSessionData(raw json.RawMessage) (sessionID string, 
 		payload.AgentSession.Issue.ProjectID,
 		payload.AgentSession.Issue.Project.ID,
 	)
-	return sessionID, issueID, projectID
+	return sessionID, sourceCommentID, issueID, projectID
 }
 
 func firstNonEmptyTrimmed(values ...string) string {
