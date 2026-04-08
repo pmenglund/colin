@@ -306,7 +306,12 @@ query TeamProjectList($after: String) {
       endCursor
     }
     nodes {
+      id
       projects(first: 50, includeSubTeams: true) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           name
           slugId
@@ -333,12 +338,28 @@ query TeamProjectList($after: String) {
 			return ErrUnknownPayload
 		}
 		for _, teamNode := range nodes {
+			teamID, _ := stringValue(teamNode["id"])
 			projectNodes, ok := nestedSlice(teamNode, "projects", "nodes")
 			if !ok {
 				return ErrUnknownPayload
 			}
 			for _, projectNode := range projectNodes {
 				appendProjectSummary(projects, projectNode)
+			}
+			hasNext, _ := nestedBool(teamNode, "projects", "pageInfo", "hasNextPage")
+			if !hasNext {
+				continue
+			}
+			endCursor, _ := nestedString(teamNode, "projects", "pageInfo", "endCursor")
+			if strings.TrimSpace(endCursor) == "" {
+				return ErrMissingEndCursor
+			}
+			teamID = strings.TrimSpace(teamID)
+			if teamID == "" {
+				return ErrUnknownPayload
+			}
+			if err := c.appendTeamProjectPages(ctx, projects, teamID, endCursor); err != nil {
+				return err
 			}
 		}
 
@@ -347,6 +368,59 @@ query TeamProjectList($after: String) {
 			break
 		}
 		endCursor, _ := nestedString(resp, "data", "teams", "pageInfo", "endCursor")
+		if strings.TrimSpace(endCursor) == "" {
+			return ErrMissingEndCursor
+		}
+		after = endCursor
+	}
+	return nil
+}
+
+func (c *Client) appendTeamProjectPages(ctx context.Context, projects map[string]ProjectSummary, teamID string, after any) error {
+	const query = `
+query TeamProjectPage($teamID: String!, $after: String) {
+  team(id: $teamID) {
+    projects(first: 50, after: $after, includeSubTeams: true) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        name
+        slugId
+        teams {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+}
+`
+
+	for {
+		resp, err := c.doQuery(ctx, query, map[string]any{"teamID": teamID, "after": after})
+		if err != nil {
+			return err
+		}
+		teamNode, ok := nestedMap(resp, "data", "team")
+		if !ok {
+			return ErrUnknownPayload
+		}
+		projectNodes, ok := nestedSlice(teamNode, "projects", "nodes")
+		if !ok {
+			return ErrUnknownPayload
+		}
+		for _, projectNode := range projectNodes {
+			appendProjectSummary(projects, projectNode)
+		}
+
+		hasNext, _ := nestedBool(teamNode, "projects", "pageInfo", "hasNextPage")
+		if !hasNext {
+			break
+		}
+		endCursor, _ := nestedString(teamNode, "projects", "pageInfo", "endCursor")
 		if strings.TrimSpace(endCursor) == "" {
 			return ErrMissingEndCursor
 		}

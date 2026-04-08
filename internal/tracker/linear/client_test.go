@@ -529,6 +529,7 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 
 	workspaceProjectRequests := 0
 	teamProjectRequests := 0
+	teamProjectPageRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
@@ -615,7 +616,12 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 						},
 						"nodes": []map[string]any{
 							{
+								"id": "team-1",
 								"projects": map[string]any{
+									"pageInfo": map[string]any{
+										"hasNextPage": true,
+										"endCursor":   "team-project-cursor-1",
+									},
 									"nodes": []map[string]any{
 										{
 											"name":   "Alpha",
@@ -631,6 +637,41 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 												"nodes": []map[string]any{{"name": "Subteam"}},
 											},
 										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "query TeamProjectPage"):
+			teamProjectPageRequests++
+			if teamProjectPageRequests != 1 {
+				t.Fatalf("unexpected team project page request count: %d", teamProjectPageRequests)
+			}
+			if !strings.Contains(request.Query, "includeSubTeams: true") {
+				t.Fatalf("TeamProjectPage query = %q, want includeSubTeams", request.Query)
+			}
+			if got, _ := variables["teamID"].(string); got != "team-1" {
+				t.Fatalf("teamID = %q, want team-1", got)
+			}
+			if after != "team-project-cursor-1" {
+				t.Fatalf("after = %q on team project page request, want team-project-cursor-1", after)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"team": map[string]any{
+						"projects": map[string]any{
+							"pageInfo": map[string]any{
+								"hasNextPage": false,
+								"endCursor":   nil,
+							},
+							"nodes": []map[string]any{
+								{
+									"name":   "Gamma",
+									"slugId": "gamma",
+									"teams": map[string]any{
+										"nodes": []map[string]any{{"name": "Subteam"}},
 									},
 								},
 							},
@@ -654,10 +695,13 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	if teamProjectRequests != 1 {
 		t.Fatalf("teamProjectRequests = %d, want 1", teamProjectRequests)
 	}
-	if len(projects) != 3 {
-		t.Fatalf("len(projects) = %d, want 3", len(projects))
+	if teamProjectPageRequests != 1 {
+		t.Fatalf("teamProjectPageRequests = %d, want 1", teamProjectPageRequests)
 	}
-	if projects[0].Slug != "alpha" || projects[1].Slug != "beta" || projects[2].Slug != "zulu" {
+	if len(projects) != 4 {
+		t.Fatalf("len(projects) = %d, want 4", len(projects))
+	}
+	if projects[0].Slug != "alpha" || projects[1].Slug != "beta" || projects[2].Slug != "gamma" || projects[3].Slug != "zulu" {
 		t.Fatalf("projects = %#v, want alphabetical order by name", projects)
 	}
 	if got := projects[0].TeamNames; len(got) != 3 || got[0] != "Platform" || got[1] != "Infra" || got[2] != "Subteam" {
