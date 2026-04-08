@@ -260,7 +260,7 @@ query ProjectList($after: String) {
     nodes {
       name
       slugId
-      teams {
+      teams(first: 10) {
         nodes {
           name
         }
@@ -307,21 +307,7 @@ query TeamProjectList($after: String) {
     }
     nodes {
       id
-      projects(first: 50, includeSubTeams: true) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          name
-          slugId
-          teams {
-            nodes {
-              name
-            }
-          }
-        }
-      }
+      name
     }
   }
 }
@@ -339,26 +325,11 @@ query TeamProjectList($after: String) {
 		}
 		for _, teamNode := range nodes {
 			teamID, _ := stringValue(teamNode["id"])
-			projectNodes, ok := nestedSlice(teamNode, "projects", "nodes")
-			if !ok {
-				return ErrUnknownPayload
-			}
-			for _, projectNode := range projectNodes {
-				appendProjectSummary(projects, projectNode)
-			}
-			hasNext, _ := nestedBool(teamNode, "projects", "pageInfo", "hasNextPage")
-			if !hasNext {
-				continue
-			}
-			endCursor, _ := nestedString(teamNode, "projects", "pageInfo", "endCursor")
-			if strings.TrimSpace(endCursor) == "" {
-				return ErrMissingEndCursor
-			}
 			teamID = strings.TrimSpace(teamID)
 			if teamID == "" {
 				return ErrUnknownPayload
 			}
-			if err := c.appendTeamProjectPages(ctx, projects, teamID, endCursor); err != nil {
+			if err := c.appendTeamProjectPages(ctx, projects, teamID, nil); err != nil {
 				return err
 			}
 		}
@@ -388,7 +359,7 @@ query TeamProjectPage($teamID: String!, $after: String) {
       nodes {
         name
         slugId
-        teams {
+        teams(first: 10) {
           nodes {
             name
           }
