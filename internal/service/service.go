@@ -44,6 +44,7 @@ type slackHomePublisherClient interface {
 const (
 	runtimePreflightTimeout        = 20 * time.Second
 	githubStartupValidationTimeout = 10 * time.Second
+	delegationAckRecentTTL         = 15 * time.Second
 )
 
 var errDuplicateListenerPorts = errors.New("server.port and server.webhook_port must be different when both are enabled")
@@ -65,24 +66,26 @@ var newSlackSocketModeRunner = func(cfg domain.SlackConfig, logger *slog.Logger,
 
 // Service wires startup, workflow reload, and the orchestrator loop into one process lifecycle.
 type Service struct {
-	logger       *slog.Logger
-	logBuffer    *logbuffer.Buffer
-	loader       workflow.Loader
-	workflowPath string
-	options      options
-	serverPort   *int
-	webhookPort  *int
-	serverMu     sync.RWMutex
-	serverURL    string
-	webhookURL   string
-	runtimeMu    sync.RWMutex
-	runtime      orchestrator.Runtime
-	slackMu      sync.RWMutex
-	slackStatus  domain.SlackSocketModeStatus
-	webhookMu    sync.RWMutex
-	webhooks     map[string]domain.WebhookStatus
-	orch         *orchestrator.Orchestrator
-	inspector    tailscaleInspector
+	logger               *slog.Logger
+	logBuffer            *logbuffer.Buffer
+	loader               workflow.Loader
+	workflowPath         string
+	options              options
+	serverPort           *int
+	webhookPort          *int
+	serverMu             sync.RWMutex
+	serverURL            string
+	webhookURL           string
+	runtimeMu            sync.RWMutex
+	runtime              orchestrator.Runtime
+	slackMu              sync.RWMutex
+	slackStatus          domain.SlackSocketModeStatus
+	webhookMu            sync.RWMutex
+	webhooks             map[string]domain.WebhookStatus
+	delegationAckMu      sync.Mutex
+	recentDelegationAcks map[string]time.Time
+	orch                 *orchestrator.Orchestrator
+	inspector            tailscaleInspector
 }
 
 // New constructs the service and loads the initial runtime from WORKFLOW.md.
@@ -99,18 +102,19 @@ func New(ctx context.Context, logger *slog.Logger, workflowPath string, optionFn
 	buffer.Resize(runtime.Config.Server.LogBufferLines)
 	orch := orchestrator.New(runtime, logger)
 	return &Service{
-		logger:       logger,
-		logBuffer:    buffer,
-		loader:       loader,
-		workflowPath: path,
-		options:      options,
-		serverPort:   clonePort(runtime.Config.Server.Port),
-		webhookPort:  clonePort(runtime.Config.Server.WebhookPort),
-		runtime:      runtime,
-		slackStatus:  slackSocketModeStatusForConfig(runtime.Config.Slack),
-		webhooks:     map[string]domain.WebhookStatus{},
-		orch:         orch,
-		inspector:    tsdiag.NewInspector(),
+		logger:               logger,
+		logBuffer:            buffer,
+		loader:               loader,
+		workflowPath:         path,
+		options:              options,
+		serverPort:           clonePort(runtime.Config.Server.Port),
+		webhookPort:          clonePort(runtime.Config.Server.WebhookPort),
+		runtime:              runtime,
+		slackStatus:          slackSocketModeStatusForConfig(runtime.Config.Slack),
+		webhooks:             map[string]domain.WebhookStatus{},
+		recentDelegationAcks: map[string]time.Time{},
+		orch:                 orch,
+		inspector:            tsdiag.NewInspector(),
 	}, nil
 }
 
@@ -723,9 +727,21 @@ func (s *Service) acknowledgeDelegatedLinearIssue(ctx context.Context, runtime o
 	if !shouldPostDelegationAcknowledgement(issue.ColinMetadata, issue.State, ackKind, sessionID) {
 		return
 	}
+	if strings.TrimSpace(event.SourceCommentID) == "" && s.hasRecentDelegationAcknowledgement(issue.ID, issue.State, ackKind, time.Now().UTC()) {
+		return
+	}
+	ackKey := ""
+	if strings.TrimSpace(event.SourceCommentID) != "" {
+		var ok bool
+		ackKey, ok = s.reserveDelegationAcknowledgement(issue.ID, issue.State, ackKind, time.Now().UTC())
+		if !ok {
+			return
+		}
+	}
 
-	commentID, progressRootID, err := postDelegationAcknowledgement(ackCtx, runtime.Tracker, issue, body)
+	commentID, progressRootID, err := postDelegationAcknowledgement(ackCtx, runtime.Tracker, issue, event, body)
 	if err != nil {
+		s.releaseDelegationAcknowledgement(ackKey)
 		s.logger.Warn("failed to post Linear delegation acknowledgement", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
 		return
 	}
@@ -835,10 +851,17 @@ func shouldAcknowledgeDelegationFromLinearEvent(event app.LinearWebhookEvent) bo
 	}
 }
 
-func postDelegationAcknowledgement(ctx context.Context, tracker tracker.Client, issue domain.Issue, body string) (commentID string, progressRootID string, err error) {
+func postDelegationAcknowledgement(ctx context.Context, tracker tracker.Client, issue domain.Issue, event app.LinearWebhookEvent, body string) (commentID string, progressRootID string, err error) {
 	progressRootID = ""
 	if issue.ColinMetadata != nil {
 		progressRootID = strings.TrimSpace(issue.ColinMetadata.ProgressRootCommentID)
+	}
+	if sourceCommentID := strings.TrimSpace(event.SourceCommentID); sourceCommentID != "" {
+		commentID, err = tracker.CreateCommentReply(ctx, issue.ID, sourceCommentID, body)
+		if err != nil {
+			return "", progressRootID, err
+		}
+		return commentID, progressRootID, nil
 	}
 	if progressRootID == "" {
 		commentID, err = tracker.CreateIssueComment(ctx, issue.ID, body)
@@ -887,6 +910,61 @@ func fallbackStateName(state string) string {
 		return trimmed
 	}
 	return "unknown"
+}
+
+func delegationAcknowledgementKey(issueID string, state string, kind string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(issueID),
+		strings.ToLower(strings.TrimSpace(state)),
+		strings.ToLower(strings.TrimSpace(kind)),
+	}, "|")
+}
+
+func (s *Service) reserveDelegationAcknowledgement(issueID string, state string, kind string, now time.Time) (string, bool) {
+	key := delegationAcknowledgementKey(issueID, state, kind)
+	if strings.TrimSpace(key) == "||" {
+		return "", true
+	}
+	s.delegationAckMu.Lock()
+	defer s.delegationAckMu.Unlock()
+	s.pruneRecentDelegationAcknowledgementsLocked(now)
+	if expiresAt, ok := s.recentDelegationAcks[key]; ok && expiresAt.After(now) {
+		return key, false
+	}
+	s.recentDelegationAcks[key] = now.Add(delegationAckRecentTTL)
+	return key, true
+}
+
+func (s *Service) hasRecentDelegationAcknowledgement(issueID string, state string, kind string, now time.Time) bool {
+	key := delegationAcknowledgementKey(issueID, state, kind)
+	if strings.TrimSpace(key) == "||" {
+		return false
+	}
+	s.delegationAckMu.Lock()
+	defer s.delegationAckMu.Unlock()
+	s.pruneRecentDelegationAcknowledgementsLocked(now)
+	expiresAt, ok := s.recentDelegationAcks[key]
+	return ok && expiresAt.After(now)
+}
+
+func (s *Service) releaseDelegationAcknowledgement(key string) {
+	if strings.TrimSpace(key) == "" {
+		return
+	}
+	s.delegationAckMu.Lock()
+	defer s.delegationAckMu.Unlock()
+	delete(s.recentDelegationAcks, key)
+}
+
+func (s *Service) pruneRecentDelegationAcknowledgementsLocked(now time.Time) {
+	if s.recentDelegationAcks == nil {
+		s.recentDelegationAcks = map[string]time.Time{}
+	}
+	for existingKey, expiresAt := range s.recentDelegationAcks {
+		if !expiresAt.After(now) {
+			delete(s.recentDelegationAcks, existingKey)
+		}
+	}
 }
 
 func (s *Service) linearWebhookSecretProvider() app.LinearWebhookSecretProvider {

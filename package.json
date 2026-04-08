@@ -1,0 +1,10 @@
+{
+  "name": "colin-web-ui",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.js -i ./internal/app/assets/app.input.css -o ./internal/app/assets/app.css"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.19"
+  }
+}

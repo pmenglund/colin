@@ -1,18 +1,4 @@
-.collapse {
-  visibility: collapse;
-}
-
-.block {
-  display: block;
-}
-
-.table {
-  display: table;
-}
-
-.rounded {
-  border-radius: 0.25rem;
-}
+@tailwind utilities;
 
 :root {
   --bg: #09111a;
@@ -129,8 +115,7 @@ a {
   border-radius: 1.35rem;
   background: var(--panel);
   box-shadow: var(--shadow);
-  -webkit-backdrop-filter: blur(16px);
-          backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
 }
 
 .card,
@@ -706,18 +691,6 @@ a {
   font-weight: 700;
 }
 
-.metadata-value-link {
-  display: inline-block;
-  color: var(--accent-2);
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-
-.metadata-value-link:hover,
-.metadata-value-link:focus-visible {
-  text-decoration: underline;
-}
-
 .issue-meta,
 .session-meta {
   display: grid;
@@ -814,6 +787,7 @@ a {
   .state-count-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
 }
 
 @media (max-width: 640px) {

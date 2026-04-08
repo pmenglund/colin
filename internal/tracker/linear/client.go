@@ -1064,6 +1064,14 @@ mutation UpsertIssueMetadata($input: AttachmentCreateInput!) {
 		},
 	})
 	if err != nil {
+		if isDuplicateMetadataAttachmentCreateError(err) {
+			existingMetadata, refetchErr := c.fetchIssueMetadataAttachments(ctx, issueID)
+			if refetchErr == nil {
+				if attachment, ok := selectCanonicalMetadataAttachment(existingMetadata); ok {
+					return c.updateIssueMetadata(ctx, attachment.metadata.AttachmentID, metadata)
+				}
+			}
+		}
 		return domain.ColinMetadata{}, err
 	}
 	success, _ := nestedBool(resp, "data", "attachmentCreate", "success")
@@ -2039,9 +2047,8 @@ func parseColinMetadataAttachment(node map[string]any) (domain.ColinMetadata, er
 }
 
 func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachment, error) {
-	title, _ := stringValue(node["title"])
 	url, _ := stringValue(node["url"])
-	if strings.TrimSpace(title) != colinMetadataAttachmentTitle || !isColinMetadataURL(url) {
+	if !isColinMetadataURL(url) {
 		return colinMetadataAttachment{}, errors.New("not a Colin metadata attachment")
 	}
 
@@ -2141,6 +2148,39 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 		createdAt: parseAttachmentTimestamp(node["createdAt"]),
 		updatedAt: parseAttachmentTimestamp(node["updatedAt"]),
 	}, nil
+}
+
+func isDuplicateMetadataAttachmentCreateError(err error) bool {
+	if err == nil || !errors.Is(err, ErrGraphQLErrors) {
+		return false
+	}
+	var response *graphQLErrorResponse
+	if !errors.As(err, &response) || len(response.raw) == 0 {
+		return false
+	}
+	for _, item := range response.raw {
+		message, _ := stringValue(item["message"])
+		message = strings.ToLower(strings.TrimSpace(message))
+		if !strings.Contains(message, "duplicate url") {
+			return false
+		}
+		path, ok := item["path"].([]any)
+		if !ok {
+			continue
+		}
+		matched := false
+		for _, part := range path {
+			value, _ := stringValue(part)
+			if value == "attachmentCreate" {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) {

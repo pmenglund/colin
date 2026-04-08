@@ -4,14 +4,18 @@ go 1.26.1
 
 require gopkg.in/yaml.v3 v3.0.1
 
-require github.com/pmenglund/codex-sdk-go v0.0.0-20260207194110-0c4886f6e0ee
+require github.com/pmenglund/codex-sdk-go v0.0.0-20260408030246-85726cab232d
 
 require (
 	charm.land/bubbletea/v2 v2.0.2
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/google/go-github/v79 v79.0.0
 	github.com/google/gops v0.3.29
+	github.com/pmenglund/goth v0.0.0-20260408022522-c5a67d016da2
+	github.com/slack-go/slack v0.20.0
 	github.com/spf13/cobra v1.10.2
+	github.com/whilp/git-urls v1.0.0
 	maragu.dev/gomponents v1.2.0
 	tailscale.com v1.96.5
 )
@@ -36,7 +40,6 @@ require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
-	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect
@@ -153,7 +156,6 @@ require (
 	github.com/puzpuzpuz/xsync/v4 v4.4.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sajari/fuzzy v1.0.0 // indirect
-	github.com/slack-go/slack v0.20.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
@@ -162,7 +164,6 @@ require (
 	github.com/u-root/u-root v0.15.1-0.20251208185023-2f8c7e763cf8 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
-	github.com/whilp/git-urls v1.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/ysmood/fetchup v0.2.3 // indirect

@@ -1791,10 +1791,11 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	}
 
 	result := svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
-		ResourceType: "AgentSessionEvent",
-		Action:       "created",
-		IssueID:      "issue-1",
-		SessionID:    "session-1",
+		ResourceType:    "AgentSessionEvent",
+		Action:          "created",
+		IssueID:         "issue-1",
+		SessionID:       "session-1",
+		SourceCommentID: "comment-source-1",
 	})
 	if !result.Relevant {
 		t.Fatal("Relevant = false, want true")
@@ -1805,21 +1806,24 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	if !strings.Contains(tracker.agentActivities[0], "will start work") {
 		t.Fatalf("agent activity = %q, want start-work acknowledgement", tracker.agentActivities[0])
 	}
-	if got := len(tracker.issueComments); got != 1 {
-		t.Fatalf("issueComments length = %d, want 1", got)
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length = %d, want 0", got)
 	}
-	if got := len(tracker.commentReplies); got != 0 {
-		t.Fatalf("commentReplies length = %d, want 0", got)
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
 	}
-	if !strings.Contains(tracker.issueComments[0], "will start work") {
-		t.Fatalf("issue comment = %q, want start-work acknowledgement", tracker.issueComments[0])
+	if got := tracker.replyParentIDs[0]; got != "comment-source-1" {
+		t.Fatalf("reply parent id = %q, want comment-source-1", got)
+	}
+	if !strings.Contains(tracker.commentReplies[0], "will start work") {
+		t.Fatalf("comment reply = %q, want start-work acknowledgement", tracker.commentReplies[0])
 	}
 	metadata := tracker.issueByID["issue-1"].ColinMetadata
 	if metadata == nil {
 		t.Fatal("issue metadata = nil, want persisted acknowledgement metadata")
 	}
-	if metadata.ProgressRootCommentID != "root" {
-		t.Fatalf("ProgressRootCommentID = %q, want root", metadata.ProgressRootCommentID)
+	if metadata.ProgressRootCommentID != "" {
+		t.Fatalf("ProgressRootCommentID = %q, want empty for agent-thread acknowledgement", metadata.ProgressRootCommentID)
 	}
 	if metadata.DelegationAckKind != "ready" {
 		t.Fatalf("DelegationAckKind = %q, want ready", metadata.DelegationAckKind)
@@ -1832,10 +1836,11 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	}
 
 	result = svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
-		ResourceType: "AgentSessionEvent",
-		Action:       "created",
-		IssueID:      "issue-1",
-		SessionID:    "session-1",
+		ResourceType:    "AgentSessionEvent",
+		Action:          "created",
+		IssueID:         "issue-1",
+		SessionID:       "session-1",
+		SourceCommentID: "comment-source-1",
 	})
 	if !result.Relevant {
 		t.Fatal("Relevant after duplicate created delivery = false, want true")
@@ -1843,11 +1848,11 @@ func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	if got := len(tracker.agentActivities); got != 1 {
 		t.Fatalf("agentActivities length after duplicate created delivery = %d, want 1", got)
 	}
-	if got := len(tracker.issueComments); got != 1 {
-		t.Fatalf("issueComments length after duplicate created delivery = %d, want 1", got)
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length after duplicate created delivery = %d, want 0", got)
 	}
-	if got := len(tracker.commentReplies); got != 0 {
-		t.Fatalf("commentReplies length after duplicate created delivery = %d, want 0", got)
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length after duplicate created delivery = %d, want 1", got)
 	}
 }
 
@@ -1887,10 +1892,11 @@ func TestLinearWebhookTriggerExplainsRequiredStateWhenDelegatedIssueIsNotDispatc
 	}
 
 	result := svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
-		ResourceType: "AgentSessionEvent",
-		Action:       "created",
-		IssueID:      "issue-1",
-		SessionID:    "session-2",
+		ResourceType:    "AgentSessionEvent",
+		Action:          "created",
+		IssueID:         "issue-1",
+		SessionID:       "session-2",
+		SourceCommentID: "comment-source-2",
 	})
 	if !result.Relevant {
 		t.Fatal("Relevant = false, want true")
@@ -1901,8 +1907,67 @@ func TestLinearWebhookTriggerExplainsRequiredStateWhenDelegatedIssueIsNotDispatc
 	if got := len(tracker.commentReplies); got != 1 {
 		t.Fatalf("commentReplies length = %d, want 1", got)
 	}
+	if got := tracker.replyParentIDs[0]; got != "comment-source-2" {
+		t.Fatalf("reply parent id = %q, want comment-source-2", got)
+	}
 	if !strings.Contains(tracker.commentReplies[0], "move it to one of: `Todo`, `Merge`") {
 		t.Fatalf("comment reply = %q, want waiting-state acknowledgement", tracker.commentReplies[0])
+	}
+}
+
+func TestLinearWebhookTriggerSuppressesDuplicateAcknowledgementAcrossImmediateWebhookPair(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{
+		upsertMetadataErr: errors.New("persist failed"),
+		issueByID: map[string]domain.Issue{
+			"issue-1": {
+				ID:               "issue-1",
+				Identifier:       "COLIN-192",
+				Title:            "Deduplicate paired webhooks",
+				ProjectID:        "project-1",
+				State:            "Backlog",
+				DelegatedToColin: true,
+			},
+		},
+	}
+	svc := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					AppMode:      true,
+					ActiveStates: []string{"Todo", "In Progress"},
+				},
+				Repo: domain.RepoConfig{
+					PublishStates: []string{"Review"},
+					MergeStates:   []string{"Merge"},
+				},
+			},
+			Tracker: tracker,
+		},
+	}
+
+	svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType:    "AgentSessionEvent",
+		Action:          "created",
+		IssueID:         "issue-1",
+		SessionID:       "session-3",
+		SourceCommentID: "comment-source-3",
+	})
+	svc.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType:  "Issue",
+		Action:        "update",
+		IssueID:       "issue-1",
+		ProjectID:     "project-1",
+		ChangedFields: []string{"delegateid"},
+	})
+
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
+	}
+	if got := len(tracker.issueComments); got != 0 {
+		t.Fatalf("issueComments length = %d, want 0", got)
 	}
 }
 
@@ -2225,7 +2290,9 @@ type serviceTrackerStub struct {
 	agentActivities   []string
 	issueComments     []string
 	commentReplies    []string
+	replyParentIDs    []string
 	watchedProjectIDs []string
+	upsertMetadataErr error
 }
 
 func (s *serviceTrackerStub) WatchedProjectIDs() []string {
@@ -2465,7 +2532,8 @@ func (s *serviceTrackerStub) CreateIssueComment(_ context.Context, _ string, bod
 	return "root", nil
 }
 
-func (s *serviceTrackerStub) CreateCommentReply(_ context.Context, _ string, _ string, body string) (string, error) {
+func (s *serviceTrackerStub) CreateCommentReply(_ context.Context, _ string, parentCommentID string, body string) (string, error) {
+	s.replyParentIDs = append(s.replyParentIDs, parentCommentID)
 	s.commentReplies = append(s.commentReplies, body)
 	return "reply", nil
 }
@@ -2476,6 +2544,9 @@ func (s *serviceTrackerStub) CreateAgentActivityThought(_ context.Context, _ str
 }
 
 func (s *serviceTrackerStub) UpsertIssueMetadata(_ context.Context, issueID string, metadata domain.ColinMetadata) (domain.ColinMetadata, error) {
+	if s.upsertMetadataErr != nil {
+		return domain.ColinMetadata{}, s.upsertMetadataErr
+	}
 	if s.issueByID == nil {
 		s.issueByID = map[string]domain.Issue{}
 	}

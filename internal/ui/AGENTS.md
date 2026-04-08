@@ -5,7 +5,7 @@
 - HTML must be produced with gomponents (no html/template).
 - Use htmx for client-side interactions (server returns HTML fragments).
 - Tailwind + daisyUI for styling; compiled CSS must be embedded and served from the binary.
-- Vendored browser JS (htmx.min.js) must be embedded and served from the binary.
+- Serve stock htmx from goth's embedded runtime and keep Colin-specific browser JS in an embedded app asset.
 - Do not read templates/assets from disk at runtime.
 
 ## Embedding

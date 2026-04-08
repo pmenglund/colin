@@ -219,6 +219,7 @@ Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen c
 - If the same failure repeats 3 times in a row for the same run type and issue state, Colin adds the `paused` label, posts a `[colin]` explanation, and stops retrying until a human removes the label.
 - Colin uses `Refine` for clarification-only handoffs that do not yet have reviewable code or a PR.
 - Colin also exposes the same live orchestrator snapshot through a loopback web UI at `/`, JSON state at `/api/v1/state`, and buffered internal logs at `/api/v1/logs`.
+- In Linear app mode, the first delegation acknowledgement now replies in the agent-session thread when Linear provides a source comment id, which clears the Linear `Did not respond` badge for that delegation. Colin still keeps its normal per-issue progress thread for later status updates.
 
 ## Optional Slack Integration
 

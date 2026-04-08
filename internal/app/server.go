@@ -15,6 +15,7 @@ import (
 
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/ui"
+	gothhtmx "github.com/pmenglund/goth/htmx"
 )
 
 const projectURL = "https://github.com/pmenglund/colin"
@@ -36,14 +37,15 @@ type SnapshotStreamProvider func(context.Context) (domain.SnapshotUpdate, <-chan
 
 // LinearWebhookEvent captures the minimal webhook context needed to trigger orchestration.
 type LinearWebhookEvent struct {
-	DeliveryID    string
-	Event         string
-	Action        string
-	ResourceType  string
-	SessionID     string
-	IssueID       string
-	ProjectID     string
-	ChangedFields []string
+	DeliveryID      string
+	Event           string
+	Action          string
+	ResourceType    string
+	SessionID       string
+	SourceCommentID string
+	IssueID         string
+	ProjectID       string
+	ChangedFields   []string
 }
 
 // LinearWebhookTriggerResult describes how the service handled a validated webhook delivery.
@@ -162,6 +164,7 @@ func NewUIHandler(provider SnapshotProvider, issueProvider IssueProvider, setupP
 	mux.HandleFunc("/linear", notFoundHandler)
 	mux.HandleFunc("/github", notFoundHandler)
 	mux.HandleFunc("/slack", notFoundHandler)
+	mux.Handle(gothhtmx.ScriptPath, gothhtmx.Handler())
 	mux.Handle("/assets/", cacheControl("public, max-age=3600", http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	mux.HandleFunc("/api/v1/issues/", func(w http.ResponseWriter, r *http.Request) {
 		issueID, streamEvents := domain.ParseColinCodexOutputEventsPath(r.URL.EscapedPath())

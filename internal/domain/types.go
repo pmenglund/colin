@@ -634,10 +634,12 @@ type PausedStateSummary struct {
 
 // StateIssueSummary is the minimal issue metadata needed to render per-state issue lists in the UI.
 type StateIssueSummary struct {
-	ID         string `json:"id"`
-	Identifier string `json:"identifier"`
-	Title      string `json:"title"`
-	URL        string `json:"url,omitempty"`
+	ID          string `json:"id"`
+	Identifier  string `json:"identifier"`
+	ProjectName string `json:"project_name,omitempty"`
+	ProjectSlug string `json:"project_slug,omitempty"`
+	Title       string `json:"title"`
+	URL         string `json:"url,omitempty"`
 }
 
 // Snapshot is a read-only summary of orchestrator state for observability.

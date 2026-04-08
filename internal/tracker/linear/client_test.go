@@ -1490,6 +1490,111 @@ func TestUpsertIssueMetadata(t *testing.T) {
 	}
 }
 
+func TestUpsertIssueMetadataRecoversFromDuplicateURLCreateError(t *testing.T) {
+	t.Parallel()
+
+	var (
+		queryCount      int
+		createCount     int
+		updateCount     int
+		gotAttachmentID string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "query IssueMetadataAttachments"):
+			queryCount++
+			nodes := []map[string]any{}
+			if queryCount > 1 {
+				nodes = []map[string]any{
+					{
+						"id":        "attachment-existing",
+						"title":     "Legacy Colin metadata",
+						"url":       "https://colin.example.test/root/linear/issues/issue-1/metadata",
+						"createdAt": "2026-03-29T17:00:00Z",
+						"updatedAt": "2026-03-29T17:01:00Z",
+						"metadata":  map[string]any{},
+					},
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"attachments": map[string]any{
+							"nodes": nodes,
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpsertIssueMetadata"):
+			createCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"errors": []map[string]any{
+					{
+						"message": "duplicate url",
+						"path":    []any{"attachmentCreate"},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation UpdateIssueMetadata"):
+			updateCount++
+			gotAttachmentID, _ = request.Variables["id"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentUpdate": map[string]any{
+						"success": true,
+						"attachment": map[string]any{
+							"id":       gotAttachmentID,
+							"title":    "Colin metadata",
+							"url":      "https://colin.example.test/root/linear/issues/issue-1/metadata",
+							"metadata": map[string]any{"slack_message_ts": "1743270000.444444"},
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint:  server.URL,
+		apiKey:    "token",
+		uiBaseURL: "https://colin.example.test/root/",
+		client:    &http.Client{Timeout: 5 * time.Second},
+	}
+
+	metadata, err := client.UpsertIssueMetadata(context.Background(), "issue-1", domain.ColinMetadata{
+		SlackMessageTS: "1743270000.444444",
+	})
+	if err != nil {
+		t.Fatalf("UpsertIssueMetadata() error = %v", err)
+	}
+	if queryCount != 2 {
+		t.Fatalf("queryCount = %d, want 2", queryCount)
+	}
+	if createCount != 1 {
+		t.Fatalf("createCount = %d, want 1", createCount)
+	}
+	if updateCount != 1 {
+		t.Fatalf("updateCount = %d, want 1", updateCount)
+	}
+	if gotAttachmentID != "attachment-existing" {
+		t.Fatalf("attachment id = %q, want %q", gotAttachmentID, "attachment-existing")
+	}
+	if metadata.AttachmentID != "attachment-existing" {
+		t.Fatalf("metadata.AttachmentID = %q, want %q", metadata.AttachmentID, "attachment-existing")
+	}
+}
+
 func TestUpsertIssueMetadataUsesDynamicPublicURLResolver(t *testing.T) {
 	t.Parallel()
 
