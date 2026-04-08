@@ -527,10 +527,10 @@ func TestFindIssueByIdentifierReturnsNotFound(t *testing.T) {
 func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	t.Parallel()
 
-	requestCount := 0
+	workspaceProjectRequests := 0
+	teamProjectRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		requestCount++
 
 		var request struct {
 			Query     string         `json:"query"`
@@ -539,53 +539,99 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("Decode() error = %v", err)
 		}
-		if !strings.Contains(request.Query, "ProjectList") {
-			t.Fatalf("unexpected query: %s", request.Query)
-		}
 
 		variables := request.Variables
 		after, _ := variables["after"].(string)
-		switch requestCount {
-		case 1:
-			if after != "" {
-				t.Fatalf("after = %q on first request, want empty", after)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"data": map[string]any{
-					"projects": map[string]any{
-						"pageInfo": map[string]any{
-							"hasNextPage": true,
-							"endCursor":   "cursor-1",
-						},
-						"nodes": []map[string]any{
-							{
-								"name":   "Zulu",
-								"slugId": "zulu",
-								"teams": map[string]any{
-									"nodes": []map[string]any{{"name": "Product"}},
+		switch {
+		case strings.Contains(request.Query, "query ProjectList"):
+			workspaceProjectRequests++
+			switch workspaceProjectRequests {
+			case 1:
+				if after != "" {
+					t.Fatalf("after = %q on first workspace request, want empty", after)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"projects": map[string]any{
+							"pageInfo": map[string]any{
+								"hasNextPage": true,
+								"endCursor":   "cursor-1",
+							},
+							"nodes": []map[string]any{
+								{
+									"name":   "Zulu",
+									"slugId": "zulu",
+									"teams": map[string]any{
+										"nodes": []map[string]any{{"name": "Product"}},
+									},
 								},
 							},
 						},
 					},
-				},
-			})
-		case 2:
-			if after != "cursor-1" {
-				t.Fatalf("after = %q on second request, want cursor-1", after)
+				})
+			case 2:
+				if after != "cursor-1" {
+					t.Fatalf("after = %q on second workspace request, want cursor-1", after)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"projects": map[string]any{
+							"pageInfo": map[string]any{
+								"hasNextPage": false,
+								"endCursor":   nil,
+							},
+							"nodes": []map[string]any{
+								{
+									"name":   "Alpha",
+									"slugId": "alpha",
+									"teams": map[string]any{
+										"nodes": []map[string]any{{"name": "Platform"}, {"name": "Infra"}},
+									},
+								},
+							},
+						},
+					},
+				})
+			default:
+				t.Fatalf("unexpected workspace project request count: %d", workspaceProjectRequests)
+			}
+		case strings.Contains(request.Query, "query TeamProjectList"):
+			teamProjectRequests++
+			if teamProjectRequests != 1 {
+				t.Fatalf("unexpected team project request count: %d", teamProjectRequests)
+			}
+			if after != "" {
+				t.Fatalf("after = %q on team request, want empty", after)
+			}
+			if !strings.Contains(request.Query, "includeSubTeams: true") {
+				t.Fatalf("TeamProjectList query = %q, want includeSubTeams", request.Query)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
-					"projects": map[string]any{
+					"teams": map[string]any{
 						"pageInfo": map[string]any{
 							"hasNextPage": false,
 							"endCursor":   nil,
 						},
 						"nodes": []map[string]any{
 							{
-								"name":   "Alpha",
-								"slugId": "alpha",
-								"teams": map[string]any{
-									"nodes": []map[string]any{{"name": "Platform"}, {"name": "Infra"}},
+								"projects": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"name":   "Alpha",
+											"slugId": "alpha",
+											"teams": map[string]any{
+												"nodes": []map[string]any{{"name": "Platform"}, {"name": "Subteam"}},
+											},
+										},
+										{
+											"name":   "Beta",
+											"slugId": "beta",
+											"teams": map[string]any{
+												"nodes": []map[string]any{{"name": "Subteam"}},
+											},
+										},
+									},
 								},
 							},
 						},
@@ -593,7 +639,7 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 				},
 			})
 		default:
-			t.Fatalf("unexpected request count: %d", requestCount)
+			t.Fatalf("unexpected query: %s", request.Query)
 		}
 	}))
 	defer server.Close()
@@ -602,17 +648,20 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProjects() error = %v", err)
 	}
-	if requestCount != 2 {
-		t.Fatalf("requestCount = %d, want 2", requestCount)
+	if workspaceProjectRequests != 2 {
+		t.Fatalf("workspaceProjectRequests = %d, want 2", workspaceProjectRequests)
 	}
-	if len(projects) != 2 {
-		t.Fatalf("len(projects) = %d, want 2", len(projects))
+	if teamProjectRequests != 1 {
+		t.Fatalf("teamProjectRequests = %d, want 1", teamProjectRequests)
 	}
-	if projects[0].Slug != "alpha" || projects[1].Slug != "zulu" {
+	if len(projects) != 3 {
+		t.Fatalf("len(projects) = %d, want 3", len(projects))
+	}
+	if projects[0].Slug != "alpha" || projects[1].Slug != "beta" || projects[2].Slug != "zulu" {
 		t.Fatalf("projects = %#v, want alphabetical order by name", projects)
 	}
-	if got := projects[0].TeamNames; len(got) != 2 || got[0] != "Platform" || got[1] != "Infra" {
-		t.Fatalf("projects[0].TeamNames = %#v, want [Platform Infra]", got)
+	if got := projects[0].TeamNames; len(got) != 3 || got[0] != "Platform" || got[1] != "Infra" || got[2] != "Subteam" {
+		t.Fatalf("projects[0].TeamNames = %#v, want [Platform Infra Subteam]", got)
 	}
 }
 

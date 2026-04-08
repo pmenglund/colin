@@ -226,6 +226,30 @@ func (c *Client) ValidateWorkflowStates(ctx context.Context, cfg domain.ServiceC
 func ListProjects(ctx context.Context, endpoint string, apiKey string) ([]ProjectSummary, error) {
 	client := newStaticAPIClient(endpoint, apiKey)
 
+	projectsBySlug := map[string]ProjectSummary{}
+	if err := client.appendWorkspaceProjects(ctx, projectsBySlug); err != nil {
+		return nil, err
+	}
+	if err := client.appendTeamProjects(ctx, projectsBySlug); err != nil {
+		return nil, err
+	}
+
+	projects := make([]ProjectSummary, 0, len(projectsBySlug))
+	for _, project := range projectsBySlug {
+		projects = append(projects, project)
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		leftName := strings.ToLower(strings.TrimSpace(projects[i].Name))
+		rightName := strings.ToLower(strings.TrimSpace(projects[j].Name))
+		if leftName == rightName {
+			return strings.ToLower(projects[i].Slug) < strings.ToLower(projects[j].Slug)
+		}
+		return leftName < rightName
+	})
+	return projects, nil
+}
+
+func (c *Client) appendWorkspaceProjects(ctx context.Context, projects map[string]ProjectSummary) error {
 	const query = `
 query ProjectList($after: String) {
   projects(first: 50, after: $after) {
@@ -246,41 +270,18 @@ query ProjectList($after: String) {
 }
 `
 
-	var (
-		after    any
-		projects []ProjectSummary
-	)
+	var after any
 	for {
-		resp, err := client.doQuery(ctx, query, map[string]any{"after": after})
+		resp, err := c.doQuery(ctx, query, map[string]any{"after": after})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		nodes, ok := nestedSlice(resp, "data", "projects", "nodes")
 		if !ok {
-			return nil, ErrUnknownPayload
+			return ErrUnknownPayload
 		}
 		for _, node := range nodes {
-			name, _ := stringValue(node["name"])
-			slug, _ := stringValue(node["slugId"])
-			name = strings.TrimSpace(name)
-			slug = strings.TrimSpace(slug)
-			if name == "" || slug == "" {
-				continue
-			}
-			project := ProjectSummary{
-				Name: name,
-				Slug: slug,
-			}
-			if teamNodes, ok := nestedSlice(node, "teams", "nodes"); ok {
-				for _, teamNode := range teamNodes {
-					teamName, _ := stringValue(teamNode["name"])
-					teamName = strings.TrimSpace(teamName)
-					if teamName != "" {
-						project.TeamNames = append(project.TeamNames, teamName)
-					}
-				}
-			}
-			projects = append(projects, project)
+			appendProjectSummary(projects, node)
 		}
 
 		hasNext, _ := nestedBool(resp, "data", "projects", "pageInfo", "hasNextPage")
@@ -289,20 +290,108 @@ query ProjectList($after: String) {
 		}
 		endCursor, _ := nestedString(resp, "data", "projects", "pageInfo", "endCursor")
 		if strings.TrimSpace(endCursor) == "" {
-			return nil, ErrMissingEndCursor
+			return ErrMissingEndCursor
 		}
 		after = endCursor
 	}
+	return nil
+}
 
-	sort.Slice(projects, func(i, j int) bool {
-		leftName := strings.ToLower(strings.TrimSpace(projects[i].Name))
-		rightName := strings.ToLower(strings.TrimSpace(projects[j].Name))
-		if leftName == rightName {
-			return strings.ToLower(projects[i].Slug) < strings.ToLower(projects[j].Slug)
+func (c *Client) appendTeamProjects(ctx context.Context, projects map[string]ProjectSummary) error {
+	const query = `
+query TeamProjectList($after: String) {
+  teams(first: 50, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      projects(first: 50, includeSubTeams: true) {
+        nodes {
+          name
+          slugId
+          teams {
+            nodes {
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`
+
+	var after any
+	for {
+		resp, err := c.doQuery(ctx, query, map[string]any{"after": after})
+		if err != nil {
+			return err
 		}
-		return leftName < rightName
-	})
-	return projects, nil
+		nodes, ok := nestedSlice(resp, "data", "teams", "nodes")
+		if !ok {
+			return ErrUnknownPayload
+		}
+		for _, teamNode := range nodes {
+			projectNodes, ok := nestedSlice(teamNode, "projects", "nodes")
+			if !ok {
+				return ErrUnknownPayload
+			}
+			for _, projectNode := range projectNodes {
+				appendProjectSummary(projects, projectNode)
+			}
+		}
+
+		hasNext, _ := nestedBool(resp, "data", "teams", "pageInfo", "hasNextPage")
+		if !hasNext {
+			break
+		}
+		endCursor, _ := nestedString(resp, "data", "teams", "pageInfo", "endCursor")
+		if strings.TrimSpace(endCursor) == "" {
+			return ErrMissingEndCursor
+		}
+		after = endCursor
+	}
+	return nil
+}
+
+func appendProjectSummary(projects map[string]ProjectSummary, node map[string]any) {
+	name, _ := stringValue(node["name"])
+	slug, _ := stringValue(node["slugId"])
+	name = strings.TrimSpace(name)
+	slug = strings.TrimSpace(slug)
+	if name == "" || slug == "" {
+		return
+	}
+
+	project := ProjectSummary{
+		Name: name,
+		Slug: slug,
+	}
+	if teamNodes, ok := nestedSlice(node, "teams", "nodes"); ok {
+		for _, teamNode := range teamNodes {
+			teamName, _ := stringValue(teamNode["name"])
+			teamName = strings.TrimSpace(teamName)
+			if teamName != "" {
+				project.TeamNames = append(project.TeamNames, teamName)
+			}
+		}
+	}
+
+	if existing, ok := projects[slug]; ok {
+		project.TeamNames = appendMissingStrings(existing.TeamNames, project.TeamNames)
+	}
+	projects[slug] = project
+}
+
+func appendMissingStrings(values []string, candidates []string) []string {
+	out := slices.Clone(values)
+	for _, candidate := range candidates {
+		if !slices.Contains(out, candidate) {
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 func newConfiguredAPIClient(cfg domain.ServiceConfig) (*Client, error) {
