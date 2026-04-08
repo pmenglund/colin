@@ -635,6 +635,18 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 					},
 				},
 			})
+		case strings.Contains(request.Query, "query TeamFilteredProjectList"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   nil,
+						},
+						"nodes": []map[string]any{},
+					},
+				},
+			})
 		case strings.Contains(request.Query, "query TeamProjectPage"):
 			teamProjectPageRequests++
 			if !strings.Contains(request.Query, "includeSubTeams: true") {
@@ -847,15 +859,7 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 									"hasNextPage": false,
 									"endCursor":   nil,
 								},
-								"nodes": []map[string]any{
-									{
-										"name":   "Sub-team Project",
-										"slugId": "sub-team-project",
-										"teams": map[string]any{
-											"nodes": []map[string]any{{"name": "Subteam"}},
-										},
-									},
-								},
+								"nodes": []map[string]any{},
 							},
 						},
 					},
@@ -876,6 +880,30 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 			default:
 				t.Fatalf("teamID = %q for project page request, want parent or child", teamID)
 			}
+		case strings.Contains(request.Query, "query TeamFilteredProjectList"):
+			teamIDs, _ := request.Variables["teamIDs"].([]any)
+			if len(teamIDs) != 3 {
+				t.Fatalf("teamIDs = %#v, want parent, stale child, and child", request.Variables["teamIDs"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"projects": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   nil,
+						},
+						"nodes": []map[string]any{
+							{
+								"name":   "Sub-team Project",
+								"slugId": "sub-team-project",
+								"teams": map[string]any{
+									"nodes": []map[string]any{{"name": "Subteam"}},
+								},
+							},
+						},
+					},
+				},
+			})
 		default:
 			t.Fatalf("unexpected query: %s", request.Query)
 		}

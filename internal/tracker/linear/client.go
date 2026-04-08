@@ -328,19 +328,25 @@ query TeamProjectList($after: String) {
 		if !ok {
 			return ErrUnknownPayload
 		}
+		var teamIDs []string
 		for _, teamNode := range nodes {
 			teamID, _ := stringValue(teamNode["id"])
+			teamIDs = appendTrimmedNonEmpty(teamIDs, teamID)
 			if err := c.appendTeamAndChildProjects(ctx, projects, teamID, seenTeamIDs); err != nil {
 				return err
 			}
 			if childNodes, ok := nestedSlice(teamNode, "children"); ok {
 				for _, childNode := range childNodes {
 					childID, _ := stringValue(childNode["id"])
+					teamIDs = appendTrimmedNonEmpty(teamIDs, childID)
 					if err := c.appendTeamAndChildProjects(ctx, projects, childID, seenTeamIDs); err != nil {
 						return err
 					}
 				}
 			}
+		}
+		if err := c.appendProjectsForTeamIDs(ctx, projects, teamIDs); err != nil {
+			return err
 		}
 
 		hasNext, _ := nestedBool(resp, "data", "teams", "pageInfo", "hasNextPage")
@@ -348,6 +354,70 @@ query TeamProjectList($after: String) {
 			break
 		}
 		endCursor, _ := nestedString(resp, "data", "teams", "pageInfo", "endCursor")
+		if strings.TrimSpace(endCursor) == "" {
+			return ErrMissingEndCursor
+		}
+		after = endCursor
+	}
+	return nil
+}
+
+func (c *Client) appendProjectsForTeamIDs(ctx context.Context, projects map[string]ProjectSummary, teamIDs []string) error {
+	if len(teamIDs) == 0 {
+		return nil
+	}
+	const query = `
+query TeamFilteredProjectList($teamIDs: [ID!], $after: String) {
+  projects(
+    first: 50
+    after: $after
+    filter: {
+      accessibleTeams: {
+        some: {
+          or: [
+            { id: { in: $teamIDs } }
+            { ancestors: { some: { id: { in: $teamIDs } } } }
+          ]
+        }
+      }
+    }
+  ) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      name
+      slugId
+      teams(first: 10) {
+        nodes {
+          name
+        }
+      }
+    }
+  }
+}
+`
+
+	var after any
+	for {
+		resp, err := c.doQuery(ctx, query, map[string]any{"teamIDs": teamIDs, "after": after})
+		if err != nil {
+			return err
+		}
+		nodes, ok := nestedSlice(resp, "data", "projects", "nodes")
+		if !ok {
+			return ErrUnknownPayload
+		}
+		for _, node := range nodes {
+			appendProjectSummary(projects, node)
+		}
+
+		hasNext, _ := nestedBool(resp, "data", "projects", "pageInfo", "hasNextPage")
+		if !hasNext {
+			break
+		}
+		endCursor, _ := nestedString(resp, "data", "projects", "pageInfo", "endCursor")
 		if strings.TrimSpace(endCursor) == "" {
 			return ErrMissingEndCursor
 		}
@@ -540,6 +610,14 @@ func appendMissingStrings(values []string, candidates []string) []string {
 		}
 	}
 	return out
+}
+
+func appendTrimmedNonEmpty(values []string, candidate string) []string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || slices.Contains(values, candidate) {
+		return values
+	}
+	return append(values, candidate)
 }
 
 func newConfiguredAPIClient(cfg domain.ServiceConfig) (*Client, error) {
