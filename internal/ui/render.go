@@ -429,7 +429,7 @@ func toolbar(snapshot domain.Snapshot) g.Node {
 						g.Attr("title", "Last successful update at "+generatedAt),
 					},
 				},
-				g.Text("Live data"),
+				g.Text("Live"),
 			),
 			colinBadgeWith(
 				gothbadge.Props{

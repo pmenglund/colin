@@ -101,7 +101,7 @@ func TestPageRendersDashboardShell(t *testing.T) {
 		`data-refresh-status="live"`,
 		`data-generated-at="2026-03-28T12:00:00Z"`,
 		`title="Last successful update at 2026-03-28T12:00:00Z"`,
-		`Live data`,
+		`Live`,
 		`0s old`,
 		`Warning`,
 		`Shutdown in progress`,

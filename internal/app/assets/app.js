@@ -43,7 +43,7 @@
     }
     const generatedAt = badge.getAttribute("data-generated-at") || "";
     badge.dataset.refreshStatus = "stale";
-    badge.textContent = "Stale data";
+    badge.textContent = "Stale";
     badge.classList.remove("badge-success", "badge-accent", "badge-info");
     badge.classList.add("badge-danger");
     const titleParts = ["Showing the last successful dashboard state"];
