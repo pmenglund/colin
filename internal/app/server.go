@@ -36,14 +36,15 @@ type SnapshotStreamProvider func(context.Context) (domain.SnapshotUpdate, <-chan
 
 // LinearWebhookEvent captures the minimal webhook context needed to trigger orchestration.
 type LinearWebhookEvent struct {
-	DeliveryID    string
-	Event         string
-	Action        string
-	ResourceType  string
-	SessionID     string
-	IssueID       string
-	ProjectID     string
-	ChangedFields []string
+	DeliveryID      string
+	Event           string
+	Action          string
+	ResourceType    string
+	SessionID       string
+	SourceCommentID string
+	IssueID         string
+	ProjectID       string
+	ChangedFields   []string
 }
 
 // LinearWebhookTriggerResult describes how the service handled a validated webhook delivery.

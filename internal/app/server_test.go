@@ -822,15 +822,16 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 	t.Parallel()
 
 	cases := []struct {
-		name          string
-		body          string
-		headerEvent   string
-		action        string
-		resourceType  string
-		sessionID     string
-		issueID       string
-		projectID     string
-		changedFields []string
+		name            string
+		body            string
+		headerEvent     string
+		action          string
+		resourceType    string
+		sessionID       string
+		sourceCommentID string
+		issueID         string
+		projectID       string
+		changedFields   []string
 	}{
 		{
 			name:         "issue create",
@@ -880,14 +881,15 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			projectID:    "project-1",
 		},
 		{
-			name:         "agent session real payload",
-			body:         `{"type":"AgentSessionEvent","action":"created","createdAt":"2026-04-06T05:26:23.708Z","organizationId":"5ff8d263-4454-4af9-957c-836ab8bde3f1","oauthClientId":"2a1218310b843851e0579bd3f19df4ef","appUserId":"00169cc5-f59d-4ed5-a558-edf8cc316531","agentSession":{"id":"4f72a54d-bef3-4a30-90a5-170a41657346","comment":{"id":"cc609d4f-dfbe-4742-aa54-374b886db6f2","body":"This thread is for an agent session with colin.","issueId":"0275579e-47e4-4e2b-b342-3c6807c72eb0"},"issueId":"0275579e-47e4-4e2b-b342-3c6807c72eb0","issue":{"id":"0275579e-47e4-4e2b-b342-3c6807c72eb0","title":"include the number of workers","teamId":"f358a054-4268-41ac-affc-5b0081641f93","identifier":"COLIN-190"}},"promptContext":"<issue identifier=\"COLIN-190\"></issue>","webhookTimestamp":1775453183730,"webhookId":"97175f0f-f3cb-4230-9f6d-0e02c03b7d2d"}`,
-			headerEvent:  "AgentSessionEvent",
-			action:       "created",
-			resourceType: "AgentSessionEvent",
-			sessionID:    "4f72a54d-bef3-4a30-90a5-170a41657346",
-			issueID:      "0275579e-47e4-4e2b-b342-3c6807c72eb0",
-			projectID:    "",
+			name:            "agent session real payload",
+			body:            `{"type":"AgentSessionEvent","action":"created","createdAt":"2026-04-06T05:26:23.708Z","organizationId":"5ff8d263-4454-4af9-957c-836ab8bde3f1","oauthClientId":"2a1218310b843851e0579bd3f19df4ef","appUserId":"00169cc5-f59d-4ed5-a558-edf8cc316531","agentSession":{"id":"4f72a54d-bef3-4a30-90a5-170a41657346","comment":{"id":"cc609d4f-dfbe-4742-aa54-374b886db6f2","body":"This thread is for an agent session with colin.","issueId":"0275579e-47e4-4e2b-b342-3c6807c72eb0"},"issueId":"0275579e-47e4-4e2b-b342-3c6807c72eb0","issue":{"id":"0275579e-47e4-4e2b-b342-3c6807c72eb0","title":"include the number of workers","teamId":"f358a054-4268-41ac-affc-5b0081641f93","identifier":"COLIN-190"}},"promptContext":"<issue identifier=\"COLIN-190\"></issue>","webhookTimestamp":1775453183730,"webhookId":"97175f0f-f3cb-4230-9f6d-0e02c03b7d2d"}`,
+			headerEvent:     "AgentSessionEvent",
+			action:          "created",
+			resourceType:    "AgentSessionEvent",
+			sessionID:       "4f72a54d-bef3-4a30-90a5-170a41657346",
+			sourceCommentID: "cc609d4f-dfbe-4742-aa54-374b886db6f2",
+			issueID:         "0275579e-47e4-4e2b-b342-3c6807c72eb0",
+			projectID:       "",
 		},
 	}
 
@@ -935,6 +937,9 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			}
 			if events[0].SessionID != tc.sessionID {
 				t.Fatalf("SessionID = %q, want %q", events[0].SessionID, tc.sessionID)
+			}
+			if events[0].SourceCommentID != tc.sourceCommentID {
+				t.Fatalf("SourceCommentID = %q, want %q", events[0].SourceCommentID, tc.sourceCommentID)
 			}
 			if events[0].IssueID != tc.issueID {
 				t.Fatalf("IssueID = %q, want %q", events[0].IssueID, tc.issueID)
