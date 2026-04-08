@@ -623,6 +623,17 @@ func TestListProjectsPaginatesAndSortsByName(t *testing.T) {
 					},
 				},
 			})
+		case strings.Contains(request.Query, "query TeamChildren"):
+			if got, _ := variables["teamID"].(string); got != "team-1" {
+				t.Fatalf("teamID = %q for children request, want team-1", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"team": map[string]any{
+						"children": []map[string]any{},
+					},
+				},
+			})
 		case strings.Contains(request.Query, "query TeamProjectPage"):
 			teamProjectPageRequests++
 			if !strings.Contains(request.Query, "includeSubTeams: true") {
@@ -773,41 +784,84 @@ func TestListProjectsSplitsTeamProjectLookupToAvoidComplexityLimit(t *testing.T)
 						},
 						"nodes": []map[string]any{
 							{
-								"id":   "team-1",
+								"id":   "team-parent",
 								"name": "Parent",
 							},
 						},
 					},
 				},
 			})
+		case strings.Contains(request.Query, "query TeamChildren"):
+			switch got, _ := request.Variables["teamID"].(string); got {
+			case "team-parent":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"team": map[string]any{
+							"children": []map[string]any{
+								{
+									"id":   "team-child",
+									"name": "Subteam",
+								},
+							},
+						},
+					},
+				})
+			case "team-child":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"team": map[string]any{
+							"children": []map[string]any{},
+						},
+					},
+				})
+			default:
+				t.Fatalf("teamID = %q for children request, want parent or child", got)
+			}
 		case strings.Contains(request.Query, "query TeamProjectPage"):
 			if !strings.Contains(request.Query, "includeSubTeams: true") {
 				t.Fatalf("TeamProjectPage query = %q, want includeSubTeams", request.Query)
 			}
-			if got, _ := request.Variables["teamID"].(string); got != "team-1" {
-				t.Fatalf("teamID = %q, want team-1", got)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"data": map[string]any{
-					"team": map[string]any{
-						"projects": map[string]any{
-							"pageInfo": map[string]any{
-								"hasNextPage": false,
-								"endCursor":   nil,
+			teamID, _ := request.Variables["teamID"].(string)
+			switch teamID {
+			case "team-parent":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"team": map[string]any{
+							"projects": map[string]any{
+								"pageInfo": map[string]any{
+									"hasNextPage": false,
+									"endCursor":   nil,
+								},
+								"nodes": []map[string]any{},
 							},
-							"nodes": []map[string]any{
-								{
-									"name":   "Sub-team Project",
-									"slugId": "sub-team-project",
-									"teams": map[string]any{
-										"nodes": []map[string]any{{"name": "Subteam"}},
+						},
+					},
+				})
+			case "team-child":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"team": map[string]any{
+							"projects": map[string]any{
+								"pageInfo": map[string]any{
+									"hasNextPage": false,
+									"endCursor":   nil,
+								},
+								"nodes": []map[string]any{
+									{
+										"name":   "Sub-team Project",
+										"slugId": "sub-team-project",
+										"teams": map[string]any{
+											"nodes": []map[string]any{{"name": "Subteam"}},
+										},
 									},
 								},
 							},
 						},
 					},
-				},
-			})
+				})
+			default:
+				t.Fatalf("teamID = %q for project page request, want parent or child", teamID)
+			}
 		default:
 			t.Fatalf("unexpected query: %s", request.Query)
 		}

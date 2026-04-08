@@ -314,6 +314,7 @@ query TeamProjectList($after: String) {
 `
 
 	var after any
+	seenTeamIDs := map[string]struct{}{}
 	for {
 		resp, err := c.doQuery(ctx, query, map[string]any{"after": after})
 		if err != nil {
@@ -325,11 +326,7 @@ query TeamProjectList($after: String) {
 		}
 		for _, teamNode := range nodes {
 			teamID, _ := stringValue(teamNode["id"])
-			teamID = strings.TrimSpace(teamID)
-			if teamID == "" {
-				return ErrUnknownPayload
-			}
-			if err := c.appendTeamProjectPages(ctx, projects, teamID, nil); err != nil {
+			if err := c.appendTeamAndChildProjects(ctx, projects, teamID, seenTeamIDs); err != nil {
 				return err
 			}
 		}
@@ -343,6 +340,55 @@ query TeamProjectList($after: String) {
 			return ErrMissingEndCursor
 		}
 		after = endCursor
+	}
+	return nil
+}
+
+func (c *Client) appendTeamAndChildProjects(ctx context.Context, projects map[string]ProjectSummary, teamID string, seenTeamIDs map[string]struct{}) error {
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" {
+		return ErrUnknownPayload
+	}
+	if _, ok := seenTeamIDs[teamID]; ok {
+		return nil
+	}
+	seenTeamIDs[teamID] = struct{}{}
+
+	if err := c.appendTeamProjectPages(ctx, projects, teamID, nil); err != nil {
+		return err
+	}
+	return c.appendChildTeamProjects(ctx, projects, teamID, seenTeamIDs)
+}
+
+func (c *Client) appendChildTeamProjects(ctx context.Context, projects map[string]ProjectSummary, teamID string, seenTeamIDs map[string]struct{}) error {
+	const query = `
+query TeamChildren($teamID: String!) {
+  team(id: $teamID) {
+    children {
+      id
+      name
+    }
+  }
+}
+`
+
+	resp, err := c.doQuery(ctx, query, map[string]any{"teamID": teamID})
+	if err != nil {
+		return err
+	}
+	teamNode, ok := nestedMap(resp, "data", "team")
+	if !ok {
+		return ErrUnknownPayload
+	}
+	childNodes, ok := nestedSlice(teamNode, "children")
+	if !ok {
+		return ErrUnknownPayload
+	}
+	for _, childNode := range childNodes {
+		childID, _ := stringValue(childNode["id"])
+		if err := c.appendTeamAndChildProjects(ctx, projects, childID, seenTeamIDs); err != nil {
+			return err
+		}
 	}
 	return nil
 }
