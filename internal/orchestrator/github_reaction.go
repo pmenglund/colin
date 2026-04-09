@@ -105,6 +105,39 @@ func (o *Orchestrator) syncGitHubReviewFollowUp(ctx context.Context, issue domai
 			RequestedAt: &requestedAt,
 		})
 	}
+	for _, thread := range scan.HumanFeedback {
+		threadID := strings.TrimSpace(thread.ID)
+		commentID := strings.TrimSpace(thread.CommentID)
+		if commentID == "" {
+			commentID = threadID
+		}
+		if threadID == "" || commentID == "" {
+			continue
+		}
+		if !thread.CanReply || !thread.CanResolve {
+			o.logger.Debug(
+				"skipping github review follow-up because the thread is not replyable and resolvable",
+				"issue_id", issue.ID,
+				"issue_identifier", issue.Identifier,
+				"thread_id", threadID,
+				"path", thread.Path,
+				"can_reply", thread.CanReply,
+				"can_resolve", thread.CanResolve,
+			)
+			continue
+		}
+		if queuedOrPendingReviewComment(metadata, commentID) || queuedOrPendingReviewThread(metadata, threadID) {
+			continue
+		}
+		requestedAt := now
+		metadata.QueuedReviewFollowUps = append(metadata.QueuedReviewFollowUps, domain.PendingReviewFollowUp{
+			ThreadID:    threadID,
+			CommentID:   commentID,
+			Reactor:     strings.TrimSpace(thread.Author),
+			RequestedAt: &requestedAt,
+		})
+		changed = true
+	}
 
 	if hasPendingReviewFollowUpMetadata(metadata) {
 		if changed {
@@ -158,11 +191,7 @@ func (o *Orchestrator) startPendingReviewFollowUp(ctx context.Context, issue dom
 	now := time.Now().UTC()
 	issue.UpdatedAt = &now
 	delete(o.completed, issue.ID)
-	issue, _ = o.postIssueStatus(ctx, issue, issue.Identifier, nil, fmt.Sprintf(
-		"GitHub collaborator `%s` approved the invited Codex review suggestion, so Colin moved the issue to `%s` to address that PR thread.",
-		pendingReviewReactor(issue),
-		targetState,
-	))
+	issue, _ = o.postIssueStatus(ctx, issue, issue.Identifier, nil, pendingReviewFollowUpStartMessage(issue, targetState))
 	return issue, true
 }
 
@@ -295,6 +324,22 @@ func queuedOrPendingReviewComment(metadata domain.ColinMetadata, commentID strin
 	return false
 }
 
+func queuedOrPendingReviewThread(metadata domain.ColinMetadata, threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(metadata.PendingReviewThreadID), threadID) {
+		return true
+	}
+	for _, item := range metadata.QueuedReviewFollowUps {
+		if strings.EqualFold(strings.TrimSpace(item.ThreadID), threadID) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasQueuedReviewFollowUps(issue domain.Issue) bool {
 	return issue.ColinMetadata != nil && len(issue.ColinMetadata.QueuedReviewFollowUps) > 0
 }
@@ -330,4 +375,26 @@ func pendingReviewReactor(issue domain.Issue) string {
 		return ""
 	}
 	return strings.TrimSpace(issue.ColinMetadata.PendingReviewReactor)
+}
+
+func pendingReviewFollowUpStartMessage(issue domain.Issue, targetState string) string {
+	if issue.ColinMetadata != nil && strings.TrimSpace(issue.ColinMetadata.PendingReviewReactionID) != "" {
+		return fmt.Sprintf(
+			"GitHub collaborator `%s` approved the invited Codex review suggestion, so Colin moved the issue to `%s` to address that PR thread.",
+			pendingReviewReactor(issue),
+			targetState,
+		)
+	}
+
+	reviewer := pendingReviewReactor(issue)
+	if reviewer == "" {
+		reviewer = "a reviewer"
+	} else {
+		reviewer = fmt.Sprintf("reviewer `%s`", reviewer)
+	}
+	return fmt.Sprintf(
+		"GitHub %s left unresolved PR feedback, so Colin moved the issue to `%s` to address that review thread.",
+		reviewer,
+		targetState,
+	)
 }

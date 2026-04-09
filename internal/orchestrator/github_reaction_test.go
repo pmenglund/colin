@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,70 @@ type collaboratorGitHubClient struct {
 
 func (c *collaboratorGitHubClient) IsCollaborator(context.Context, string, string, string) (bool, error) {
 	return c.allowed, nil
+}
+
+func newReviewFollowUpTestOrchestrator(t *testing.T, threads []repoops.GitHubReviewThread) (*trackerStub, *Orchestrator) {
+	t.Helper()
+
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	cfg.Tracker.ActiveStates = []string{"Todo", "In Progress"}
+	cfg.Repo.PublishStates = []string{"Review"}
+
+	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+		Number:      11,
+		URL:         "https://github.com/pmenglund/colin/pull/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{Threads: threads}, nil)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, &collaboratorGitHubClient{FakeRepoHostClient: fakeGitHub, allowed: true}),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+	return tracker, orch
+}
+
+func reviewFollowUpIssue() domain.Issue {
+	return domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-123",
+		Title:      "Address review feedback",
+		State:      "Review",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:     11,
+			PullRequestURL:        "https://github.com/pmenglund/colin/pull/11",
+			PullRequestHeadRef:    "colin-123",
+			PullRequestBaseRef:    "symphony",
+			ProgressRootCommentID: "root",
+		},
+	}
+}
+
+func reviewThreadWithComments(id string, comments ...repoops.GitHubReviewComment) repoops.GitHubReviewThread {
+	return repoops.GitHubReviewThread{
+		ID:               id,
+		IsResolved:       false,
+		IsOutdated:       false,
+		ViewerCanReply:   true,
+		ViewerCanResolve: true,
+		Path:             "internal/foo.go",
+		Comments: repoops.GitHubReviewCommentConnection{
+			Comments: comments,
+		},
+	}
 }
 
 func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
@@ -147,6 +212,121 @@ func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
 	}
 	if got := len(orch.stateIssues["Todo"]); got != 1 {
 		t.Fatalf("len(stateIssues[Todo]) = %d, want 1", got)
+	}
+}
+
+func TestSyncGitHubReviewFollowUpMovesIssueForHumanReviewComment(t *testing.T) {
+	tracker, orch := newReviewFollowUpTestOrchestrator(t, []repoops.GitHubReviewThread{
+		reviewThreadWithComments("thread-1", repoops.GitHubReviewComment{
+			ID:          "PRRC_kwDOHumanFeedback",
+			DatabaseID:  "3035904923",
+			Body:        "Please rename this helper.",
+			URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+			AuthorLogin: "pmenglund",
+		}),
+	})
+
+	updated, queued := orch.syncGitHubReviewFollowUp(context.Background(), reviewFollowUpIssue(), time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC))
+
+	if !queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = false, want true")
+	}
+	if updated.State != "Todo" {
+		t.Fatalf("updated.State = %q, want Todo", updated.State)
+	}
+	if got := tracker.updatedStates; len(got) != 1 || got[0] != "issue-1:Todo" {
+		t.Fatalf("updatedStates = %#v, want issue-1 moved to Todo", got)
+	}
+	if tracker.metadata.PendingReviewThreadID != "thread-1" {
+		t.Fatalf("PendingReviewThreadID = %q, want thread-1", tracker.metadata.PendingReviewThreadID)
+	}
+	if tracker.metadata.PendingReviewCommentID != "3035904923" {
+		t.Fatalf("PendingReviewCommentID = %q, want 3035904923", tracker.metadata.PendingReviewCommentID)
+	}
+	if tracker.metadata.PendingReviewReactionID != "" {
+		t.Fatalf("PendingReviewReactionID = %q, want empty for human review comment", tracker.metadata.PendingReviewReactionID)
+	}
+	if tracker.metadata.PendingReviewReactor != "pmenglund" {
+		t.Fatalf("PendingReviewReactor = %q, want pmenglund", tracker.metadata.PendingReviewReactor)
+	}
+	if len(tracker.metadata.ReviewReactionWatermarks) != 0 {
+		t.Fatalf("ReviewReactionWatermarks = %#v, want no reaction watermark", tracker.metadata.ReviewReactionWatermarks)
+	}
+	if len(tracker.commentReplies) != 1 {
+		t.Fatalf("commentReplies = %#v, want one status reply", tracker.commentReplies)
+	}
+	if !strings.Contains(tracker.commentReplies[0], "left unresolved PR feedback") {
+		t.Fatalf("comment reply = %q, want PR-feedback status", tracker.commentReplies[0])
+	}
+}
+
+func TestSyncGitHubReviewFollowUpDoesNotAutoStartPureCodexReviewThread(t *testing.T) {
+	tracker, orch := newReviewFollowUpTestOrchestrator(t, []repoops.GitHubReviewThread{
+		reviewThreadWithComments("thread-1", repoops.GitHubReviewComment{
+			ID:          "PRRC_kwDOCodexFeedback",
+			DatabaseID:  "3035904923",
+			Body:        "**review**\n\nUseful? React with 👍 / 👎.",
+			URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+			AuthorLogin: "chatgpt-codex-connector[bot]",
+		}),
+	})
+
+	updated, queued := orch.syncGitHubReviewFollowUp(context.Background(), reviewFollowUpIssue(), time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC))
+
+	if queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = true, want false")
+	}
+	if updated.State != "Review" {
+		t.Fatalf("updated.State = %q, want Review", updated.State)
+	}
+	if len(tracker.updatedStates) != 0 {
+		t.Fatalf("updatedStates = %#v, want no state changes", tracker.updatedStates)
+	}
+	if tracker.metadata.PendingReviewThreadID != "" {
+		t.Fatalf("PendingReviewThreadID = %q, want empty", tracker.metadata.PendingReviewThreadID)
+	}
+	if len(tracker.commentReplies) != 0 {
+		t.Fatalf("commentReplies = %#v, want no status comments", tracker.commentReplies)
+	}
+}
+
+func TestSyncGitHubReviewFollowUpTreatsHumanReplyAsFeedback(t *testing.T) {
+	tracker, orch := newReviewFollowUpTestOrchestrator(t, []repoops.GitHubReviewThread{
+		reviewThreadWithComments(
+			"thread-1",
+			repoops.GitHubReviewComment{
+				ID:          "PRRC_kwDOCodexFeedback",
+				DatabaseID:  "3035904923",
+				Body:        "**review**\n\nUseful? React with 👍 / 👎.",
+				URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+				AuthorLogin: "chatgpt-codex-connector[bot]",
+			},
+			repoops.GitHubReviewComment{
+				ID:          "PRRC_kwDOHumanReply",
+				DatabaseID:  "3035904999",
+				Body:        "Yes, please do the rename instead.",
+				URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904999",
+				AuthorLogin: "pmenglund",
+			},
+		),
+	})
+
+	_, queued := orch.syncGitHubReviewFollowUp(context.Background(), reviewFollowUpIssue(), time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC))
+
+	if !queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = false, want true")
+	}
+	if tracker.metadata.PendingReviewThreadID != "thread-1" {
+		t.Fatalf("PendingReviewThreadID = %q, want thread-1", tracker.metadata.PendingReviewThreadID)
+	}
+	if tracker.metadata.PendingReviewCommentID != "3035904999" {
+		t.Fatalf("PendingReviewCommentID = %q, want latest human reply", tracker.metadata.PendingReviewCommentID)
+	}
+	if tracker.metadata.PendingReviewReactionID != "" {
+		t.Fatalf("PendingReviewReactionID = %q, want empty", tracker.metadata.PendingReviewReactionID)
+	}
+	if tracker.metadata.PendingReviewReactor != "pmenglund" {
+		t.Fatalf("PendingReviewReactor = %q, want pmenglund", tracker.metadata.PendingReviewReactor)
 	}
 }
 

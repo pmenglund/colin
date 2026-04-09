@@ -122,11 +122,12 @@ type ReviewCommentApproval struct {
 	Reactor    string
 }
 
-// ReviewFollowUpScan captures unresolved review threads plus qualifying approval signals.
+// ReviewFollowUpScan captures unresolved review threads plus qualifying follow-up signals.
 type ReviewFollowUpScan struct {
-	PullRequest domain.PullRequestRef
-	Threads     []domain.ReviewThread
-	Approvals   []ReviewCommentApproval
+	PullRequest   domain.PullRequestRef
+	Threads       []domain.ReviewThread
+	Approvals     []ReviewCommentApproval
+	HumanFeedback []domain.ReviewThread
 }
 
 // Manager performs git and repository-host operations for a workspace.
@@ -1131,6 +1132,7 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 		cursor            string
 		threads           []domain.ReviewThread
 		approvals         []ReviewCommentApproval
+		humanFeedback     []domain.ReviewThread
 		collaboratorCache = map[string]bool{}
 	)
 	for {
@@ -1139,7 +1141,7 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 			return ReviewFollowUpScan{}, err
 		}
 		if len(resp.Threads) == 0 && !resp.HasNextPage {
-			return ReviewFollowUpScan{Threads: threads, Approvals: approvals}, nil
+			return ReviewFollowUpScan{Threads: threads, Approvals: approvals, HumanFeedback: humanFeedback}, nil
 		}
 		for _, node := range resp.Threads {
 			thread, ok := parseReviewThread(node)
@@ -1147,6 +1149,9 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 				continue
 			}
 			threads = append(threads, thread)
+			if isHumanReviewFeedbackThread(thread) {
+				humanFeedback = append(humanFeedback, thread)
+			}
 
 			comments, err := m.reviewThreadComments(ctx, node)
 			if err != nil {
@@ -1181,7 +1186,7 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 		}
 		cursor = resp.EndCursor
 	}
-	return ReviewFollowUpScan{Threads: threads, Approvals: approvals}, nil
+	return ReviewFollowUpScan{Threads: threads, Approvals: approvals, HumanFeedback: humanFeedback}, nil
 }
 
 func (m *Manager) findReviewThreadByCommentID(ctx context.Context, owner, name string, prNumber int, commentID string) (domain.ReviewThread, bool, error) {
@@ -1430,7 +1435,7 @@ func parseReviewThread(node repohost.ReviewThread) (domain.ReviewThread, bool) {
 	thread := domain.ReviewThread{
 		ID:         node.ID,
 		Path:       node.Path,
-		CommentID:  comment.ID,
+		CommentID:  reviewCommentID(comment),
 		CommentURL: comment.URL,
 		Author:     comment.AuthorLogin,
 		Body:       strings.TrimSpace(comment.Body),
@@ -1484,6 +1489,17 @@ func isInvitedCodexReviewComment(comment repohost.ReviewComment) bool {
 	}
 	body := strings.ToLower(strings.TrimSpace(comment.Body))
 	return strings.Contains(body, "useful? react with")
+}
+
+func isHumanReviewFeedbackThread(thread domain.ReviewThread) bool {
+	author := strings.TrimSpace(thread.Author)
+	if author == "" || isCodexReviewAuthor(author) {
+		return false
+	}
+	if strings.EqualFold(author, "colin") || strings.EqualFold(author, "colin[bot]") {
+		return false
+	}
+	return !strings.HasPrefix(strings.TrimSpace(thread.Body), "[colin]")
 }
 
 func isCodexReviewAuthor(login string) bool {
