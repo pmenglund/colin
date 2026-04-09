@@ -41,19 +41,21 @@ var codexReviewLogins = []string{
 
 // Result captures the outcome of a publish or merge operation.
 type Result struct {
-	Branch     string
-	BaseRef    string
-	BaseSHA    string
-	PRNumber   int
-	PRURL      string
-	PRState    string
-	PRHeadRef  string
-	PRBaseRef  string
-	PRBackend  string
-	PROwner    string
-	PRRepoName string
-	Commit     string
-	Action     string
+	Branch      string
+	BaseRef     string
+	BaseSHA     string
+	RemoteName  string
+	MergeMethod string
+	PRNumber    int
+	PRURL       string
+	PRState     string
+	PRHeadRef   string
+	PRBaseRef   string
+	PRBackend   string
+	PROwner     string
+	PRRepoName  string
+	Commit      string
+	Action      string
 }
 
 // MergeFailure classifies a merge failure so callers can choose between retrying and human handoff.
@@ -102,12 +104,14 @@ func (v MergeRecoveryValidation) Valid() bool {
 
 // ReviewContext captures the PR, unresolved review threads, and Codex review signals for an issue branch.
 type ReviewContext struct {
-	PullRequest            domain.PullRequestRef
-	Threads                []domain.ReviewThread
-	CodexReviewThreads     []domain.ReviewThread
-	CodexReviewObserved    bool
-	CodexReviewRequestedAt *time.Time
-	CodexReviewApprovedAt  *time.Time
+	PullRequest              domain.PullRequestRef
+	Threads                  []domain.ReviewThread
+	CodexReviewThreads       []domain.ReviewThread
+	CodexReviewObserved      bool
+	CodexReviewRequestedAt   *time.Time
+	CodexReviewApprovedAt    *time.Time
+	CodexPRReviewsEnabled    bool
+	CodexPRReviewPolicyKnown bool
 }
 
 // ReviewCommentApproval is one collaborator approval on an invited Codex review comment.
@@ -183,7 +187,11 @@ func (m *Manager) FindUnresolvedReviewThreadByCommentID(ctx context.Context, iss
 		return domain.PullRequestRef{}, domain.ReviewThread{}, false, nil
 	}
 
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return domain.PullRequestRef{}, domain.ReviewThread{}, false, err
+	}
+	owner, name, err := m.remoteRepository(ctx, workspacePath, target.EffectiveRemoteName(m.cfg.Repo.RemoteName))
 	if err != nil {
 		return domain.PullRequestRef{}, domain.ReviewThread{}, false, err
 	}
@@ -213,10 +221,12 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 	}
 
 	result := Result{
-		Branch:  branch,
-		BaseRef: target.BaseRef,
+		Branch:      branch,
+		BaseRef:     target.BaseRef,
+		RemoteName:  target.EffectiveRemoteName(m.cfg.Repo.RemoteName),
+		MergeMethod: target.EffectiveMergeMethod(m.cfg.Repo.MergeMethod),
 	}
-	result.BaseSHA = m.captureBaseSHA(ctx, workspacePath, target.BaseRef)
+	result.BaseSHA = m.captureBaseSHA(ctx, workspacePath, result.RemoteName, target.BaseRef)
 
 	dirty, err := m.isDirty(ctx, workspacePath)
 	if err != nil {
@@ -255,7 +265,7 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 		}
 	}
 
-	if _, err := m.pushBranch(ctx, workspacePath, branch); err != nil {
+	if _, err := m.pushBranch(ctx, workspacePath, result.RemoteName, branch); err != nil {
 		return Result{}, err
 	}
 	if commit, err := m.revParse(ctx, workspacePath, "HEAD"); err == nil {
@@ -289,7 +299,7 @@ func (m *Manager) Publish(ctx context.Context, issue domain.Issue, workspacePath
 	result.PRState = pr.State
 	result.PRHeadRef = pr.HeadRefName
 	result.PRBaseRef = pr.BaseRefName
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	owner, name, err := m.remoteRepository(ctx, workspacePath, result.RemoteName)
 	if err != nil {
 		return Result{}, err
 	}
@@ -317,7 +327,11 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 	if result.PRNumber == 0 {
 		return Result{}, ErrNoPullRequest
 	}
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	remoteName := strings.TrimSpace(result.RemoteName)
+	if remoteName == "" {
+		remoteName = strings.TrimSpace(m.cfg.Repo.RemoteName)
+	}
+	owner, name, err := m.remoteRepository(ctx, workspacePath, remoteName)
 	if err != nil {
 		return result, err
 	}
@@ -325,7 +339,11 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 	if err != nil {
 		return result, err
 	}
-	if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, m.cfg.Repo.MergeMethod); err != nil {
+	mergeMethod := strings.TrimSpace(result.MergeMethod)
+	if mergeMethod == "" {
+		mergeMethod = strings.TrimSpace(m.cfg.Repo.MergeMethod)
+	}
+	if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, mergeMethod); err != nil {
 		if !isRetryableNotMergeableError(err) {
 			return result, err
 		}
@@ -344,7 +362,7 @@ func (m *Manager) MergePullRequest(ctx context.Context, workspacePath string, re
 			"pr_number", result.PRNumber,
 			"pr_url", result.PRURL,
 		)
-		if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, m.cfg.Repo.MergeMethod); err != nil {
+		if err := client.MergePullRequest(ctx, owner, name, result.PRNumber, mergeMethod); err != nil {
 			return result, err
 		}
 	}
@@ -366,7 +384,7 @@ func (m *Manager) classifyMergeFailure(ctx context.Context, workspacePath string
 		return nil
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	currentBaseSHA := strings.TrimSpace(m.captureBaseSHA(ctx, workspacePath, result.BaseRef))
+	currentBaseSHA := strings.TrimSpace(m.captureBaseSHA(ctx, workspacePath, result.RemoteName, result.BaseRef))
 	kind := MergeFailureKindManual
 	switch {
 	case strings.Contains(message, "base branch was modified"):
@@ -389,6 +407,10 @@ func (m *Manager) classifyMergeFailure(ctx context.Context, workspacePath string
 
 // ReviewContext returns the current PR and unresolved review threads for the issue branch.
 func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspacePath string) (ReviewContext, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return ReviewContext{}, err
+	}
 	pr, _, err := m.resolvePullRequest(ctx, issue, workspacePath, "", false)
 	if err != nil {
 		return ReviewContext{}, err
@@ -397,7 +419,7 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 		return ReviewContext{}, nil
 	}
 
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	owner, name, err := m.remoteRepository(ctx, workspacePath, target.EffectiveRemoteName(m.cfg.Repo.RemoteName))
 	if err != nil {
 		return ReviewContext{}, err
 	}
@@ -421,16 +443,29 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 			RepositoryOwner: owner,
 			RepositoryName:  name,
 		},
-		Threads:                threads,
-		CodexReviewThreads:     codexThreads,
-		CodexReviewObserved:    codexObserved,
-		CodexReviewRequestedAt: requestedAt,
-		CodexReviewApprovedAt:  approvedAt,
+		Threads:                  threads,
+		CodexReviewThreads:       codexThreads,
+		CodexReviewObserved:      codexObserved,
+		CodexReviewRequestedAt:   requestedAt,
+		CodexReviewApprovedAt:    approvedAt,
+		CodexPRReviewsEnabled:    targetCodexPRReviewsEnabled(m.cfg, target),
+		CodexPRReviewPolicyKnown: true,
 	}, nil
+}
+
+func targetCodexPRReviewsEnabled(cfg domain.ServiceConfig, target domain.TargetConfig) bool {
+	if target.CodexPRReviewsEnabled {
+		return true
+	}
+	return len(cfg.Targets) == 0 && cfg.Repo.CodexPRReviewsEnabled
 }
 
 // ReviewFollowUpScan returns unresolved review threads and qualifying collaborator approvals on invited Codex comments.
 func (m *Manager) ReviewFollowUpScan(ctx context.Context, issue domain.Issue, workspacePath string) (ReviewFollowUpScan, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return ReviewFollowUpScan{}, err
+	}
 	pr, _, err := m.resolvePullRequest(ctx, issue, workspacePath, "", false)
 	if err != nil {
 		return ReviewFollowUpScan{}, err
@@ -439,7 +474,7 @@ func (m *Manager) ReviewFollowUpScan(ctx context.Context, issue domain.Issue, wo
 		return ReviewFollowUpScan{}, nil
 	}
 
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	owner, name, err := m.remoteRepository(ctx, workspacePath, target.EffectiveRemoteName(m.cfg.Repo.RemoteName))
 	if err != nil {
 		return ReviewFollowUpScan{}, err
 	}
@@ -549,19 +584,22 @@ func (m *Manager) revParse(ctx context.Context, workspacePath string, ref string
 	return strings.TrimSpace(out), nil
 }
 
-func (m *Manager) captureBaseSHA(ctx context.Context, workspacePath string, baseRef string) string {
+func (m *Manager) captureBaseSHA(ctx context.Context, workspacePath string, remoteName string, baseRef string) string {
 	baseRef = strings.TrimSpace(baseRef)
 	if baseRef == "" {
 		return ""
 	}
-	remoteName := strings.TrimSpace(m.cfg.Repo.RemoteName)
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		remoteName = strings.TrimSpace(m.cfg.Repo.RemoteName)
+	}
 	if remoteName != "" {
 		if sha, err := m.remoteRefSHA(ctx, workspacePath, remoteName, baseRef); err == nil {
 			return sha
 		}
 	}
 	candidates := []string{
-		strings.TrimSpace(m.cfg.Repo.RemoteName) + "/" + baseRef,
+		remoteName + "/" + baseRef,
 		baseRef,
 	}
 	for _, candidate := range candidates {
@@ -635,11 +673,14 @@ func (m *Manager) ValidateMergeRecovery(ctx context.Context, workspacePath strin
 		if baseRef == "" {
 			baseRef = strings.TrimSpace(before.BaseRef)
 		}
-		currentBaseSHA = strings.TrimSpace(m.captureBaseSHA(ctx, workspacePath, baseRef))
+		currentBaseSHA = strings.TrimSpace(m.captureBaseSHA(ctx, workspacePath, after.RemoteName, baseRef))
 	}
 
 	remoteHeadSHA := ""
-	remoteName := strings.TrimSpace(m.cfg.Repo.RemoteName)
+	remoteName := strings.TrimSpace(after.RemoteName)
+	if remoteName == "" {
+		remoteName = strings.TrimSpace(m.cfg.Repo.RemoteName)
+	}
 	if remoteName != "" && branch != "" {
 		sha, err := m.remoteRefSHA(ctx, workspacePath, remoteName, branch)
 		if err != nil {
@@ -729,7 +770,7 @@ func (m *Manager) baseComparisonRef(ctx context.Context, workspacePath string, i
 	}
 	candidates := []string{
 		strings.TrimSpace(target.BaseRef),
-		strings.TrimSpace(m.cfg.Repo.RemoteName) + "/" + strings.TrimSpace(target.BaseRef),
+		target.EffectiveRemoteName(m.cfg.Repo.RemoteName) + "/" + strings.TrimSpace(target.BaseRef),
 	}
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
@@ -761,7 +802,11 @@ func (m *Manager) ensureIdentity(ctx context.Context, workspacePath string) erro
 }
 
 func (m *Manager) findPullRequest(ctx context.Context, issue domain.Issue, workspacePath, branch string) (*repohost.PullRequest, error) {
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return nil, err
+	}
+	owner, name, err := m.remoteRepository(ctx, workspacePath, target.EffectiveRemoteName(m.cfg.Repo.RemoteName))
 	if err != nil {
 		return nil, err
 	}
@@ -769,18 +814,14 @@ func (m *Manager) findPullRequest(ctx context.Context, issue domain.Issue, works
 	if err != nil {
 		return nil, err
 	}
-	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
-	if err != nil {
-		return nil, err
-	}
 	return client.PullRequestByHead(ctx, owner, name, branch, target.BaseRef)
 }
 
-func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath string, number int) (*repohost.PullRequest, error) {
+func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath, remoteName string, number int) (*repohost.PullRequest, error) {
 	if number <= 0 {
 		return nil, nil
 	}
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	owner, name, err := m.remoteRepository(ctx, workspacePath, remoteName)
 	if err != nil {
 		return nil, err
 	}
@@ -792,13 +833,18 @@ func (m *Manager) findPullRequestByNumber(ctx context.Context, workspacePath str
 }
 
 func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, workspacePath, currentBranch string, allowCreate bool) (*repohost.PullRequest, bool, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return nil, false, err
+	}
+	remoteName := target.EffectiveRemoteName(m.cfg.Repo.RemoteName)
 	tracked, hasTracked := trackedPullRequest(issue)
 	if hasTracked {
-		pr, err := m.resolveTrackedPullRequest(ctx, workspacePath, tracked, currentBranch)
+		pr, err := m.resolveTrackedPullRequest(ctx, workspacePath, remoteName, tracked, currentBranch)
 		return pr, false, err
 	}
 
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	owner, name, err := m.remoteRepository(ctx, workspacePath, remoteName)
 	if err != nil {
 		return nil, false, err
 	}
@@ -811,7 +857,7 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	switch len(attached) {
 	case 0:
 	case 1:
-		pr, err := m.findPullRequestByNumber(ctx, workspacePath, attached[0].Number)
+		pr, err := m.findPullRequestByNumber(ctx, workspacePath, remoteName, attached[0].Number)
 		if err != nil {
 			return nil, false, fmt.Errorf("resolve attached pull request #%d: %w", attached[0].Number, err)
 		}
@@ -862,8 +908,8 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 	return pr, true, nil
 }
 
-func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath string, tracked domain.PullRequestRef, currentBranch string) (*repohost.PullRequest, error) {
-	pr, err := m.findPullRequestByNumber(ctx, workspacePath, tracked.Number)
+func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath, remoteName string, tracked domain.PullRequestRef, currentBranch string) (*repohost.PullRequest, error) {
+	pr, err := m.findPullRequestByNumber(ctx, workspacePath, remoteName, tracked.Number)
 	if err != nil {
 		return nil, fmt.Errorf("view tracked pull request #%d: %w", tracked.Number, err)
 	}
@@ -956,11 +1002,11 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 		return "", err
 	}
 	title := fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
-	body, err := m.prBody(issue, branch, title, target.BaseRef)
+	body, err := m.prBody(issue, branch, title, target)
 	if err != nil {
 		return "", err
 	}
-	owner, name, err := m.remoteRepository(ctx, workspacePath)
+	owner, name, err := m.remoteRepository(ctx, workspacePath, target.EffectiveRemoteName(m.cfg.Repo.RemoteName))
 	if err != nil {
 		return "", err
 	}
@@ -980,8 +1026,15 @@ func (m *Manager) createPullRequest(ctx context.Context, workspacePath string, i
 	return strings.TrimSpace(pr.URL), nil
 }
 
-func (m *Manager) remoteRepository(ctx context.Context, workspacePath string) (string, string, error) {
-	remoteURL, err := m.run(ctx, workspacePath, 15*time.Second, "git", "remote", "get-url", m.cfg.Repo.RemoteName)
+func (m *Manager) remoteRepository(ctx context.Context, workspacePath, remoteName string) (string, string, error) {
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		remoteName = strings.TrimSpace(m.cfg.Repo.RemoteName)
+	}
+	if remoteName == "" {
+		remoteName = "origin"
+	}
+	remoteURL, err := m.run(ctx, workspacePath, 15*time.Second, "git", "remote", "get-url", remoteName)
 	if err != nil {
 		return "", "", err
 	}
@@ -1459,8 +1512,14 @@ func latestTimePtr(current *time.Time, candidate time.Time) *time.Time {
 	return current
 }
 
-func (m *Manager) pushBranch(ctx context.Context, workspacePath, branch string) (string, error) {
-	remoteName := strings.TrimSpace(m.cfg.Repo.RemoteName)
+func (m *Manager) pushBranch(ctx context.Context, workspacePath, remoteName, branch string) (string, error) {
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		remoteName = strings.TrimSpace(m.cfg.Repo.RemoteName)
+	}
+	if remoteName == "" {
+		remoteName = "origin"
+	}
 	output, err := m.run(ctx, workspacePath, 2*time.Minute, "git", "push", "-u", remoteName, branch)
 	if err == nil {
 		return output, nil
@@ -1534,15 +1593,15 @@ func commitMessage(issue domain.Issue) string {
 	return fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
 }
 
-func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, baseRef string) (string, error) {
-	templateText := strings.TrimSpace(m.cfg.Repo.PRTemplate)
+func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, target domain.TargetConfig) (string, error) {
+	templateText := target.EffectivePRTemplate(m.cfg.Repo.PRTemplate)
 	if templateText == "" {
 		templateText = defaultPRTemplate()
 	}
 	return workflow.RenderTemplate(templateText, map[string]any{
 		"issue":    prIssueMap(issue),
 		"branch":   branch,
-		"base_ref": baseRef,
+		"base_ref": target.BaseRef,
 		"pr_title": prTitle,
 	})
 }

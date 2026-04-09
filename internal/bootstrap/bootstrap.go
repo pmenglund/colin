@@ -33,6 +33,8 @@ type Answers struct {
 	RepoURL       string
 	BaseRef       string
 	WorkspaceRoot string
+	RepoCacheRoot string
+	CheckoutPath  string
 	ServerPort    int
 	WantsWebhook  bool
 	WebhookPort   int
@@ -87,6 +89,14 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	repoCacheRoot, err := promptRequiredString(reader, out, "Repository cache root", resolved.defaults.RepoCacheRoot)
+	if err != nil {
+		return Result{}, err
+	}
+	checkoutPath, err := promptString(reader, out, "Existing checkout path (optional; leave blank to use the repository cache)", resolved.defaults.CheckoutPath)
+	if err != nil {
+		return Result{}, err
+	}
 	serverPort, err := promptRequiredInt(reader, out, "Server port", resolved.defaults.ServerPort)
 	if err != nil {
 		return Result{}, err
@@ -116,6 +126,8 @@ func Run(in io.Reader, out io.Writer, opts Options) (Result, error) {
 		RepoURL:       repoURL,
 		BaseRef:       baseRef,
 		WorkspaceRoot: workspaceRoot,
+		RepoCacheRoot: repoCacheRoot,
+		CheckoutPath:  checkoutPath,
 		ServerPort:    serverPort,
 		WantsWebhook:  wantsWebhook,
 		WebhookPort:   webhookPort,
@@ -172,6 +184,8 @@ type detectedDefaults struct {
 	RepoURL       string
 	BaseRef       string
 	WorkspaceRoot string
+	RepoCacheRoot string
+	CheckoutPath  string
 	ServerPort    int
 	WebhookPort   int
 }
@@ -194,6 +208,8 @@ func detectDefaults(workingDir string) detectedDefaults {
 		RepoURL:       gitOutput(workingDir, "config", "--get", "remote.origin.url"),
 		BaseRef:       firstNonEmpty(gitDefaultBranch(workingDir), "main"),
 		WorkspaceRoot: "./.colin/workspaces",
+		RepoCacheRoot: "./.colin/_repos",
+		CheckoutPath:  "",
 		ServerPort:    8888,
 		WebhookPort:   8998,
 	}

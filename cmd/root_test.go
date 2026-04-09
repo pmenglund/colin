@@ -1084,6 +1084,8 @@ func TestRunConfigCommandWritesWorkflow(t *testing.T) {
 		"git@github.com:acme/repo.git",
 		"main",
 		"",
+		"",
+		"",
 		"8888",
 		"n",
 		"y",
@@ -1102,8 +1104,14 @@ func TestRunConfigCommandWritesWorkflow(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	gotFile := string(data)
+	if !strings.Contains(gotFile, "targets:") {
+		t.Fatalf("workflow file = %q, want targets section", gotFile)
+	}
 	if !strings.Contains(gotFile, `project_slug: "project-1"`) {
 		t.Fatalf("workflow file = %q, want project slug", gotFile)
+	}
+	if strings.Contains(gotFile, "  project_slug: \"project-1\"\n  active_states:") {
+		t.Fatalf("workflow file = %q, want project slug only in targets", gotFile)
 	}
 	if !strings.Contains(gotFile, "api_key: $LINEAR_API_KEY") {
 		t.Fatalf("workflow file = %q, want env token", gotFile)

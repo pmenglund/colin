@@ -512,10 +512,16 @@ func TestBuildNormalizesExplicitTargets(t *testing.T) {
 		},
 		"targets": []map[string]any{
 			{
-				"name":         "api",
-				"project_slug": "project-1",
-				"repo_url":     "git@github.com:acme/api.git",
-				"base_ref":     "main",
+				"name":                     "api",
+				"project_slug":             "project-1",
+				"repo_url":                 "git@github.com:acme/api.git",
+				"base_ref":                 "main",
+				"checkout_path":            "./api-checkout",
+				"remote_name":              "upstream",
+				"merge_method":             "rebase",
+				"branch_template":          "feature/{{.issue.identifier}}",
+				"pr_template":              "target pr {{.issue.identifier}}",
+				"codex_pr_reviews_enabled": true,
 			},
 			{
 				"name":         "web",
@@ -533,7 +539,11 @@ func TestBuildNormalizesExplicitTargets(t *testing.T) {
 	if len(cfg.Targets) != 2 {
 		t.Fatalf("len(cfg.Targets) = %d, want 2", len(cfg.Targets))
 	}
-	if cfg.Targets[0].ProjectSlug != "project-1" || cfg.Targets[0].RepoURL != "git@github.com:acme/api.git" || cfg.Targets[0].BaseRef != "main" {
+	wantCheckout, err := filepath.Abs(filepath.Clean("./api-checkout"))
+	if err != nil {
+		t.Fatalf("filepath.Abs(checkout) error = %v", err)
+	}
+	if cfg.Targets[0].ProjectSlug != "project-1" || cfg.Targets[0].RepoURL != "git@github.com:acme/api.git" || cfg.Targets[0].BaseRef != "main" || cfg.Targets[0].CheckoutPath != wantCheckout || cfg.Targets[0].RemoteName != "upstream" || cfg.Targets[0].MergeMethod != "rebase" || cfg.Targets[0].BranchTemplate != "feature/{{.issue.identifier}}" || cfg.Targets[0].PRTemplate != "target pr {{.issue.identifier}}" || !cfg.Targets[0].CodexPRReviewsEnabled {
 		t.Fatalf("cfg.Targets[0] = %+v", cfg.Targets[0])
 	}
 	if cfg.Targets[1].ProjectSlug != "project-2" || cfg.Targets[1].RepoURL != "git@github.com:acme/web.git" || cfg.Targets[1].BaseRef != "trunk" {
@@ -696,6 +706,76 @@ func TestBuildMakesWorkspaceRootAbsolute(t *testing.T) {
 	}
 }
 
+func TestBuildReadsWorkspaceRepoCacheRootAndCheckoutPath(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"workspace": map[string]any{
+			"root":            "./.colin/workspaces",
+			"repo_url":        "git@github.com:acme/repo.git",
+			"base_ref":        "main",
+			"repo_cache_root": "./.colin/_repos",
+			"checkout_path":   "./repo-checkout",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	wantCache, err := filepath.Abs(filepath.Clean("./.colin/_repos"))
+	if err != nil {
+		t.Fatalf("filepath.Abs(repo cache) error = %v", err)
+	}
+	if cfg.Workspace.RepoCacheRoot != wantCache {
+		t.Fatalf("cfg.Workspace.RepoCacheRoot = %q, want %q", cfg.Workspace.RepoCacheRoot, wantCache)
+	}
+	wantCheckout, err := filepath.Abs(filepath.Clean("./repo-checkout"))
+	if err != nil {
+		t.Fatalf("filepath.Abs(checkout) error = %v", err)
+	}
+	if cfg.Workspace.CheckoutPath != wantCheckout {
+		t.Fatalf("cfg.Workspace.CheckoutPath = %q, want %q", cfg.Workspace.CheckoutPath, wantCheckout)
+	}
+	if len(cfg.Targets) != 1 || cfg.Targets[0].CheckoutPath != wantCheckout {
+		t.Fatalf("cfg.Targets = %+v, want checkout path %q", cfg.Targets, wantCheckout)
+	}
+}
+
+func TestBuildDefaultsWorkspaceRepoCacheRootNextToWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"workspace": map[string]any{
+			"root": "./.colin/workspaces",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	want, err := filepath.Abs(filepath.Clean("./.colin/_repos"))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	if cfg.Workspace.RepoCacheRoot != want {
+		t.Fatalf("cfg.Workspace.RepoCacheRoot = %q, want %q", cfg.Workspace.RepoCacheRoot, want)
+	}
+}
+
 func TestCandidateStatesIncludesRepoAutomationStatesOnce(t *testing.T) {
 	t.Parallel()
 
@@ -741,6 +821,9 @@ func TestBuildReadsPRTemplate(t *testing.T) {
 	if got := cfg.Repo.PRTemplate; got != "Issue {{.issue.identifier}}" {
 		t.Fatalf("cfg.Repo.PRTemplate = %q, want %q", got, "Issue {{.issue.identifier}}")
 	}
+	if len(cfg.Targets) != 1 || cfg.Targets[0].PRTemplate != "Issue {{.issue.identifier}}" {
+		t.Fatalf("cfg.Targets = %+v, want inherited PR template", cfg.Targets)
+	}
 }
 
 func TestBuildReadsBranchTemplate(t *testing.T) {
@@ -764,6 +847,9 @@ func TestBuildReadsBranchTemplate(t *testing.T) {
 	}
 	if got := cfg.Repo.BranchTemplate; got != "feature/{{.issue.identifier}}" {
 		t.Fatalf("cfg.Repo.BranchTemplate = %q, want %q", got, "feature/{{.issue.identifier}}")
+	}
+	if len(cfg.Targets) != 1 || cfg.Targets[0].BranchTemplate != "feature/{{.issue.identifier}}" {
+		t.Fatalf("cfg.Targets = %+v, want inherited branch template", cfg.Targets)
 	}
 }
 
@@ -886,5 +972,8 @@ func TestBuildReadsCodexPRReviewsEnabled(t *testing.T) {
 	}
 	if !cfg.Repo.CodexPRReviewsEnabled {
 		t.Fatal("cfg.Repo.CodexPRReviewsEnabled = false, want true")
+	}
+	if len(cfg.Targets) != 1 || !cfg.Targets[0].CodexPRReviewsEnabled {
+		t.Fatalf("cfg.Targets = %+v, want inherited codex PR review setting", cfg.Targets)
 	}
 }

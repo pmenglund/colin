@@ -17,6 +17,7 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		RepoURL:       "git@github.com:acme/repo.git",
 		BaseRef:       "main",
 		WorkspaceRoot: "./.colin/workspaces",
+		RepoCacheRoot: "./.colin/_repos",
 		ServerPort:    7777,
 		WantsWebhook:  true,
 		WebhookPort:   8998,
@@ -26,6 +27,8 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"targets:",
+		`name: "project-1"`,
 		`project_slug: "project-1"`,
 		"api_key: $LINEAR_API_KEY",
 		"webhook_signing_secret: $LINEAR_WEBHOOK_SECRET",
@@ -34,6 +37,8 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		"api_token: $GITHUB_TOKEN",
 		`repo_url: "git@github.com:acme/repo.git"`,
 		`base_ref: "main"`,
+		`repo_cache_root: "./.colin/_repos"`,
+		"# checkout_path: /path/to/existing/checkout",
 		"port: 7777",
 		"webhook_port: 8998",
 		"# Optional: enable Slack issue summaries plus the Slack App Home view for tracked issues.",
@@ -50,6 +55,16 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 			t.Fatalf("RenderWorkflow() missing %q in output:\n%s", want, got)
 		}
 	}
+	for _, unwanted := range []string{
+		"  project_slug: \"project-1\"\n  active_states:",
+		"workspace:\n  root: \"./.colin/workspaces\"\n  repo_url:",
+		"repo:\n  backend: \"github\"\n  api_token: $GITHUB_TOKEN\n  publish_states:\n    - Review\n  merge_states:\n    - Merge\n  remote_name:",
+		"repo:\n  backend: \"github\"\n  api_token: $GITHUB_TOKEN\n  publish_states:\n    - Review\n  merge_states:\n    - Merge\n  branch_template:",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RenderWorkflow() unexpectedly contained legacy config %q in output:\n%s", unwanted, got)
+		}
+	}
 }
 
 func TestRunWritesWorkflowAndPrintsWebhookSkip(t *testing.T) {
@@ -61,6 +76,8 @@ func TestRunWritesWorkflowAndPrintsWebhookSkip(t *testing.T) {
 		"project-1",
 		"git@github.com:acme/repo.git",
 		"main",
+		"",
+		"",
 		"",
 		"8888",
 		"n",
@@ -84,11 +101,17 @@ func TestRunWritesWorkflowAndPrintsWebhookSkip(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	gotFile := string(data)
+	if !strings.Contains(gotFile, "targets:") {
+		t.Fatalf("workflow file = %q, want targets section", gotFile)
+	}
 	if !strings.Contains(gotFile, `project_slug: "project-1"`) {
 		t.Fatalf("workflow file = %q, want project slug", gotFile)
 	}
 	if !strings.Contains(gotFile, `repo_url: "git@github.com:acme/repo.git"`) {
 		t.Fatalf("workflow file = %q, want repo url", gotFile)
+	}
+	if strings.Contains(gotFile, "  project_slug: \"project-1\"\n  active_states:") {
+		t.Fatalf("workflow file = %q, want project slug only in targets", gotFile)
 	}
 	if strings.Contains(gotFile, "webhook_port:") {
 		t.Fatalf("workflow file = %q, want webhook port omitted when webhooks are disabled", gotFile)
@@ -294,6 +317,7 @@ func TestBuildConfigFromAnswersUsesSessionTokens(t *testing.T) {
 		RepoURL:       "git@github.com:acme/repo.git",
 		BaseRef:       "main",
 		WorkspaceRoot: "./.colin/workspaces",
+		RepoCacheRoot: "./.colin/_repos",
 		ServerPort:    8888,
 	}, "lin_api_test", "github_pat_test")
 	if err != nil {
@@ -304,5 +328,36 @@ func TestBuildConfigFromAnswersUsesSessionTokens(t *testing.T) {
 	}
 	if got := cfg.Repo.APIToken; got != "github_pat_test" {
 		t.Fatalf("cfg.Repo.APIToken = %q, want github_pat_test", got)
+	}
+	if len(cfg.Targets) != 1 {
+		t.Fatalf("len(cfg.Targets) = %d, want 1", len(cfg.Targets))
+	}
+	if got := cfg.Targets[0].Name; got != "project-1" {
+		t.Fatalf("cfg.Targets[0].Name = %q, want project-1", got)
+	}
+	if got := cfg.Targets[0].ProjectSlug; got != "project-1" {
+		t.Fatalf("cfg.Targets[0].ProjectSlug = %q, want project-1", got)
+	}
+	if got := cfg.Targets[0].RepoURL; got != "git@github.com:acme/repo.git" {
+		t.Fatalf("cfg.Targets[0].RepoURL = %q, want git@github.com:acme/repo.git", got)
+	}
+	if got := cfg.Targets[0].BaseRef; got != "main" {
+		t.Fatalf("cfg.Targets[0].BaseRef = %q, want main", got)
+	}
+	if got := cfg.Targets[0].RemoteName; got != "origin" {
+		t.Fatalf("cfg.Targets[0].RemoteName = %q, want origin", got)
+	}
+	if got := cfg.Targets[0].MergeMethod; got != "squash" {
+		t.Fatalf("cfg.Targets[0].MergeMethod = %q, want squash", got)
+	}
+	if got := cfg.Targets[0].BranchTemplate; got != "colin/{{.issue.title}}" {
+		t.Fatalf("cfg.Targets[0].BranchTemplate = %q, want colin/{{.issue.title}}", got)
+	}
+	wantRepoCacheRoot, err := filepath.Abs(filepath.Clean("./.colin/_repos"))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	if got := cfg.Workspace.RepoCacheRoot; got != wantRepoCacheRoot {
+		t.Fatalf("cfg.Workspace.RepoCacheRoot = %q, want %q", got, wantRepoCacheRoot)
 	}
 }

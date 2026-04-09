@@ -55,7 +55,7 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/config/` - typed runtime config and validation
 - `internal/tracker/` - tracker interface
 - `internal/tracker/linear/` - Linear GraphQL adapter for issue reads, state writes, comment writes, and `paused` label management
-- `internal/workspace/` - per-issue workspace lifecycle and hooks
+- `internal/workspace/` - per-issue Git worktree lifecycle, shared checkout cache management, and hooks
 - `internal/agent/codex/` - Codex app-server integration, transport, and protocol/event normalization
 - `internal/automation/` - issue-run orchestration, workflow handoff policy, ExecPlan decisions, and merge-recovery automation
 - `internal/orchestrator/` - dispatch, reconciliation, retries, loop protection, and observability state

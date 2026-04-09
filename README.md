@@ -16,7 +16,7 @@ If you want Colin to run as a first-class Linear app user, enable `tracker.app_m
 
 Optional but encouraged:
 
-- [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests, with `repo.codex_pr_reviews_enabled: true` set in `WORKFLOW.md` when you want Colin to wait for that review before merging
+- [Codex Code Review](https://help.openai.com/en/articles/11369540/) enabled for the repositories where Colin will open pull requests, with target `codex_pr_reviews_enabled: true` set in `WORKFLOW.md` when you want Colin to wait for that review before merging
 - public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md), plus `LINEAR_WEBHOOK_SECRET` and `GITHUB_WEBHOOK_SECRET` exported when you enable signed provider webhooks; if the Linear app webhook uses its own secret, also export `LINEAR_APP_WEBHOOK_SECRET`
 - a Slack bot token exported as `SLACK_BOT_TOKEN` and a channel ID in `WORKFLOW.md` when you want Colin to keep one issue-summary message per tracked issue in Slack; add `SLACK_APP_TOKEN` and `slack.app_token` when you also want Colin to acknowledge Slack button clicks over Socket Mode, and add `SLACK_SIGNING_SECRET` when you want Colin to serve the Slack app Home tab over the webhook server
 
@@ -74,7 +74,7 @@ When Colin is running, it also starts a local [`gops`](https://github.com/google
 Colin runs as a long-lived orchestrator:
 
 1. It watches the configured Linear project targets for issues in active states.
-2. It creates or reuses a per-issue workspace so work can continue cleanly across retries and follow-up turns.
+2. It creates or reuses a per-issue Git worktree so work can continue cleanly across retries and follow-up turns without cloning the full repository for every issue.
 3. It routes each issue to the repository and base branch configured for that issue's target.
 4. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
 5. It posts progress back to Linear and exposes a local dashboard for operators.
@@ -110,7 +110,7 @@ If the selected workflow file is missing and Colin is running in an interactive 
 
 In an interactive terminal, `colin config` launches a Bubble Tea wizard that:
 
-- collects the watched Linear project, repository URL, base branch, workspace root, port, and webhook preference
+- collects the watched Linear project, repository URL, base branch, workspace root, repository cache root, optional existing checkout path, port, and webhook preference
 - validates token prefixes and required fields inline while you type
 - fetches accessible Linear projects when `LINEAR_API_KEY` is available, while still allowing manual slug entry
 - runs live preflight checks before writing `WORKFLOW.md`
@@ -150,6 +150,7 @@ Run `colin config` when you need to create or refresh `WORKFLOW.md`. The wizard 
 - the default repository Colin should prepare branches and PRs for
 - the default base branch Colin should branch and merge from
 - the workspace root Colin should use for per-issue worktrees
+- the repository cache root Colin should use for managed shared checkouts, or an existing checkout path to use instead
 - the local dashboard port
 - whether you want webhook follow-up guidance
 
@@ -162,7 +163,9 @@ At the review step Colin runs live checks when it has the required credentials:
 
 Once the review passes, the wizard writes `WORKFLOW.md`.
 
-For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, and `base_ref`. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
+For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, `base_ref`, and repository-specific options such as `remote_name`, `merge_method`, `branch_template`, `pr_template`, and `codex_pr_reviews_enabled`. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
+
+Colin creates new issue workspaces as Git worktrees by default. It keeps one shared source checkout per target under `workspace.repo_cache_root` and reuses that checkout when preparing each per-issue worktree. If you already have a local checkout that should serve as the worktree source, set `checkout_path` on the matching target instead of letting Colin manage a checkout under the cache root.
 
 To enable app mode after the wizard runs, edit `WORKFLOW.md` and set:
 

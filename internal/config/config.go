@@ -143,6 +143,11 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 	if !validMergeMethod(cfg.Repo.MergeMethod) {
 		return domain.ServiceConfig{}, ErrInvalidRepoMergeMethod
 	}
+	for _, target := range cfg.Targets {
+		if !validMergeMethod(target.MergeMethod) {
+			return domain.ServiceConfig{}, ErrInvalidRepoMergeMethod
+		}
+	}
 	if _, err := repohost.Lookup(cfg.Repo.Backend); err != nil {
 		return domain.ServiceConfig{}, ErrUnsupportedRepoBackend
 	}
@@ -175,11 +180,12 @@ func applyTargetsConfig(cfg *domain.ServiceConfig, raw domain.WorkflowConfig) er
 	hasLegacyProject := stringValue(raw.Tracker.ProjectSlug) != ""
 	hasLegacyRepoURL := stringValue(raw.Workspace.RepoURL) != ""
 	hasLegacyBaseRef := stringValue(raw.Workspace.BaseRef) != ""
+	hasLegacyCheckoutPath := stringValue(raw.Workspace.CheckoutPath) != ""
 	hasLegacy := hasLegacyProject || hasLegacyRepoURL || hasLegacyBaseRef
 	hasTargets := len(raw.Targets) > 0
 
-	if hasTargets && hasLegacy {
-		return fmt.Errorf("%w: %w: use either targets or tracker.project_slug/workspace.repo_url/workspace.base_ref, not both", ErrInvalidWorkflowConfig, ErrMixedTargetConfig)
+	if hasTargets && (hasLegacy || hasLegacyCheckoutPath) {
+		return fmt.Errorf("%w: %w: use either targets or tracker.project_slug/workspace.repo_url/workspace.base_ref/workspace.checkout_path, not both", ErrInvalidWorkflowConfig, ErrMixedTargetConfig)
 	}
 
 	targets := make([]domain.TargetConfig, 0, max(1, len(raw.Targets)))
@@ -192,18 +198,24 @@ func applyTargetsConfig(cfg *domain.ServiceConfig, raw domain.WorkflowConfig) er
 			targets = append(targets, normalized)
 		}
 	} else {
-		if cfg.Workspace.RepoURL != "" || cfg.Workspace.BaseRef != "" {
+		if cfg.Workspace.RepoURL != "" || cfg.Workspace.BaseRef != "" || cfg.Workspace.CheckoutPath != "" {
 			if cfg.Workspace.RepoURL == "" || cfg.Workspace.BaseRef == "" {
 				return ErrInvalidWorkspaceGitConf
 			}
 		}
 		if strings.TrimSpace(cfg.Tracker.ProjectSlug) != "" {
 			targets = append(targets, domain.TargetConfig{
-				Key:         deriveTargetKey(cfg.Repo.Backend, cfg.Tracker.ProjectSlug, cfg.Workspace.RepoURL),
-				Name:        cfg.Tracker.ProjectSlug,
-				ProjectSlug: cfg.Tracker.ProjectSlug,
-				RepoURL:     cfg.Workspace.RepoURL,
-				BaseRef:     cfg.Workspace.BaseRef,
+				Key:                   deriveTargetKey(cfg.Repo.Backend, cfg.Tracker.ProjectSlug, cfg.Workspace.RepoURL),
+				Name:                  cfg.Tracker.ProjectSlug,
+				ProjectSlug:           cfg.Tracker.ProjectSlug,
+				RepoURL:               cfg.Workspace.RepoURL,
+				BaseRef:               cfg.Workspace.BaseRef,
+				CheckoutPath:          cfg.Workspace.CheckoutPath,
+				RemoteName:            cfg.Repo.RemoteName,
+				MergeMethod:           cfg.Repo.MergeMethod,
+				BranchTemplate:        cfg.Repo.BranchTemplate,
+				PRTemplate:            cfg.Repo.PRTemplate,
+				CodexPRReviewsEnabled: cfg.Repo.CodexPRReviewsEnabled,
 			})
 		}
 	}
@@ -237,6 +249,7 @@ func applyTargetsConfig(cfg *domain.ServiceConfig, raw domain.WorkflowConfig) er
 	cfg.Tracker.ProjectSlug = targets[0].ProjectSlug
 	cfg.Workspace.RepoURL = targets[0].RepoURL
 	cfg.Workspace.BaseRef = targets[0].BaseRef
+	cfg.Workspace.CheckoutPath = targets[0].CheckoutPath
 	return nil
 }
 
@@ -251,12 +264,27 @@ func normalizeTargetConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTargetC
 	if name == "" {
 		name = projectSlug
 	}
+	checkoutPath := expandPath(stringValue(raw.CheckoutPath))
+	remoteName := firstNonEmpty(stringValue(raw.RemoteName), cfg.Repo.RemoteName)
+	mergeMethod := strings.ToLower(firstNonEmpty(stringValue(raw.MergeMethod), cfg.Repo.MergeMethod))
+	branchTemplate := firstNonEmpty(stringValue(raw.BranchTemplate), cfg.Repo.BranchTemplate)
+	prTemplate := firstNonEmpty(stringValue(raw.PRTemplate), cfg.Repo.PRTemplate)
+	codexPRReviewsEnabled := cfg.Repo.CodexPRReviewsEnabled
+	if raw.CodexPRReviewsEnabled != nil {
+		codexPRReviewsEnabled = *raw.CodexPRReviewsEnabled
+	}
 	return domain.TargetConfig{
-		Key:         deriveTargetKey(cfg.Repo.Backend, projectSlug, repoURL),
-		Name:        name,
-		ProjectSlug: projectSlug,
-		RepoURL:     repoURL,
-		BaseRef:     baseRef,
+		Key:                   deriveTargetKey(cfg.Repo.Backend, projectSlug, repoURL),
+		Name:                  name,
+		ProjectSlug:           projectSlug,
+		RepoURL:               repoURL,
+		BaseRef:               baseRef,
+		CheckoutPath:          checkoutPath,
+		RemoteName:            remoteName,
+		MergeMethod:           mergeMethod,
+		BranchTemplate:        branchTemplate,
+		PRTemplate:            prTemplate,
+		CodexPRReviewsEnabled: codexPRReviewsEnabled,
 	}, nil
 }
 
@@ -401,6 +429,15 @@ func applyWorkspaceConfig(cfg *domain.ServiceConfig, raw domain.WorkflowWorkspac
 		cfg.Workspace.Root = expandPath(resolveEnvToken(value))
 	} else {
 		cfg.Workspace.Root = expandPath(cfg.Workspace.Root)
+	}
+	if value := stringValue(raw.RepoCacheRoot); value != "" {
+		cfg.Workspace.RepoCacheRoot = expandPath(resolveEnvToken(value))
+	}
+	if strings.TrimSpace(cfg.Workspace.RepoCacheRoot) == "" {
+		cfg.Workspace.RepoCacheRoot = filepath.Join(filepath.Dir(cfg.Workspace.Root), "_repos")
+	}
+	if value := stringValue(raw.CheckoutPath); value != "" {
+		cfg.Workspace.CheckoutPath = expandPath(resolveEnvToken(value))
 	}
 	if value := stringValue(raw.RepoURL); value != "" {
 		cfg.Workspace.RepoURL = value

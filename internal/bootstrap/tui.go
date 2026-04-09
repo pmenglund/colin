@@ -24,6 +24,8 @@ const (
 	tuiStepRepoURL
 	tuiStepBaseRef
 	tuiStepWorkspaceRoot
+	tuiStepRepoCacheRoot
+	tuiStepCheckoutPath
 	tuiStepServerPort
 	tuiStepWebhook
 	tuiStepWebhookPort
@@ -63,6 +65,8 @@ type tuiModel struct {
 	repoURL       string
 	baseRef       string
 	workspaceRoot string
+	repoCacheRoot string
+	checkoutPath  string
 	serverPort    string
 	wantsWebhook  bool
 	webhookPort   string
@@ -130,6 +134,8 @@ func RunTUI(in io.Reader, out io.Writer, opts Options) (Result, error) {
 		repoURL:           resolved.defaults.RepoURL,
 		baseRef:           resolved.defaults.BaseRef,
 		workspaceRoot:     resolved.defaults.WorkspaceRoot,
+		repoCacheRoot:     resolved.defaults.RepoCacheRoot,
+		checkoutPath:      resolved.defaults.CheckoutPath,
 		serverPort:        fmt.Sprintf("%d", resolved.defaults.ServerPort),
 		webhookPort:       fmt.Sprintf("%d", resolved.defaults.WebhookPort),
 		projectManualMode: !isValidLinearAPIKey(resolved.linearAPIKey),
@@ -219,7 +225,7 @@ func (m tuiModel) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.step {
-	case tuiStepLinearAPIKey, tuiStepGitHubToken, tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort, tuiStepWebhookPort:
+	case tuiStepLinearAPIKey, tuiStepGitHubToken, tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepRepoCacheRoot, tuiStepCheckoutPath, tuiStepServerPort, tuiStepWebhookPort:
 		m.insertText(text)
 		m.inlineError = m.liveValidationError()
 		if m.step != tuiStepLinearAPIKey {
@@ -263,7 +269,7 @@ func (m tuiModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateGitHubTokenKey(msg)
 	case tuiStepProjectSlug:
 		return m.updateProjectKey(msg)
-	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort, tuiStepWebhookPort:
+	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepRepoCacheRoot, tuiStepCheckoutPath, tuiStepServerPort, tuiStepWebhookPort:
 		return m.updateTextStepKey(msg)
 	case tuiStepWebhook:
 		return m.updateWebhookKey(msg)
@@ -645,6 +651,8 @@ func (m tuiModel) visibleSteps() []int {
 		tuiStepRepoURL,
 		tuiStepBaseRef,
 		tuiStepWorkspaceRoot,
+		tuiStepRepoCacheRoot,
+		tuiStepCheckoutPath,
 		tuiStepServerPort,
 		tuiStepWebhook,
 	)
@@ -690,6 +698,10 @@ func (m tuiModel) currentTextValue() string {
 		return m.baseRef
 	case tuiStepWorkspaceRoot:
 		return m.workspaceRoot
+	case tuiStepRepoCacheRoot:
+		return m.repoCacheRoot
+	case tuiStepCheckoutPath:
+		return m.checkoutPath
 	case tuiStepServerPort:
 		return m.serverPort
 	case tuiStepWebhookPort:
@@ -713,6 +725,10 @@ func (m *tuiModel) setCurrentTextValue(value string) {
 		m.baseRef = value
 	case tuiStepWorkspaceRoot:
 		m.workspaceRoot = value
+	case tuiStepRepoCacheRoot:
+		m.repoCacheRoot = value
+	case tuiStepCheckoutPath:
+		m.checkoutPath = value
 	case tuiStepServerPort:
 		m.serverPort = value
 	case tuiStepWebhookPort:
@@ -761,6 +777,10 @@ func (m tuiModel) validateCurrentStep() string {
 		return validateBaseRef(m.baseRef)
 	case tuiStepWorkspaceRoot:
 		return validateWorkspaceRoot(m.workspaceRoot)
+	case tuiStepRepoCacheRoot:
+		return validateWorkspaceRoot(m.repoCacheRoot)
+	case tuiStepCheckoutPath:
+		return ""
 	case tuiStepServerPort:
 		return validateServerPort(m.serverPort)
 	case tuiStepWebhookPort:
@@ -787,6 +807,8 @@ func (m tuiModel) answers() (Answers, error) {
 		RepoURL:       strings.TrimSpace(m.repoURL),
 		BaseRef:       strings.TrimSpace(m.baseRef),
 		WorkspaceRoot: strings.TrimSpace(m.workspaceRoot),
+		RepoCacheRoot: strings.TrimSpace(m.repoCacheRoot),
+		CheckoutPath:  strings.TrimSpace(m.checkoutPath),
 		ServerPort:    port,
 		WantsWebhook:  m.wantsWebhook,
 		WebhookPort:   webhookPort,
@@ -862,7 +884,7 @@ func (m tuiModel) render() string {
 		return m.renderGitHubTokenStep()
 	case tuiStepProjectSlug:
 		return m.renderProjectStep()
-	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepServerPort, tuiStepWebhookPort:
+	case tuiStepRepoURL, tuiStepBaseRef, tuiStepWorkspaceRoot, tuiStepRepoCacheRoot, tuiStepCheckoutPath, tuiStepServerPort, tuiStepWebhookPort:
 		return m.renderTextStep()
 	case tuiStepWebhook:
 		return m.renderWebhookStep()
@@ -1050,6 +1072,8 @@ func (m tuiModel) renderReview() string {
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Repository URL:"), tuiReviewValueStyle.Render(answers.RepoURL)),
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Base branch:"), tuiReviewValueStyle.Render(answers.BaseRef)),
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Workspace root:"), tuiReviewValueStyle.Render(previewWorkspaceRoot(answers.WorkspaceRoot))),
+		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Repository cache root:"), tuiReviewValueStyle.Render(previewWorkspaceRoot(answers.RepoCacheRoot))),
+		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Existing checkout path:"), tuiReviewValueStyle.Render(optionalPathPreview(answers.CheckoutPath))),
 		fmt.Sprintf("%s %d", tuiLabelStyle.Render("Server port:"), answers.ServerPort),
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Webhook guidance:"), tuiReviewValueStyle.Render(yesNo(answers.WantsWebhook))),
 		fmt.Sprintf("%s %s", tuiLabelStyle.Render("Webhook port:"), tuiReviewValueStyle.Render(func() string {
@@ -1161,6 +1185,10 @@ func (m tuiModel) textStepDetails() (string, string, string) {
 		return "Base branch", "This is the branch Colin should branch and merge from.", m.baseRef
 	case tuiStepWorkspaceRoot:
 		return "Workspace root", "Colin will create per-issue workspaces under this directory.", m.workspaceRoot
+	case tuiStepRepoCacheRoot:
+		return "Repository cache root", "Colin will keep managed source checkouts here for worktree creation.", m.repoCacheRoot
+	case tuiStepCheckoutPath:
+		return "Existing checkout path", "Optional. Leave blank to let Colin manage a shared checkout in the repository cache.", m.checkoutPath
 	case tuiStepServerPort:
 		return "Server port", "The local dashboard and setup UI port.", m.serverPort
 	case tuiStepWebhookPort:
@@ -1176,8 +1204,23 @@ func (m tuiModel) textStepPreview() string {
 		if preview := previewWorkspaceRoot(m.workspaceRoot); preview != "" {
 			return "Expanded path: " + preview
 		}
+	case tuiStepRepoCacheRoot:
+		if preview := previewWorkspaceRoot(m.repoCacheRoot); preview != "" {
+			return "Expanded path: " + preview
+		}
+	case tuiStepCheckoutPath:
+		if preview := previewWorkspaceRoot(m.checkoutPath); preview != "" {
+			return "Expanded path: " + preview
+		}
 	}
 	return ""
+}
+
+func optionalPathPreview(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "managed cache"
+	}
+	return previewWorkspaceRoot(value)
 }
 
 func (m tuiModel) renderInput(value string) string {

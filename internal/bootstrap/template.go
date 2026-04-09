@@ -21,7 +21,6 @@ tracker:
   # Set to true only when LINEAR_API_KEY belongs to a Linear app user and you want
   # Colin to start active work only for issues delegated to that app.
   # app_mode: true
-  project_slug: {{yaml .ProjectSlug}}
   active_states:
     - Todo
     - In Progress
@@ -38,8 +37,7 @@ polling:
 
 workspace:
   root: {{yaml .WorkspaceRoot}}
-  repo_url: {{yaml .RepoURL}}
-  base_ref: {{yaml .BaseRef}}
+  repo_cache_root: {{yaml .RepoCacheRoot}}
 
 repo:
   backend: {{yaml .Backend}}
@@ -48,11 +46,24 @@ repo:
     - Review
   merge_states:
     - Merge
-  # When true, Colin waits in Merge for Codex PR review to start before merging.
-  codex_pr_reviews_enabled: false
-  remote_name: origin
-  merge_method: squash
-  branch_template: colin/{{"{{.issue.title}}"}}
+
+targets:
+  - name: {{yaml .ProjectSlug}}
+    project_slug: {{yaml .ProjectSlug}}
+    repo_url: {{yaml .RepoURL}}
+    base_ref: {{yaml .BaseRef}}
+    remote_name: origin
+    merge_method: squash
+    branch_template: colin/{{"{{.issue.title}}"}}
+    # When true, Colin waits in Merge for Codex PR review to start before merging.
+    codex_pr_reviews_enabled: false
+{{- if .CheckoutPath}}
+    checkout_path: {{yaml .CheckoutPath}}
+{{- else}}
+    # Optional: set checkout_path to an existing checkout if you do not want Colin
+    # to manage a shared source checkout under workspace.repo_cache_root.
+    # checkout_path: /path/to/existing/checkout
+{{- end}}
 
 hooks:
   timeout_ms: 60000
@@ -166,6 +177,9 @@ Output contract:
 func RenderWorkflow(answers Answers) (string, error) {
 	if strings.TrimSpace(answers.Backend) == "" {
 		answers.Backend = "github"
+	}
+	if strings.TrimSpace(answers.RepoCacheRoot) == "" {
+		answers.RepoCacheRoot = "./.colin/_repos"
 	}
 	tpl, err := template.New("workflow").Funcs(template.FuncMap{
 		"yaml": func(value string) string {

@@ -199,7 +199,7 @@ Use this flow for reproducible CLI and TUI recordings instead of ad hoc screen c
 
 - Colin watches a single Linear project configured in `WORKFLOW.md`.
 - The runtime behavior is driven by workflow front matter, including polling cadence, workspace root, tracked states, Codex command, and repo automation settings.
-- `WORKFLOW.md` also carries the Codex prompt template and can optionally define `repo.pr_template` for the PR body Colin opens in GitHub. If that field is omitted, Colin uses its built-in default PR template.
+- `WORKFLOW.md` also carries the Codex prompt template and can optionally define a target `pr_template` for the PR body Colin opens in GitHub. If that field is omitted, Colin uses its built-in default PR template.
 - Each issue gets its own workspace directory. Colin preserves that workspace across retries and continuation runs.
 - Colin keeps one orchestrator loop that reconciles running work, dispatches new work when slots are available, and retries stalled or incomplete work.
 - On startup, Colin ensures the Linear issue label `paused` exists and never dispatches issues carrying that label.
@@ -311,8 +311,8 @@ When an issue is moved to `Review`, Colin does not run another coding turn. Inst
 - usually commits any local changes if the workspace is dirty
 - usually pushes the issue branch to the configured remote
 - usually creates or reuses a GitHub pull request targeting the configured base branch
-- uses `repo.branch_template` to choose a default branch name when the tracker does not provide one
-- renders the PR body from `repo.pr_template` when one is configured, otherwise uses the built-in default template
+- uses the target `branch_template` to choose a default branch name when the tracker does not provide one
+- renders the PR body from the target `pr_template` when one is configured, otherwise uses the built-in default template
 
 `Review` is PR-only. Colin should only leave an issue in `Review` when the branch and PR are the intended next artifact for human review.
 Colin only moves a coding run into `Review` after Codex explicitly emits `COLIN_OUTCOME: READY_FOR_REVIEW` and the issue workspace contains reviewable repository changes. A clean workspace on a branch that is not ahead of base is not reviewable and will not be handed off to `Review`. For ExecPlan-backed issues, that handoff is allowed only when every checkbox in the plan's `## Progress` section is complete.
@@ -344,13 +344,13 @@ When an issue is moved to `Merge`, Colin:
 
 - Moving an issue into `Merge` can wake Colin up immediately through the Linear webhook instead of waiting for the next polling interval when that issue belongs to the watched project and the webhook delivery includes the scheduling-relevant change. Polling still remains the fallback if a webhook is delayed or dropped.
 - ensures the branch and PR exist
-- if `repo.codex_pr_reviews_enabled` is `true`, waits in `Merge` until Codex has picked up the PR review and then checks the PR for Codex web review status before merging
-- if `repo.codex_pr_reviews_enabled` is `true`, keeps the issue in `Merge` while `chatgpt-codex-connector` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that reviewer remain
+- if the target `codex_pr_reviews_enabled` is `true`, waits in `Merge` until Codex has picked up the PR review and then checks the PR for Codex web review status before merging
+- if the target `codex_pr_reviews_enabled` is `true`, keeps the issue in `Merge` while `chatgpt-codex-connector` review is still pending after a newer `eyes` reaction than `thumbs up`, and only moves it back to `Review` with a Linear comment when unresolved review threads from that reviewer remain
 - if GitHub reports that the PR cannot be merged cleanly, asks Codex to merge the latest base branch into the issue branch, resolve conflicts in the workspace, and retry the merge while the issue stays in `Merge`
 - after Codex reports that merge-conflict repair is ready, verifies that the branch head actually changed and that the repaired branch contains the expected base commit before attempting the GitHub merge retry
 - if GitHub still reports the PR as temporarily not mergeable after that automatic conflict-repair attempt, or if the base branch moves again before the retry lands, keeps the issue in `Merge`, waits a short interval, and retries automatically up to a bounded limit
 - moves the issue back to `Review` with a Linear comment when that automatic conflict-repair attempt fails, when the post-repair branch validation fails, when the bounded retry limit is exhausted, or when the repaired branch receives unresolved Codex review feedback; otherwise it keeps waiting in `Merge` while fresh Codex review is still pending
-- merges the PR using the configured merge method
+- merges the PR using the target merge method
 - checks the team's configured Linear git `merge` automation target and, when one is configured, updates the issue to that state as part of merge completion
 
 The `[colin]` summary in `Merge` also distinguishes automatic waits from human handoffs. When Colin is still waiting for Codex review pickup or approval, when GitHub mergeability is still settling, or when the base branch moved again right after an automatic repair, the summary says Colin is retrying merge automation automatically and the issue should stay in `Merge`. When unresolved Codex PR feedback exists, when automatic merge-conflict repair fails, when Colin cannot verify the claimed repair from actual branch state, or when the bounded retry limit is exhausted, the summary says Colin has returned the issue to `Review` and tells the human what to fix before moving it back to `Merge`.
@@ -385,10 +385,11 @@ The checked-in `WORKFLOW.md` currently configures Colin to:
 - watch Linear project slug `0ece25450f8d`
 - poll every 30 seconds
 - use `./.colin/workspaces` as the workspace root
-- clone `git@github.com:pmenglund/colin.git`
+- use `./.colin/_repos` as the shared repository cache for Git worktree source checkouts
+- create per-issue Git worktrees for `git@github.com:pmenglund/colin.git` instead of cloning the repository for each issue
 - default issue branches to `colin/{{.issue.title}}` when Linear has no explicit branch name
 - base publish and merge automation on branch `symphony`
-- wait for Codex PR review to start before merge automation because `repo.codex_pr_reviews_enabled` is `true`
+- wait for Codex PR review to start before merge automation because the target `codex_pr_reviews_enabled` is `true`
 - decide once per issue whether the work is a one-shot change or needs a canonical ExecPlan, then reuse that stored decision on later coding turns
 - use `codex app-server` for coding runs
 - serve the loopback web UI on `http://127.0.0.1:8888` unless `server.ui_url` is set or Tailscale Serve exposes Colin from `/`

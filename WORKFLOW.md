@@ -25,6 +25,7 @@ polling:
 
 workspace:
   root: ./.colin/workspaces
+  repo_cache_root: ./.colin/_repos
 
 repo:
   api_token: $GITHUB_TOKEN
@@ -34,10 +35,6 @@ repo:
     - Review
   merge_states:
     - Merge
-  codex_pr_reviews_enabled: true
-  remote_name: origin
-  merge_method: squash
-  branch_template: colin/{{.issue.title}}
 
 # Replace this example target with your own Linear project slug, repository URL,
 # and base branch before running Colin.
@@ -46,6 +43,13 @@ targets:
     project_slug: your-linear-project-slug
     repo_url: git@github.com:your-org/your-repo.git
     base_ref: main
+    remote_name: origin
+    merge_method: squash
+    branch_template: colin/{{.issue.title}}
+    codex_pr_reviews_enabled: true
+    # Optional: set checkout_path to an existing checkout if you do not want Colin
+    # to manage a shared source checkout under workspace.repo_cache_root.
+    # checkout_path: /path/to/existing/checkout
 
 hooks:
   timeout_ms: 60000

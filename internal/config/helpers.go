@@ -26,6 +26,15 @@ func stringValue(value *string) string {
 	return strings.TrimSpace(*value)
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func intValue(value *int) (int, bool) {
 	if value == nil {
 		return 0, false

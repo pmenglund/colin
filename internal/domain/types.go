@@ -243,16 +243,24 @@ type WorkflowPollingConfig struct {
 }
 
 type WorkflowWorkspaceConfig struct {
-	Root    *string `yaml:"root"`
-	RepoURL *string `yaml:"repo_url"`
-	BaseRef *string `yaml:"base_ref"`
+	Root          *string `yaml:"root"`
+	RepoCacheRoot *string `yaml:"repo_cache_root"`
+	CheckoutPath  *string `yaml:"checkout_path"`
+	RepoURL       *string `yaml:"repo_url"`
+	BaseRef       *string `yaml:"base_ref"`
 }
 
 type WorkflowTargetConfig struct {
-	Name        *string `yaml:"name"`
-	ProjectSlug *string `yaml:"project_slug"`
-	RepoURL     *string `yaml:"repo_url"`
-	BaseRef     *string `yaml:"base_ref"`
+	Name                  *string `yaml:"name"`
+	ProjectSlug           *string `yaml:"project_slug"`
+	RepoURL               *string `yaml:"repo_url"`
+	BaseRef               *string `yaml:"base_ref"`
+	CheckoutPath          *string `yaml:"checkout_path"`
+	RemoteName            *string `yaml:"remote_name"`
+	MergeMethod           *string `yaml:"merge_method"`
+	BranchTemplate        *string `yaml:"branch_template"`
+	PRTemplate            *string `yaml:"pr_template"`
+	CodexPRReviewsEnabled *bool   `yaml:"codex_pr_reviews_enabled"`
 }
 
 type WorkflowRepoConfig struct {
@@ -353,18 +361,61 @@ type PollingConfig struct {
 
 // WorkspaceConfig configures per-issue workspace layout and optional git population.
 type WorkspaceConfig struct {
-	Root    string
-	RepoURL string
-	BaseRef string
+	Root          string
+	RepoCacheRoot string
+	CheckoutPath  string
+	RepoURL       string
+	BaseRef       string
 }
 
 // TargetConfig is one normalized mapping from a Linear project to a git repository and base branch.
 type TargetConfig struct {
-	Key         string
-	Name        string
-	ProjectSlug string
-	RepoURL     string
-	BaseRef     string
+	Key                   string
+	Name                  string
+	ProjectSlug           string
+	RepoURL               string
+	BaseRef               string
+	CheckoutPath          string
+	RemoteName            string
+	MergeMethod           string
+	BranchTemplate        string
+	PRTemplate            string
+	CodexPRReviewsEnabled bool
+}
+
+// EffectiveRemoteName returns the target remote name with a config fallback.
+func (target TargetConfig) EffectiveRemoteName(fallback string) string {
+	if value := strings.TrimSpace(target.RemoteName); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(fallback); value != "" {
+		return value
+	}
+	return "origin"
+}
+
+// EffectiveMergeMethod returns the target merge method with a config fallback.
+func (target TargetConfig) EffectiveMergeMethod(fallback string) string {
+	if value := strings.TrimSpace(target.MergeMethod); value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// EffectiveBranchTemplate returns the target branch template with a config fallback.
+func (target TargetConfig) EffectiveBranchTemplate(fallback string) string {
+	if value := strings.TrimSpace(target.BranchTemplate); value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// EffectivePRTemplate returns the target PR body template with a config fallback.
+func (target TargetConfig) EffectivePRTemplate(fallback string) string {
+	if value := strings.TrimSpace(target.PRTemplate); value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
 }
 
 // RepoConfig configures repository-host publish and merge automation tied to tracker states.

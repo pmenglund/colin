@@ -70,6 +70,7 @@ func TestTUIReviewWritesWorkflowWhenChecksAreSkipped(t *testing.T) {
 		repoURL:       "git@github.com:acme/repo.git",
 		baseRef:       "main",
 		workspaceRoot: "./.colin/workspaces",
+		repoCacheRoot: "./.colin/_repos",
 		serverPort:    "8888",
 	}
 
@@ -92,8 +93,15 @@ func TestTUIReviewWritesWorkflowWhenChecksAreSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.Contains(string(data), `project_slug: "project-1"`) {
-		t.Fatalf("workflow file = %q, want project slug", string(data))
+	gotFile := string(data)
+	if !strings.Contains(gotFile, "targets:") {
+		t.Fatalf("workflow file = %q, want targets section", gotFile)
+	}
+	if !strings.Contains(gotFile, `project_slug: "project-1"`) {
+		t.Fatalf("workflow file = %q, want project slug", gotFile)
+	}
+	if strings.Contains(gotFile, "  project_slug: \"project-1\"\n  active_states:") {
+		t.Fatalf("workflow file = %q, want project slug only in targets", gotFile)
 	}
 }
 
