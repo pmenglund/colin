@@ -160,11 +160,17 @@ func TestExtractContextWindowUsageFromThreadTokenUsageUpdated(t *testing.T) {
 			"turnId":   "turn-1",
 			"tokenUsage": map[string]any{
 				"modelContextWindow": 258000,
-				"total": map[string]any{
+				"last": map[string]any{
 					"inputTokens":           50000,
 					"outputTokens":          28400,
 					"reasoningOutputTokens": 0,
 					"totalTokens":           78400,
+				},
+				"total": map[string]any{
+					"inputTokens":           150000,
+					"outputTokens":          40000,
+					"reasoningOutputTokens": 0,
+					"totalTokens":           190000,
 				},
 			},
 		},
