@@ -506,7 +506,9 @@ func (o *Orchestrator) currentLinearRequests() (domain.RateLimitWindow, bool) {
 func trackedStateNames(cfg domain.ServiceConfig) []string {
 	seen := map[string]struct{}{}
 	var out []string
-	for _, state := range append(config.CandidateStates(cfg), cfg.Tracker.TerminalStates...) {
+	stateNames := append(config.CandidateStates(cfg), cfg.Tracker.TerminalStates...)
+	stateNames = append(stateNames, dashboardStateNames()...)
+	for _, state := range stateNames {
 		key := config.StateKey(state)
 		if key == "" {
 			continue
