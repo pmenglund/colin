@@ -46,6 +46,7 @@ func renderOverviewView(m model) string {
 	lines = append(lines,
 		"",
 		labelStyle.Render("Integrations"),
+		renderTailscaleStatusLine(m.setup, maxInt(m.width, defaultWidth)),
 		renderSlackSocketModeLine(m.snapshot.SlackSocketMode),
 	)
 	lines = append(lines, renderWebhookStatusLines(m.snapshot.Webhooks)...)
@@ -237,6 +238,68 @@ func renderSlackSocketModeLine(status domain.SlackSocketModeStatus) string {
 		}
 		return name + " " + line
 	}
+}
+
+func renderTailscaleStatusLine(status domain.FunnelSetupStatus, width int) string {
+	name := subtleStyle.Render(padRight("tailscale", 15))
+	line, style := tailscaleStatusText(status)
+	contentWidth := maxInt(width-18, 20)
+	return name + " " + style.Render(truncateRunes(line, contentWidth))
+}
+
+func tailscaleStatusText(status domain.FunnelSetupStatus) (string, lipgloss.Style) {
+	if status.Ready {
+		parts := []string{"ready"}
+		if value := strings.TrimSpace(status.TailnetUIBaseURL); value != "" {
+			parts = append(parts, "ui "+value)
+		}
+		if value := strings.TrimSpace(status.PublicBaseURL); value != "" {
+			parts = append(parts, "webhooks "+value)
+		}
+		return strings.Join(parts, "  "), successStyle
+	}
+
+	if len(status.Checks) == 0 {
+		return "not checked", subtleStyle
+	}
+
+	for _, check := range status.Checks {
+		if tailscaleCheckIsReady(check.Status) {
+			continue
+		}
+		line := tailscaleCheckSummary(check)
+		switch strings.ToLower(strings.TrimSpace(check.Status)) {
+		case "error":
+			return "error " + line, errorStyle
+		case "warn":
+			return "warning " + line, warnStyle
+		default:
+			return "needs setup " + line, warnStyle
+		}
+	}
+
+	return "not ready", warnStyle
+}
+
+func tailscaleCheckIsReady(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ok", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func tailscaleCheckSummary(check domain.SetupCheck) string {
+	label := strings.TrimSpace(check.Label)
+	detail := strings.TrimSpace(check.Detail)
+	if label == "" {
+		return sanitizeLogText(detail)
+	}
+	if detail == "" {
+		return sanitizeLogText(label)
+	}
+	return sanitizeLogText(label + ": " + detail)
 }
 
 func renderSlackSocketModeDetails(status domain.SlackSocketModeStatus) []string {
