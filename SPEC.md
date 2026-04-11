@@ -321,6 +321,7 @@ Top-level keys:
 - `tracker`
 - `polling`
 - `workspace`
+- `targets`
 - `hooks`
 - `agent`
 - `codex`
@@ -425,6 +426,11 @@ hand-maintained enum in this spec. To inspect the installed Codex schema, run
 by `v2/ThreadStartParams.json` and `v2/TurnStartParams.json`. Implementations may validate these
 fields locally if they want stricter startup checks.
 
+These top-level security values are defaults for every repository. A `targets[]` entry may override
+`approval_policy`, `thread_sandbox`, and `turn_sandbox_policy` for that repository with a nested
+`codex` object. Target-level overrides inherit unspecified fields from this top-level `codex`
+object.
+
 - `command` (string shell command)
   - Default: `codex app-server`
   - The runtime launches this command via `bash -lc` in the workspace directory.
@@ -442,6 +448,32 @@ fields locally if they want stricter startup checks.
 - `stall_timeout_ms` (integer)
   - Default: `300000` (5 minutes)
   - If `<= 0`, stall detection is disabled.
+
+#### 5.3.7 `targets` (list of objects)
+
+Each target maps one Linear project to one repository and base branch. Shared credentials and
+state lists remain top-level config. Repository-specific behavior belongs on the matching target.
+
+Fields:
+
+- `name` (string, optional)
+  - Friendly display name and workspace path segment. Defaults to `project_slug`.
+- `project_slug` (string)
+  - Linear project slug for issues that should use this target.
+- `repo_url` (string)
+  - Git repository URL or local path to clone or prepare.
+- `base_ref` (string)
+  - Base branch or ref used for issue branches and pull requests.
+- `checkout_path` (path string, optional)
+  - Existing local checkout to use as the source for managed worktrees.
+- `remote_name`, `merge_method`, `branch_template`, `pr_template`, and
+  `codex_pr_reviews_enabled`
+  - Repository-specific overrides for the top-level repository behavior.
+- `codex` (object, optional)
+  - Repository-specific Codex security overrides. Supported fields are `approval_policy`,
+    `thread_sandbox`, and `turn_sandbox_policy`. Unspecified fields inherit from the top-level
+    `codex` object. `codex.command`, `codex.cli_command`, and Codex timeout fields remain
+    top-level settings and are not target-level overrides.
 
 ### 5.4 Prompt Template Contract
 
@@ -544,7 +576,8 @@ Validation checks:
 - Workflow file can be loaded and parsed.
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution.
-- `tracker.project_slug` is present when required by the selected tracker kind.
+- `tracker.project_slug` is present when required by the selected tracker kind, unless `targets`
+  supplies the watched project mappings.
 - `codex.command` is present and non-empty.
 
 ### 6.4 Config Fields Summary (Cheat Sheet)
@@ -555,11 +588,20 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
 - `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
 - `tracker.webhook_signing_secret`: string or `$VAR`, recommended canonical env `LINEAR_WEBHOOK_SECRET`
-- `tracker.project_slug`: string, required when `tracker.kind=linear`
+- `tracker.project_slug`: string, required when `tracker.kind=linear` and `targets` is empty
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/symphony_workspaces`
+- `targets[].project_slug`: string, required for each multi-target entry
+- `targets[].repo_url`: string, required for each multi-target entry
+- `targets[].base_ref`: string, required for each multi-target entry
+- `targets[].codex.approval_policy`: Codex `AskForApproval` override, inherits from top-level
+  `codex.approval_policy` when unset
+- `targets[].codex.thread_sandbox`: Codex `SandboxMode` override, inherits from top-level
+  `codex.thread_sandbox` when unset
+- `targets[].codex.turn_sandbox_policy`: Codex `SandboxPolicy` override, inherits from top-level
+  `codex.turn_sandbox_policy` when unset
 - `hooks.after_create`: shell script or null
 - `hooks.before_run`: shell script or null
 - `hooks.after_run`: shell script or null
@@ -1953,6 +1995,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `codex.command` is preserved as a shell command string
+- Target-level Codex security overrides are merged with top-level `codex` defaults and sent to
+  future Codex thread and turn starts for issues in that target.
 - Per-state concurrency override map normalizes state names and ignores invalid values
 - Prompt template renders `issue` and `attempt`
 - Prompt rendering fails on unknown variables (strict mode)

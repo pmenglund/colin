@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -171,6 +172,137 @@ Work on {{ .issue.identifier }}.
 		if strings.Contains(comment.Body, "Colin is starting retry attempt") {
 			t.Fatalf("comment body = %q, want hidden internal verification retries", comment.Body)
 		}
+	}
+}
+
+func TestServiceAppliesTargetCodexSecurityPolicy(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	origin := newServiceE2EGitOrigin(t)
+	markerPath := filepath.Join(tempDir, "codex.marker")
+	requestLogPath := filepath.Join(tempDir, "codex.requests.jsonl")
+
+	linear := newFakeLinearServer(markerPath)
+	server := httptest.NewServer(linear)
+	defer server.Close()
+
+	workflowPath := filepath.Join(tempDir, "WORKFLOW.md")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_MARKER=%q COLIN_FAKE_CODEX_REQUEST_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		markerPath,
+		requestLogPath,
+		os.Args[0],
+	)
+	workflow := fmt.Sprintf(`---
+tracker:
+  kind: linear
+  endpoint: %q
+  api_key: test-linear-key
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 100
+workspace:
+  root: %q
+agent:
+  max_concurrent_agents: 1
+  max_turns: 1
+  max_retry_backoff_ms: 500
+targets:
+  - name: guarded
+    project_slug: test-project
+    repo_url: %q
+    base_ref: main
+    codex:
+      approval_policy: on-request
+      thread_sandbox: read-only
+      turn_sandbox_policy:
+        type: readOnly
+codex:
+  command: %q
+  approval_policy: never
+  thread_sandbox: danger-full-access
+  turn_sandbox_policy:
+    type: dangerFullAccess
+  turn_timeout_ms: 3000
+  read_timeout_ms: 1000
+  stall_timeout_ms: 3000
+server:
+  port: 0
+---
+Work on {{ .issue.identifier }}.
+`, server.URL, filepath.Join(tempDir, "workspaces"), origin, command)
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	logger := newLogger(io.Discard, false)
+	svc, err := New(context.Background(), logger, workflowPath)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Run(ctx)
+	}()
+
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
+		_, err := os.Stat(markerPath)
+		return err == nil
+	})
+	waitFor(t, serviceE2EWaitTimeout, func() bool {
+		requests, err := readFakeCodexRequests(requestLogPath)
+		if err != nil {
+			return false
+		}
+		return fakeCodexRequestByMethod(requests, "thread/start") != nil && fakeCodexRequestByMethod(requests, "turn/start") != nil
+	})
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("service did not stop after cancellation")
+	}
+
+	requests, err := readFakeCodexRequests(requestLogPath)
+	if err != nil {
+		t.Fatalf("read fake Codex requests: %v", err)
+	}
+	threadStart := fakeCodexRequestByMethod(requests, "thread/start")
+	if threadStart == nil {
+		t.Fatalf("fake Codex request log = %#v, want thread/start", requests)
+	}
+	threadParams, _ := threadStart["params"].(map[string]any)
+	if got, _ := threadParams["approvalPolicy"].(string); got != "on-request" {
+		t.Fatalf("thread/start approvalPolicy = %q, want on-request", got)
+	}
+	if got, _ := threadParams["sandbox"].(string); got != "read-only" {
+		t.Fatalf("thread/start sandbox = %q, want read-only", got)
+	}
+
+	turnStart := fakeCodexRequestByMethod(requests, "turn/start")
+	if turnStart == nil {
+		t.Fatalf("fake Codex request log = %#v, want turn/start", requests)
+	}
+	turnParams, _ := turnStart["params"].(map[string]any)
+	if got, _ := turnParams["approvalPolicy"].(string); got != "on-request" {
+		t.Fatalf("turn/start approvalPolicy = %q, want on-request", got)
+	}
+	sandboxPolicy, _ := turnParams["sandboxPolicy"].(map[string]any)
+	if got, _ := sandboxPolicy["type"].(string); got != "readOnly" {
+		t.Fatalf("turn/start sandboxPolicy.type = %q, want readOnly", got)
 	}
 }
 
@@ -337,6 +469,11 @@ func runFakeCodex() error {
 		}
 
 		method, _ := msg["method"].(string)
+		if method == "thread/start" || method == "turn/start" {
+			if err := appendFakeCodexRequestLog(msg); err != nil {
+				return err
+			}
+		}
 		switch method {
 		case "initialize":
 			if err := writeJSONMessage(writer, map[string]any{
@@ -469,6 +606,26 @@ func runFakeCodex() error {
 	}
 }
 
+func appendFakeCodexRequestLog(msg map[string]any) error {
+	path := os.Getenv("COLIN_FAKE_CODEX_REQUEST_LOG")
+	if path == "" {
+		return nil
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
 func assertAbsoluteCWD(msg map[string]any, method string) error {
 	params, _ := msg["params"].(map[string]any)
 	cwd, _ := params["cwd"].(string)
@@ -477,6 +634,32 @@ func assertAbsoluteCWD(msg map[string]any, method string) error {
 	}
 	if !filepath.IsAbs(cwd) {
 		return fmt.Errorf("%s cwd = %q, want absolute path", method, cwd)
+	}
+	return nil
+}
+
+func readFakeCodexRequests(path string) ([]map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := nonEmptyLines(string(data))
+	requests := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var request map[string]any
+		if err := json.Unmarshal([]byte(line), &request); err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return requests, nil
+}
+
+func fakeCodexRequestByMethod(requests []map[string]any, method string) map[string]any {
+	for _, request := range requests {
+		if got, _ := request["method"].(string); got == method {
+			return request
+		}
 	}
 	return nil
 }
@@ -528,6 +711,32 @@ func nonEmptyLines(value string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+func newServiceE2EGitOrigin(t *testing.T) string {
+	t.Helper()
+
+	origin := filepath.Join(t.TempDir(), "origin")
+	runServiceE2EGit(t, "", "init", "-b", "main", origin)
+	runServiceE2EGit(t, origin, "config", "user.email", "test@example.com")
+	runServiceE2EGit(t, origin, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runServiceE2EGit(t, origin, "add", "README.md")
+	runServiceE2EGit(t, origin, "commit", "-m", "init")
+	return origin
+}
+
+func runServiceE2EGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
 }
 
 func fetchBufferedLogs(url string) (domain.BufferedLogSnapshot, error) {
