@@ -20,6 +20,10 @@ Optional but encouraged:
 - public webhook ingress ready for Colin, typically via the Tailscale Funnel setup described in [OPERATIONS.md](OPERATIONS.md), plus `LINEAR_WEBHOOK_SECRET` and `GITHUB_WEBHOOK_SECRET` exported when you enable signed provider webhooks; if the Linear app webhook uses its own secret, also export `LINEAR_APP_WEBHOOK_SECRET`
 - a Slack bot token exported as `SLACK_BOT_TOKEN` and a channel ID in `WORKFLOW.md` when you want Colin to keep one issue-summary message per tracked issue in Slack; add `SLACK_APP_TOKEN` and `slack.app_token` when you also want Colin to acknowledge Slack button clicks over Socket Mode, and add `SLACK_SIGNING_SECRET` when you want Colin to serve the Slack app Home tab over the webhook server
 
+## Trust Model
+
+See [docs/trust-model.md](docs/trust-model.md) for Colin's trust boundaries, credential model, and handoff responsibilities.
+
 ## What Using Colin Looks Like
 
 Put work into `Todo`, let Colin pull it into `In Progress`, and let the board tell you what needs attention. Colin can keep multiple issues moving at the same time, route ready work to review, route unclear work to clarification, and finish merges once a PR is approved.
