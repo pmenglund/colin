@@ -87,7 +87,7 @@ func reviewThreadWithComments(id string, comments ...repoops.GitHubReviewComment
 	}
 }
 
-func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
+func TestSyncGitHubReviewFollowUpStoresReactionTargetWithoutMovingIssue(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
 	cfg.Tracker.ActiveStates = []string{"Todo", "In Progress"}
 	cfg.Repo.PublishStates = []string{"Review"}
@@ -168,14 +168,14 @@ func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
 		},
 	}, now)
 
-	if !queued {
-		t.Fatal("syncGitHubReviewFollowUp() queued = false, want true")
+	if queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = true, want false")
 	}
-	if updated.State != "Todo" {
-		t.Fatalf("updated.State = %q, want Todo", updated.State)
+	if updated.State != "Review" {
+		t.Fatalf("updated.State = %q, want Review", updated.State)
 	}
-	if got := tracker.updatedStates; len(got) != 1 || got[0] != "issue-1:Todo" {
-		t.Fatalf("updatedStates = %#v, want issue-1 moved to Todo", got)
+	if got := len(tracker.updatedStates); got != 0 {
+		t.Fatalf("updatedStates length = %d, want 0", got)
 	}
 	if tracker.metadata.PendingReviewThreadID != "thread-1" {
 		t.Fatalf("PendingReviewThreadID = %q, want thread-1", tracker.metadata.PendingReviewThreadID)
@@ -195,23 +195,23 @@ func TestSyncGitHubReviewFollowUpMovesIssueToTodoAndStoresTarget(t *testing.T) {
 	if got := tracker.metadata.ReviewReactionWatermarks["3035904923"]; got != "377554834" {
 		t.Fatalf("ReviewReactionWatermarks = %#v, want comment watermark", tracker.metadata.ReviewReactionWatermarks)
 	}
-	if len(tracker.commentReplies) != 1 {
-		t.Fatalf("commentReplies = %#v, want one status reply", tracker.commentReplies)
+	if len(tracker.commentReplies) != 0 {
+		t.Fatalf("commentReplies = %#v, want no status comments", tracker.commentReplies)
 	}
-	if _, ok := orch.completed["issue-1"]; ok {
-		t.Fatal("completed review state was not cleared after moving the issue back to Todo")
+	if got := orch.completed["issue-1"]; got != "Review" {
+		t.Fatalf("completed[issue-1] = %q, want Review", got)
 	}
-	if got := orch.issueStates["Review"]; got != 0 {
-		t.Fatalf("issueStates[Review] = %d, want 0", got)
+	if got := orch.issueStates["Review"]; got != 1 {
+		t.Fatalf("issueStates[Review] = %d, want 1", got)
 	}
-	if got := orch.issueStates["Todo"]; got != 1 {
-		t.Fatalf("issueStates[Todo] = %d, want 1", got)
+	if got := orch.issueStates["Todo"]; got != 0 {
+		t.Fatalf("issueStates[Todo] = %d, want 0", got)
 	}
-	if got := len(orch.stateIssues["Review"]); got != 0 {
-		t.Fatalf("len(stateIssues[Review]) = %d, want 0", got)
+	if got := len(orch.stateIssues["Review"]); got != 1 {
+		t.Fatalf("len(stateIssues[Review]) = %d, want 1", got)
 	}
-	if got := len(orch.stateIssues["Todo"]); got != 1 {
-		t.Fatalf("len(stateIssues[Todo]) = %d, want 1", got)
+	if got := len(orch.stateIssues["Todo"]); got != 0 {
+		t.Fatalf("len(stateIssues[Todo]) = %d, want 0", got)
 	}
 }
 
@@ -512,8 +512,11 @@ func TestSyncGitHubReviewFollowUpQueuesAdditionalApprovals(t *testing.T) {
 		},
 	}, time.Date(2026, time.April, 4, 19, 19, 0, 0, time.UTC))
 
-	if !queued {
-		t.Fatal("syncGitHubReviewFollowUp() queued = false, want true")
+	if queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = true, want false")
+	}
+	if got := len(tracker.updatedStates); got != 0 {
+		t.Fatalf("updatedStates length = %d, want 0", got)
 	}
 	if tracker.metadata.PendingReviewThreadID != "thread-1" || tracker.metadata.PendingReviewCommentID != "3035904923" {
 		t.Fatalf("pending follow-up = %#v, want first approval promoted", tracker.metadata)

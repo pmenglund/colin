@@ -445,6 +445,83 @@ func TestPrepareReviewIssueInjectsUnresolvedThreadsWhenTrackedPullRequestHasThem
 	}
 }
 
+func TestPrepareReviewIssueUsesPendingReactionFollowUpAfterAuthorizedTransition(t *testing.T) {
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      11,
+		URL:         "https://example.test/pr/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
+			reviewSyncThreadNode("thread-1", "reviewer", "Leave this unrelated thread alone."),
+			reviewSyncThreadNode("thread-2", "chatgpt-codex-connector[bot]", "Address this reacted Codex suggestion."),
+		},
+	}, nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		reviewSync: map[string]*reviewSyncState{},
+		running:    map[string]*runningEntry{},
+		claimed:    map[string]struct{}{},
+		retrying:   map[string]*retryState{},
+		completed:  map[string]string{},
+	}
+
+	branch := "colin-123"
+	now := time.Date(2026, time.March, 30, 19, 0, 0, 0, time.UTC)
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "COLIN-123",
+		Title:      "Resume reacted review follow-up",
+		State:      "Todo",
+		BranchName: &branch,
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber:       11,
+			PullRequestURL:          "https://example.test/pr/11",
+			PullRequestHeadRef:      "colin-123",
+			PullRequestBaseRef:      "symphony",
+			PendingReviewThreadID:   "thread-2",
+			PendingReviewCommentID:  "3035904999",
+			PendingReviewReactionID: "377554834",
+			PendingReviewReactor:    "pmenglund",
+		},
+	}
+
+	prepared, ready := orch.prepareReviewIssue(context.Background(), issue, now)
+
+	if !ready {
+		t.Fatal("prepareReviewIssue() ready = false, want true")
+	}
+	if prepared.PullRequest == nil || prepared.PullRequest.Number != 11 {
+		t.Fatalf("PullRequest = %#v, want tracked PR #11", prepared.PullRequest)
+	}
+	if got := len(prepared.ReviewThreads); got != 1 {
+		t.Fatalf("ReviewThreads length = %d, want 1", got)
+	}
+	if prepared.ReviewThreads[0].ID != "thread-2" {
+		t.Fatalf("ReviewThreads[0].ID = %q, want thread-2", prepared.ReviewThreads[0].ID)
+	}
+	if prepared.ReviewThreads[0].Body != "Address this reacted Codex suggestion." {
+		t.Fatalf("ReviewThreads[0].Body = %q, want targeted reacted thread", prepared.ReviewThreads[0].Body)
+	}
+	if len(tracker.updatedStates) != 0 {
+		t.Fatalf("updatedStates = %#v, want no state changes", tracker.updatedStates)
+	}
+	if _, ok := orch.reviewSync[issue.ID]; ok {
+		t.Fatal("reviewSync state should be cleared after targeted thread is ready")
+	}
+}
+
 func TestPrepareReviewIssueRepliesWhenReviewThreadsSyncAndWorkCanResume(t *testing.T) {
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
 	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
