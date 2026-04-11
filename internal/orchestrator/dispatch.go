@@ -21,6 +21,9 @@ func (o *Orchestrator) shouldDispatch(issue domain.Issue) bool {
 	if o.isTerminal(issue.State) || !o.isDispatchable(issue.State) {
 		return false
 	}
+	if hasPendingReviewReactionFollowUp(issue) && !o.isActive(issue.State) {
+		return false
+	}
 	if o.runtime.Config.Tracker.AppMode && o.isDispatchable(issue.State) && !issue.DelegatedToColin {
 		return false
 	}

@@ -180,6 +180,16 @@ func (o *Orchestrator) startPendingReviewFollowUp(ctx context.Context, issue dom
 		)
 		return issue, false
 	}
+	if hasPendingReviewReactionFollowUp(issue) {
+		o.logger.Info(
+			"detected github review follow-up approval; waiting for an authorized Linear transition before starting",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"state", issue.State,
+			"reactor", pendingReviewReactor(issue),
+		)
+		return issue, false
+	}
 	previousState := issue.State
 	targetState := targetedReviewFollowUpState(o.runtime.Config.Tracker.ActiveStates)
 	if err := o.runtime.Tracker.UpdateIssueState(ctx, issue.ID, targetState); err != nil {
@@ -200,6 +210,9 @@ func (o *Orchestrator) activatePendingReviewFollowUp(ctx context.Context, issue 
 	updated, started := o.startPendingReviewFollowUp(ctx, issue)
 	if started {
 		return updated, true
+	}
+	if hasPendingReviewReactionFollowUpMetadata(next) {
+		return updated, false
 	}
 	return o.persistReviewFollowUpMetadata(ctx, issue, previous), false
 }
@@ -306,6 +319,17 @@ func pruneQueuedReviewFollowUps(metadata *domain.ColinMetadata, threadsByID map[
 
 func hasPendingReviewFollowUpMetadata(metadata domain.ColinMetadata) bool {
 	return strings.TrimSpace(metadata.PendingReviewThreadID) != "" || strings.TrimSpace(metadata.PendingReviewCommentID) != ""
+}
+
+func hasPendingReviewReactionFollowUp(issue domain.Issue) bool {
+	if issue.ColinMetadata == nil {
+		return false
+	}
+	return hasPendingReviewReactionFollowUpMetadata(*issue.ColinMetadata)
+}
+
+func hasPendingReviewReactionFollowUpMetadata(metadata domain.ColinMetadata) bool {
+	return strings.TrimSpace(metadata.PendingReviewReactionID) != ""
 }
 
 func queuedOrPendingReviewComment(metadata domain.ColinMetadata, commentID string) bool {
