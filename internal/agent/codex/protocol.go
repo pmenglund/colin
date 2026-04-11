@@ -187,10 +187,6 @@ func extractContextWindowUsage(msg map[string]any) *domain.ContextWindowUsage {
 	candidates = append(candidates, msg)
 
 	for _, candidate := range candidates {
-		usage, ok := extractThreadTokenUsage(candidate)
-		if !ok {
-			continue
-		}
 		asMap, ok := candidate.(map[string]any)
 		if !ok {
 			continue
@@ -203,12 +199,20 @@ func extractContextWindowUsage(msg map[string]any) *domain.ContextWindowUsage {
 		if !ok || limit <= 0 {
 			continue
 		}
-		total, ok := usage["total_tokens"]
+		last, ok := nestedMap(tokenUsage, "last")
+		if !ok {
+			continue
+		}
+		usage, ok := extractDirectUsage(last)
+		if !ok {
+			continue
+		}
+		used, ok := usage["total_tokens"]
 		if !ok {
 			continue
 		}
 		return &domain.ContextWindowUsage{
-			UsedTokens:  total,
+			UsedTokens:  used,
 			LimitTokens: limit,
 		}
 	}
