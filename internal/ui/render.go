@@ -1157,9 +1157,9 @@ func WorkerOutputEntry(item domain.OutputLog) g.Node {
 		),
 	}
 	if outputMessageAddsDetail(item.Event, message) {
-		entryChildren = append(entryChildren, h.Pre(
-			h.Class("mockup-code"),
-			g.Text(message),
+		entryChildren = append(entryChildren, h.Div(
+			h.Class("markdown-output"),
+			codexMarkdownNode(message),
 		))
 	}
 	return h.Div(

@@ -356,13 +356,13 @@ func TestWorkerOutputListRendersNewestEntryFirst(t *testing.T) {
 	if got := strings.Count(html, `class="worker-output-entry"`); got != 2 {
 		t.Fatalf("worker output entry count = %d, want 2\n%s", got, html)
 	}
-	if got := strings.Count(html, `<pre class="mockup-code">`); got != 1 {
-		t.Fatalf("worker output pre count = %d, want 1\n%s", got, html)
+	if got := strings.Count(html, `class="markdown-output"`); got != 1 {
+		t.Fatalf("worker output markdown count = %d, want 1\n%s", got, html)
 	}
 	firstMeta := strings.Index(html, `11:59:02 UTC`)
-	firstPre := strings.Index(html, `<pre class="mockup-code">Still working</pre>`)
-	if firstMeta == -1 || firstPre == -1 || firstMeta > firstPre {
-		t.Fatalf("expected first timestamp before first pre\n%s", html)
+	firstMessage := strings.Index(html, `<p>Still working</p>`)
+	if firstMeta == -1 || firstMessage == -1 || firstMeta > firstMessage {
+		t.Fatalf("expected first timestamp before first rendered message\n%s", html)
 	}
 	secondMeta := strings.Index(html, `11:58:01 UTC`)
 	if secondMeta == -1 {
@@ -376,6 +376,72 @@ func TestWorkerOutputListRendersNewestEntryFirst(t *testing.T) {
 	}
 	if !strings.Contains(html, `class="badge badge-session"`) {
 		t.Fatalf("session_started should use session badge styling\n%s", html)
+	}
+}
+
+func TestWorkerOutputEntryRendersMarkdownAsHTML(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, WorkerOutputEntry(domain.OutputLog{
+		Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC),
+		Event:     "other_message",
+		Message: strings.Join([]string{
+			"**Done** ~~later~~",
+			"",
+			"- [x] task",
+			"",
+			"| Feature |",
+			"| --- |",
+			"| GFM |",
+			"",
+			"https://example.com",
+		}, "\n"),
+	}))
+
+	for _, want := range []string{
+		`class="markdown-output"`,
+		`<strong>Done</strong>`,
+		`<del>later</del>`,
+		`type="checkbox"`,
+		`<table>`,
+		`<th>Feature</th>`,
+		`<td>GFM</td>`,
+		`<a href="https://example.com">https://example.com</a>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("rendered markdown missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, `<pre class="mockup-code">`) {
+		t.Fatalf("markdown output should not render as escaped preformatted text\n%s", html)
+	}
+}
+
+func TestWorkerOutputEntryDoesNotRenderUnsafeMarkdownHTML(t *testing.T) {
+	t.Parallel()
+
+	html := renderNode(t, WorkerOutputEntry(domain.OutputLog{
+		Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC),
+		Event:     "other_message",
+		Message:   `error at <stdin>:12 <script>alert("owned")</script> [bad](javascript:alert("owned"))`,
+	}))
+
+	for _, want := range []string{
+		`error at &lt;stdin&gt;:12`,
+		`&lt;script&gt;alert(&quot;owned&quot;)&lt;/script&gt;`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("rendered markdown missing %q\n%s", want, html)
+		}
+	}
+	for _, unwanted := range []string{
+		`<script>`,
+		`href="javascript:`,
+		`raw HTML omitted`,
+	} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("rendered markdown should not include unsafe HTML %q\n%s", unwanted, html)
+		}
 	}
 }
 
