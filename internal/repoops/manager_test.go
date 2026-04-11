@@ -75,6 +75,57 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	}
 }
 
+func TestPublishUsesLastSummaryForDefaultPRBody(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	lastSummary := strings.TrimSpace(`## Why
+
+Fix the failing publish handoff.
+
+## Before
+
+The default PR body used placeholder instructions.
+
+## After
+
+The PR body uses the coding handoff summary.
+
+## Evidence
+
+go test ./internal/repoops`)
+	if _, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Use handoff summary",
+		ColinMetadata: &domain.ColinMetadata{
+			LastSummary: lastSummary,
+		},
+	}, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	_, _, _, input := fakeGitHub.CreatePullRequestArgsForCall(0)
+	if input.Body != lastSummary {
+		t.Fatalf("CreatePullRequest body = %q, want last summary", input.Body)
+	}
+	for _, leaked := range []string{
+		"Explain why this change was made",
+		"Describe the reviewer baseline",
+		"Prefer a screenshot",
+	} {
+		if strings.Contains(input.Body, leaked) {
+			t.Fatalf("CreatePullRequest body = %q, leaked placeholder %q", input.Body, leaked)
+		}
+	}
+}
+
 func TestValidateRepoAccessSkipsWhenTokenMissing(t *testing.T) {
 	fakeGitHub := &fakes.FakeRepoHostClient{}
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)

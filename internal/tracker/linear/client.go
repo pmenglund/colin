@@ -2396,6 +2396,7 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	if value, ok := stringValue(metadataMap["last_outcome"]); ok {
 		metadata.LastOutcome = domain.RunOutcome(value)
 	}
+	metadata.LastSummary, _ = stringValue(metadataMap["last_summary"])
 	metadata.LastSummaryCommentID, _ = stringValue(metadataMap["last_summary_comment_id"])
 	metadata.ColinCommentIDs = stringSliceValue(metadataMap["colin_comment_ids"])
 	if value, ok := intValue(metadataMap["pull_request_number"]); ok {
@@ -2540,6 +2541,7 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		"review_publish_directive":   strings.TrimSpace(string(metadata.ReviewPublishDirective)),
 		"last_run_type":              strings.TrimSpace(string(metadata.LastRunType)),
 		"last_outcome":               strings.TrimSpace(string(metadata.LastOutcome)),
+		"last_summary":               strings.TrimSpace(metadata.LastSummary),
 		"last_summary_comment_id":    strings.TrimSpace(metadata.LastSummaryCommentID),
 		"colin_comment_ids":          stringSliceAny(metadata.ColinCommentIDs),
 		"pull_request_number":        metadata.PullRequestNumber,

@@ -1663,17 +1663,21 @@ func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, targ
 		templateText = defaultPRTemplate()
 	}
 	return workflow.RenderTemplate(templateText, map[string]any{
-		"issue":    prIssueMap(issue),
-		"branch":   branch,
-		"base_ref": target.BaseRef,
-		"pr_title": prTitle,
+		"issue":        prIssueMap(issue),
+		"branch":       branch,
+		"base_ref":     target.BaseRef,
+		"pr_title":     prTitle,
+		"last_summary": issueLastSummary(issue),
 	})
 }
 
 func defaultPRTemplate() string {
-	return `## Why
+	return `{{- if .last_summary -}}
+{{ .last_summary }}
+{{- else -}}
+## Why
 
-Explain why this change was made and what reviewer context or motivation matters for this PR.
+Colin opened this pull request for {{.issue.identifier}}: {{.issue.title}}.
 
 - Linear issue: {{.issue.identifier}}
 {{- if .issue.url }}
@@ -1683,28 +1687,48 @@ Explain why this change was made and what reviewer context or motivation matters
 
 ## Before
 
-Describe the reviewer baseline for this PR only.
+No coding handoff summary was available when Colin opened this pull request.
 
 ## After
 
-Describe only the change introduced by this PR.
+Review the commits in this pull request for the implementation details.
 
 ## Evidence
 
-Prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.`
+No coding handoff evidence was available in Colin metadata.
+{{- end -}}`
 }
 
 func prIssueMap(issue domain.Issue) map[string]any {
 	return map[string]any{
-		"id":          issue.ID,
-		"identifier":  issue.Identifier,
-		"title":       issue.Title,
-		"description": derefString(issue.Description),
-		"state":       issue.State,
-		"branch_name": derefString(issue.BranchName),
-		"url":         derefString(issue.URL),
-		"labels":      append([]string(nil), issue.Labels...),
+		"id":             issue.ID,
+		"identifier":     issue.Identifier,
+		"title":          issue.Title,
+		"description":    derefString(issue.Description),
+		"state":          issue.State,
+		"branch_name":    derefString(issue.BranchName),
+		"url":            derefString(issue.URL),
+		"labels":         append([]string(nil), issue.Labels...),
+		"colin_metadata": prColinMetadataMap(issue.ColinMetadata),
 	}
+}
+
+func prColinMetadataMap(metadata *domain.ColinMetadata) map[string]any {
+	if metadata == nil {
+		return map[string]any{
+			"last_summary": "",
+		}
+	}
+	return map[string]any{
+		"last_summary": metadata.LastSummary,
+	}
+}
+
+func issueLastSummary(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(issue.ColinMetadata.LastSummary)
 }
 
 func derefString(value *string) string {

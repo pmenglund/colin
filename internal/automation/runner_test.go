@@ -118,6 +118,84 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	if result.Issue.ColinMetadata.PendingCheckFailure != nil {
 		t.Fatalf("PendingCheckFailure = %#v, want cleared after repair handoff", result.Issue.ColinMetadata.PendingCheckFailure)
 	}
+	if result.Issue.ColinMetadata.LastSummary != "Implemented the requested change." {
+		t.Fatalf("LastSummary = %q, want coding handoff summary", result.Issue.ColinMetadata.LastSummary)
+	}
+}
+
+func TestRunnerPreservesLastSummaryWhenRunHasNoSummary(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_CODING_TEXT= %q -test.run=TestHelperProcessFakeCodex --",
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns: 1,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+	}
+	const previousSummary = "## Why\n\nKeep this useful handoff."
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-94",
+			Title:      "Move issue to review",
+			State:      "Review",
+			ColinMetadata: &domain.ColinMetadata{
+				LastSummary: previousSummary,
+			},
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-94",
+		Title:      "Move issue to review",
+		State:      "Todo",
+		ColinMetadata: &domain.ColinMetadata{
+			LastSummary: previousSummary,
+		},
+	}, nil, nil)
+
+	if result.Status != "succeeded" {
+		t.Fatalf("Run() status = %q, want %q (err=%v)", result.Status, "succeeded", result.Err)
+	}
+	if result.Summary != "" {
+		t.Fatalf("Summary = %q, want empty", result.Summary)
+	}
+	if tracker.metadata.LastSummary != previousSummary {
+		t.Fatalf("persisted LastSummary = %q, want previous summary", tracker.metadata.LastSummary)
+	}
+	if result.Issue.ColinMetadata == nil || result.Issue.ColinMetadata.LastSummary != previousSummary {
+		t.Fatalf("result LastSummary = %#v, want previous summary", result.Issue.ColinMetadata)
+	}
 }
 
 func TestRunnerResumesPersistedCodexThreadID(t *testing.T) {

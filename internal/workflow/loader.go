@@ -282,6 +282,7 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"review_publish_directive":    value.ReviewPublishDirective,
 		"last_run_type":               value.LastRunType,
 		"last_outcome":                value.LastOutcome,
+		"last_summary":                value.LastSummary,
 		"last_summary_comment_id":     value.LastSummaryCommentID,
 		"pull_request_number":         value.PullRequestNumber,
 		"pull_request_url":            value.PullRequestURL,
