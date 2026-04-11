@@ -6,6 +6,7 @@
   },
   "scripts": {
     "test:e2e": "playwright test",
+    "test:e2e:evidence": "playwright test --grep \"exec plan page renders stored markdown\"",
     "test:e2e:headed": "playwright test --headed"
   }
 }

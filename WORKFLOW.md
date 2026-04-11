@@ -182,7 +182,9 @@ Output contract:
 - In `## Why`, explain why this change was made and what reviewer context or motivation matters for this PR.
 - In `## Before`, describe the reviewer baseline for this PR only.
 - In `## After`, describe only the change introduced by this PR.
-- In `## Evidence`, prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.
-- Prefer Playwright screenshots for browser-visible changes, and prefer terminal or TUI screen captures for terminal-visible changes.
-- Colin posts text comments to Linear, so always keep the section contents textual and mention any screenshots or screen grabs in words even when capture succeeds.
+- For browser-visible changes, `## Evidence` must include a Playwright screenshot path plus one sentence describing what the screenshot proves.
+- If screenshot capture is impossible, include `Screenshot blocker:` followed by the concrete blocker before any terminal output.
+- For terminal-visible changes, prefer terminal or TUI screen captures with a path or concise transcript.
+- After the screenshot evidence or blocker, include short terminal output in a fenced code block or exact verification commands/tests.
+- Colin posts text comments to Linear, so keep section contents textual and reference local screenshot or screen-grab paths instead of embedding images.
 - `Review` is PR-only. Clarification-only handoffs go to `Refine`.

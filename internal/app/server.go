@@ -898,6 +898,23 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 			Title:      entry.Title,
 			State:      entry.State,
 			URL:        entry.URL,
+			ExecPlan: &domain.ExecPlan{
+				AttachmentID: "attachment-demo-exec-plan",
+				URL:          domain.ColinExecPlanPath(entry.IssueID),
+				Body: strings.Join([]string{
+					"# Demo ExecPlan",
+					"",
+					"## Progress",
+					"",
+					"- [x] Render stored markdown as HTML.",
+					"- [ ] Capture screenshot evidence.",
+					"",
+					"| Area | Status |",
+					"| --- | --- |",
+					"| UI | Rendered markdown |",
+				}, "\n"),
+				UpdatedAt: ptrTime(snapshot.GeneratedAt),
+			},
 			ColinMetadata: &domain.ColinMetadata{
 				LastRunType: "coding",
 				LastOutcome: "ready_for_review",

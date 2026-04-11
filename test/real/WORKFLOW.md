@@ -114,7 +114,10 @@ Output contract:
   - in `## Why`, explain why this change was made and what reviewer context or motivation matters for this PR
   - in `## Before`, describe the reviewer baseline for this PR only
   - in `## After`, describe only the change introduced by this PR
-  - in `## Evidence`, prefer a screenshot; otherwise include short terminal output in a fenced code block; otherwise include the exact test command plus the specific tests that cover the change
+  - for browser-visible changes, `## Evidence` must include a Playwright screenshot path plus one sentence describing what the screenshot proves
+  - if screenshot capture is impossible, include `Screenshot blocker:` followed by the concrete blocker before any terminal output
+  - for terminal-visible changes, prefer terminal or TUI screen captures with a path or concise transcript
+  - after the screenshot evidence or blocker, include short terminal output in a fenced code block or exact verification commands/tests
 
 Definition of done:
 - For implementable work, leave the repo ready for `Review`.

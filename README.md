@@ -79,7 +79,7 @@ Colin runs as a long-lived orchestrator:
 4. It advances ready issues toward the next handoff state: `Review`, `Refine`, or `Merge`.
 5. It posts progress back to Linear and exposes a local dashboard for operators.
 
-When a coding run finishes and Colin hands work off, the Linear issue comment is meant to be reviewable on its own. Colin now asks Codex to structure that handoff as `## Why`, `## Before`, `## After`, and `## Evidence`, and the default PR body mirrors those same sections. Colin still prefers Playwright screenshots for browser-visible work and terminal or TUI captures for terminal-visible work, with textual fallback because the Linear comment itself is text-only.
+When a coding run finishes and Colin hands work off, the Linear issue comment is meant to be reviewable on its own. Colin now asks Codex to structure that handoff as `## Why`, `## Before`, `## After`, and `## Evidence`, and the default PR body mirrors those same sections. Browser-visible work must include a Playwright screenshot path and a short visual observation in `## Evidence`, or an explicit `Screenshot blocker:` entry before terminal output when capture is not possible. Terminal-visible work should include a capture path or concise transcript. Linear comments remain text-only, so evidence references local artifact paths instead of embedding images.
 
 Those handoff comments also explain what Colin is doing next and what human action is required. That includes returned-review cases where GitHub review feedback has not synced yet, cases where review feedback still keeps the issue in `Todo`, and merge-conflict cases where Colin either repairs the branch automatically or sends the issue back to `Review` with concrete follow-up instructions.
 

@@ -5,4 +5,7 @@ colin
 dist/
 node_modules/
 test/e2e/playwright/node_modules/**
+test/e2e/playwright/playwright-report/
+test/e2e/playwright/test-results/**
+!test/e2e/playwright/test-results/.last-run.json
 WIZARD.md

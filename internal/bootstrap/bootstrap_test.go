@@ -48,7 +48,9 @@ func TestRenderWorkflowIncludesConfiguredValues(t *testing.T) {
 		"COLIN_OUTCOME: READY_FOR_REVIEW",
 		"## Why",
 		"## Evidence",
-		"Playwright screenshots",
+		"Playwright screenshot path",
+		"Screenshot blocker:",
+		"browser-visible changes",
 		"text comments to Linear",
 	} {
 		if !strings.Contains(got, want) {

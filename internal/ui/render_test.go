@@ -647,7 +647,7 @@ func TestExecPlanPageRendersStoredPlan(t *testing.T) {
 		}
 	}
 	if strings.Contains(html, `<pre class="mockup-code"># Plan`) {
-		t.Fatalf("exec plan should not render as escaped preformatted text\n%s", html)
+		t.Fatalf("exec plan markdown should not render as escaped preformatted text\n%s", html)
 	}
 }
 

@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { expect, test } from "@playwright/test";
 
 test("dashboard renders and CSS asset is reachable", async ({ page, request }) => {
@@ -223,4 +226,22 @@ test("issue metadata page reloads when the live stream reports a new snapshot", 
   await expect(renderedAt).not.toHaveText(before ?? "");
   await expect(page.getByTestId("issue-metadata-panel")).toBeVisible();
   await expect(page.getByTestId("issue-metadata-output")).toContainText("session_started");
+});
+
+test("exec plan page renders stored markdown and captures screenshot evidence", async ({ page }) => {
+  await page.goto("/linear/issues/issue-demo-1/exec-plan");
+
+  await expect(page.getByTestId("issue-exec-plan-panel")).toBeVisible();
+  const body = page.getByTestId("issue-exec-plan-body");
+  await expect(body).toBeVisible();
+  await expect(body.locator(".markdown-output")).toBeVisible();
+  await expect(body.locator("h1")).toHaveText("Demo ExecPlan");
+  await expect(body.locator("input[type='checkbox']").first()).toBeChecked();
+  await expect(body.locator("table")).toBeVisible();
+  await expect(body.locator("td").filter({ hasText: "Rendered markdown" })).toBeVisible();
+  await expect(body.locator("pre.mockup-code")).toHaveCount(0);
+
+  const screenshotPath = join("test-results", "evidence", "exec-plan-markdown.png");
+  mkdirSync(dirname(screenshotPath), { recursive: true });
+  await page.screenshot({ path: screenshotPath, fullPage: true });
 });
