@@ -1758,6 +1758,34 @@ func TestShouldQueueImmediateLinearRefresh(t *testing.T) {
 	}
 }
 
+func TestLinearWebhookTriggerHydratesIssueCreateProjectID(t *testing.T) {
+	t.Parallel()
+
+	tracker := &serviceTrackerStub{
+		issueByID: map[string]domain.Issue{
+			"issue-1": {
+				ID:        "issue-1",
+				ProjectID: "project-1",
+			},
+		},
+	}
+	service := &Service{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: orchestrator.Runtime{
+			Tracker: tracker,
+		},
+	}
+
+	result := service.linearWebhookTrigger()(context.Background(), app.LinearWebhookEvent{
+		ResourceType: "Issue",
+		Action:       "create",
+		IssueID:      "issue-1",
+	})
+	if !result.Relevant {
+		t.Fatal("linearWebhookTrigger() Relevant = false, want true for hydrated watched-project issue create")
+	}
+}
+
 func TestLinearWebhookTriggerPostsDelegationAcknowledgement(t *testing.T) {
 	t.Parallel()
 

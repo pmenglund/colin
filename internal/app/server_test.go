@@ -857,6 +857,23 @@ func TestObservabilityServerLinearWebhookTriggersRefreshForRelevantIssueEvents(t
 			projectID:    "project-1",
 		},
 		{
+			name:         "issue create nested project",
+			body:         `{"action":"create","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","project":{"id":"project-1"}}}`,
+			headerEvent:  "Issue",
+			action:       "create",
+			resourceType: "Issue",
+			issueID:      "issue-1",
+			projectID:    "project-1",
+		},
+		{
+			name:         "issue create missing project",
+			body:         `{"action":"create","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1"}}`,
+			headerEvent:  "Issue",
+			action:       "create",
+			resourceType: "Issue",
+			issueID:      "issue-1",
+		},
+		{
 			name:          "issue update",
 			body:          `{"action":"update","type":"Issue","webhookTimestamp":1735689600000,"data":{"id":"issue-1","projectId":"project-1"},"updatedFrom":{"stateId":"old-state","updatedAt":"2026-03-31T00:00:00.000Z"}}`,
 			headerEvent:   "Issue",

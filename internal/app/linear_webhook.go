@@ -236,7 +236,7 @@ func linearWebhookEventFromRequest(r *http.Request, envelope linearWebhookEnvelo
 func shouldTriggerLinearWebhook(event LinearWebhookEvent) bool {
 	switch strings.ToLower(strings.TrimSpace(event.ResourceType)) {
 	case "issue":
-		if strings.TrimSpace(event.ProjectID) == "" {
+		if strings.TrimSpace(event.ProjectID) == "" && strings.TrimSpace(event.IssueID) == "" {
 			return false
 		}
 		switch strings.ToLower(strings.TrimSpace(event.Action)) {
@@ -290,11 +290,14 @@ func parseLinearWebhookIssueData(raw json.RawMessage) (issueID string, projectID
 	var payload struct {
 		ID        string `json:"id"`
 		ProjectID string `json:"projectId"`
+		Project   struct {
+			ID string `json:"id"`
+		} `json:"project"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return "", ""
 	}
-	return strings.TrimSpace(payload.ID), strings.TrimSpace(payload.ProjectID)
+	return strings.TrimSpace(payload.ID), firstNonEmptyTrimmed(payload.ProjectID, payload.Project.ID)
 }
 
 func parseLinearWebhookIssueLabelData(raw json.RawMessage) (issueID string, projectID string) {
@@ -304,9 +307,15 @@ func parseLinearWebhookIssueLabelData(raw json.RawMessage) (issueID string, proj
 	var payload struct {
 		IssueID   string `json:"issueId"`
 		ProjectID string `json:"projectId"`
-		Issue     struct {
+		Project   struct {
+			ID string `json:"id"`
+		} `json:"project"`
+		Issue struct {
 			ID        string `json:"id"`
 			ProjectID string `json:"projectId"`
+			Project   struct {
+				ID string `json:"id"`
+			} `json:"project"`
 		} `json:"issue"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -319,6 +328,9 @@ func parseLinearWebhookIssueLabelData(raw json.RawMessage) (issueID string, proj
 	projectID = strings.TrimSpace(payload.ProjectID)
 	if projectID == "" {
 		projectID = strings.TrimSpace(payload.Issue.ProjectID)
+	}
+	if projectID == "" {
+		projectID = firstNonEmptyTrimmed(payload.Project.ID, payload.Issue.Project.ID)
 	}
 	return issueID, projectID
 }
