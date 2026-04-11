@@ -1187,7 +1187,18 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 			}
 			threads = append(threads, thread)
 			if isHumanReviewFeedbackThread(thread) {
-				humanFeedback = append(humanFeedback, thread)
+				login := strings.TrimSpace(thread.Author)
+				allowed, ok := collaboratorCache[login]
+				if !ok {
+					allowed, err = m.IsRepositoryCollaborator(ctx, owner, name, login)
+					if err != nil {
+						return ReviewFollowUpScan{}, err
+					}
+					collaboratorCache[login] = allowed
+				}
+				if allowed {
+					humanFeedback = append(humanFeedback, thread)
+				}
 			}
 
 			comments, err := m.reviewThreadComments(ctx, node)

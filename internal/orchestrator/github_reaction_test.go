@@ -24,6 +24,10 @@ func (c *collaboratorGitHubClient) IsCollaborator(context.Context, string, strin
 }
 
 func newReviewFollowUpTestOrchestrator(t *testing.T, threads []repoops.GitHubReviewThread) (*trackerStub, *Orchestrator) {
+	return newReviewFollowUpTestOrchestratorWithCollaborator(t, threads, true)
+}
+
+func newReviewFollowUpTestOrchestratorWithCollaborator(t *testing.T, threads []repoops.GitHubReviewThread, allowed bool) (*trackerStub, *Orchestrator) {
 	t.Helper()
 
 	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
@@ -46,7 +50,7 @@ func newReviewFollowUpTestOrchestrator(t *testing.T, threads []repoops.GitHubRev
 		runtime: Runtime{
 			Config:    cfg,
 			Tracker:   tracker,
-			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, &collaboratorGitHubClient{FakeRepoHostClient: fakeGitHub, allowed: true}),
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, &collaboratorGitHubClient{FakeRepoHostClient: fakeGitHub, allowed: allowed}),
 			Workspace: workspace.NewManager(cfg, logger),
 		},
 		running:   map[string]*runningEntry{},
@@ -257,6 +261,39 @@ func TestSyncGitHubReviewFollowUpMovesIssueForHumanReviewComment(t *testing.T) {
 	}
 	if !strings.Contains(tracker.commentReplies[0], "left unresolved PR feedback") {
 		t.Fatalf("comment reply = %q, want PR-feedback status", tracker.commentReplies[0])
+	}
+}
+
+func TestSyncGitHubReviewFollowUpIgnoresNonCollaboratorHumanReviewComment(t *testing.T) {
+	tracker, orch := newReviewFollowUpTestOrchestratorWithCollaborator(t, []repoops.GitHubReviewThread{
+		reviewThreadWithComments("thread-1", repoops.GitHubReviewComment{
+			ID:          "PRRC_kwDOHumanFeedback",
+			DatabaseID:  "3035904923",
+			Body:        "Please rename this helper.",
+			URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+			AuthorLogin: "external-user",
+		}),
+	}, false)
+
+	updated, queued := orch.syncGitHubReviewFollowUp(context.Background(), reviewFollowUpIssue(), time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC))
+
+	if queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = true, want false")
+	}
+	if updated.State != "Review" {
+		t.Fatalf("updated.State = %q, want Review", updated.State)
+	}
+	if len(tracker.updatedStates) != 0 {
+		t.Fatalf("updatedStates = %#v, want no state changes", tracker.updatedStates)
+	}
+	if tracker.metadata.PendingReviewThreadID != "" {
+		t.Fatalf("PendingReviewThreadID = %q, want empty", tracker.metadata.PendingReviewThreadID)
+	}
+	if len(tracker.metadata.QueuedReviewFollowUps) != 0 {
+		t.Fatalf("QueuedReviewFollowUps = %#v, want empty queue", tracker.metadata.QueuedReviewFollowUps)
+	}
+	if len(tracker.commentReplies) != 0 {
+		t.Fatalf("commentReplies = %#v, want no status comments", tracker.commentReplies)
 	}
 }
 
