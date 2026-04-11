@@ -99,12 +99,12 @@ Work on {{ .issue.identifier }}.
 		errCh <- svc.Run(ctx)
 	}()
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "fake Codex completion marker", serviceE2EWaitTimeout, func() bool {
 		_, err := os.Stat(markerPath)
 		return err == nil
 	})
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "Linear progress reply", serviceE2EWaitTimeout, func() bool {
 		return linear.ReplyCount() > 0
 	})
 	cancel()
@@ -362,11 +362,11 @@ Work on {{ .issue.identifier }}.
 		errCh <- svc.Run(ctx)
 	}()
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "dashboard URL", serviceE2EWaitTimeout, func() bool {
 		return svc.DashboardURL() != ""
 	})
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "running dashboard state", serviceE2EWaitTimeout, func() bool {
 		resp, err := http.Get(svc.DashboardURL() + "/api/v1/state")
 		if err != nil {
 			return false
@@ -376,7 +376,7 @@ Work on {{ .issue.identifier }}.
 		return strings.Contains(string(body), `"running":1`)
 	})
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "info log entry", serviceE2EWaitTimeout, func() bool {
 		snapshot, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=info")
 		if err != nil {
 			return false
@@ -384,7 +384,7 @@ Work on {{ .issue.identifier }}.
 		return containsBufferedLog(snapshot, "service starting")
 	})
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "debug log entry", serviceE2EWaitTimeout, func() bool {
 		snapshot, err := fetchBufferedLogs(svc.DashboardURL() + "/api/v1/logs?level=debug")
 		if err != nil {
 			return false
@@ -541,11 +541,6 @@ func runFakeCodex() error {
 				return fmt.Errorf("approval decision = %q, want accept", decision)
 			}
 
-			if markerPath := os.Getenv("COLIN_FAKE_CODEX_MARKER"); markerPath != "" {
-				if err := os.WriteFile(markerPath, []byte("ran\n"), 0o644); err != nil {
-					return err
-				}
-			}
 			if cwdLog := os.Getenv("COLIN_FAKE_CODEX_CWD_LOG"); cwdLog != "" {
 				file, err := os.OpenFile(cwdLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				if err != nil {
@@ -601,6 +596,11 @@ func runFakeCodex() error {
 				},
 			}); err != nil {
 				return err
+			}
+			if markerPath := os.Getenv("COLIN_FAKE_CODEX_MARKER"); markerPath != "" {
+				if err := os.WriteFile(markerPath, []byte("ran\n"), 0o644); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -687,7 +687,7 @@ func writeJSONMessage(writer *bufio.Writer, msg map[string]any) error {
 	return writer.Flush()
 }
 
-func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
+func waitFor(t *testing.T, label string, timeout time.Duration, condition func() bool) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -697,7 +697,7 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatal("condition not met before timeout")
+	t.Fatalf("%s condition not met before timeout", label)
 }
 
 func nonEmptyLines(value string) []string {
