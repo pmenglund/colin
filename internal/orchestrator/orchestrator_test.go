@@ -31,6 +31,7 @@ type trackerStub struct {
 	candidateHook           func(*trackerStub)
 	issuesByState           []domain.Issue
 	issuesByStateCalls      int
+	issuesByStateNames      [][]string
 	issuesByStateHook       func(*trackerStub)
 	schedulingMetadata      map[string]domain.ColinMetadata
 	schedulingMetadataCalls int
@@ -72,8 +73,9 @@ func (s *trackerStub) FetchCandidateIssueSnapshots(context.Context) ([]domain.Is
 	return s.candidateIssues, nil
 }
 
-func (s *trackerStub) FetchIssueSnapshotsByStates(context.Context, []string) ([]domain.Issue, error) {
+func (s *trackerStub) FetchIssueSnapshotsByStates(_ context.Context, stateNames []string) ([]domain.Issue, error) {
 	s.issuesByStateCalls++
+	s.issuesByStateNames = append(s.issuesByStateNames, append([]string(nil), stateNames...))
 	if s.issuesByStateHook != nil {
 		s.issuesByStateHook(s)
 	}
@@ -1291,6 +1293,49 @@ func TestRefreshIssueStateCountsTracksPausedIssuesByState(t *testing.T) {
 	}
 	if _, ok := orch.pausedIssueStates["Todo"]; ok {
 		t.Fatalf("unexpected paused summary for Todo: %+v", orch.pausedIssueStates["Todo"])
+	}
+}
+
+func TestRefreshIssueStateCountsIncludesDashboardOnlyStates(t *testing.T) {
+	t.Parallel()
+
+	backlogIssue := domain.Issue{ID: "1", Identifier: "COLIN-204", Title: "New backlog issue", State: "Backlog"}
+	tracker := &trackerStub{
+		issuesByState: []domain.Issue{backlogIssue},
+	}
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtime: Runtime{Tracker: tracker, Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{
+				ActiveStates:   []string{"Todo"},
+				TerminalStates: []string{"Done"},
+			},
+			Repo: domain.RepoConfig{
+				PublishStates: []string{"Review"},
+				MergeStates:   []string{"Merge"},
+			},
+		}},
+		issueStates:       map[string]int{},
+		stateIssues:       map[string][]domain.StateIssueSummary{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.refreshIssueStateCounts(context.Background())
+
+	if tracker.issuesByStateCalls != 1 {
+		t.Fatalf("FetchIssueSnapshotsByStates() calls = %d, want 1", tracker.issuesByStateCalls)
+	}
+	if got := strings.Join(tracker.issuesByStateNames[0], ","); got != "Todo,Review,Merge,Done,Backlog,In Progress,Refine" {
+		t.Fatalf("FetchIssueSnapshotsByStates() states = %q, want dashboard states plus tracked states", got)
+	}
+	if got := orch.issueStates["Backlog"]; got != 1 {
+		t.Fatalf("Backlog count = %d, want 1", got)
+	}
+	if got := len(orch.stateIssues["Backlog"]); got != 1 {
+		t.Fatalf("Backlog issue list length = %d, want 1", got)
+	}
+	if got := orch.stateIssues["Backlog"][0].Identifier; got != "COLIN-204" {
+		t.Fatalf("Backlog issue identifier = %q, want COLIN-204", got)
 	}
 }
 
@@ -3046,6 +3091,112 @@ func TestRunProcessesRefreshRequestsImmediately(t *testing.T) {
 
 	cancel()
 
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not stop after cancellation")
+	}
+}
+
+func TestRunPublishesSnapshotUpdateAfterRefreshAddsBacklogIssue(t *testing.T) {
+	t.Parallel()
+
+	tracker := &trackerStub{
+		candidateCallCh: make(chan int, 4),
+		issuesByStateHook: func(s *trackerStub) {
+			if s.issuesByStateCalls < 2 {
+				return
+			}
+			s.issuesByState = []domain.Issue{
+				{ID: "issue-204", Identifier: "COLIN-204", Title: "New backlog issue", State: "Backlog"},
+			}
+		},
+	}
+	orch := New(Runtime{Config: domain.ServiceConfig{
+		Polling: domain.PollingConfig{Interval: time.Hour},
+		Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+		Tracker: domain.TrackerConfig{
+			Kind:         "linear",
+			APIKey:       "test-key",
+			ProjectSlug:  "test-project",
+			ActiveStates: []string{"Todo"},
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+			MergeStates:   []string{"Merge"},
+		},
+		Codex: domain.CodexConfig{Command: "codex"},
+	}, Tracker: tracker}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := orch.SubscribeSnapshotUpdates(ctx)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.Run(ctx)
+	}()
+
+	select {
+	case got := <-tracker.candidateCallCh:
+		if got != 1 {
+			t.Fatalf("startup candidate call = %d, want 1", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("startup candidate fetch did not happen")
+	}
+
+	var startupUpdate domain.SnapshotUpdate
+	select {
+	case startupUpdate = <-updates:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("startup snapshot update did not publish")
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for !orch.RefreshReady() {
+		if time.Now().After(deadline) {
+			t.Fatal("RefreshReady() did not become true after startup tick")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	queued, coalesced := orch.RequestRefresh("test backlog issue create")
+	if !queued || coalesced {
+		t.Fatalf("RequestRefresh() = (%t, %t), want (true, false)", queued, coalesced)
+	}
+
+	select {
+	case got := <-tracker.candidateCallCh:
+		if got != 2 {
+			t.Fatalf("refresh candidate call = %d, want 2", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("refresh candidate fetch did not happen")
+	}
+
+	var refreshUpdate domain.SnapshotUpdate
+	select {
+	case refreshUpdate = <-updates:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("refresh snapshot update did not publish")
+	}
+	if refreshUpdate.Sequence <= startupUpdate.Sequence {
+		t.Fatalf("refresh snapshot sequence = %d, want > startup sequence %d", refreshUpdate.Sequence, startupUpdate.Sequence)
+	}
+
+	snapshot, err := orch.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if got := snapshot.IssueStates["Backlog"]; got != 1 {
+		t.Fatalf("Snapshot().IssueStates[Backlog] = %d, want 1", got)
+	}
+
+	cancel()
 	select {
 	case err := <-done:
 		if err != nil {
