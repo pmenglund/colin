@@ -19,11 +19,12 @@ import (
 )
 
 var (
-	ErrNotGitRepository           = errors.New("not_git_repository")
-	ErrNoPullRequest              = errors.New("no_pull_request")
-	ErrNoReviewableChanges        = errors.New("no_reviewable_changes")
-	ErrDuplicatePullRequests      = errors.New("duplicate_pull_requests")
-	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
+	ErrNotGitRepository            = errors.New("not_git_repository")
+	ErrNoPullRequest               = errors.New("no_pull_request")
+	ErrNoReviewableChanges         = errors.New("no_reviewable_changes")
+	ErrDuplicatePullRequests       = errors.New("duplicate_pull_requests")
+	ErrTrackedPullRequestMismatch  = errors.New("tracked_pull_request_mismatch")
+	ErrAttachedPullRequestMismatch = errors.New("attached_pull_request_mismatch")
 )
 
 type MergeFailureKind string
@@ -902,6 +903,13 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 		if pr == nil {
 			return nil, false, fmt.Errorf("attached pull request #%d not found", attached[0].Number)
 		}
+		expectedBranches := []string{currentBranch}
+		if strings.TrimSpace(currentBranch) == "" {
+			expectedBranches = m.reviewLookupBranches(ctx, issue, workspacePath)
+		}
+		if err := validateAttachedPullRequest(pr, target.BaseRef, expectedBranches); err != nil {
+			return nil, false, fmt.Errorf("attached pull request #%d: %w", attached[0].Number, err)
+		}
 		return pr, false, nil
 	default:
 		return nil, false, duplicatePullRequestsError(attached)
@@ -967,6 +975,39 @@ func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath, 
 		return nil, fmt.Errorf("%w: current branch %q does not match tracked pull request head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
 	}
 	return pr, nil
+}
+
+func validateAttachedPullRequest(pr *repohost.PullRequest, baseRef string, branches []string) error {
+	if pr == nil {
+		return fmt.Errorf("%w: pull request not found", ErrAttachedPullRequestMismatch)
+	}
+	if value := strings.TrimSpace(baseRef); value != "" {
+		prBase := strings.TrimSpace(pr.BaseRefName)
+		if prBase == "" || prBase != value {
+			return fmt.Errorf("%w: base %q does not match target base %q", ErrAttachedPullRequestMismatch, prBase, value)
+		}
+	}
+	head := strings.TrimSpace(pr.HeadRefName)
+	if head == "" {
+		return fmt.Errorf("%w: head branch is empty", ErrAttachedPullRequestMismatch)
+	}
+	for _, branch := range branches {
+		if head == strings.TrimSpace(branch) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: head %q does not match expected branches %q", ErrAttachedPullRequestMismatch, head, strings.Join(trimmedBranches(branches), ", "))
+}
+
+func trimmedBranches(branches []string) []string {
+	out := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		branch = strings.TrimSpace(branch)
+		if branch != "" {
+			out = append(out, branch)
+		}
+	}
+	return out
 }
 
 func trackedPullRequest(issue domain.Issue) (domain.PullRequestRef, bool) {
@@ -1187,7 +1228,18 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 			}
 			threads = append(threads, thread)
 			if isHumanReviewFeedbackThread(thread) {
-				humanFeedback = append(humanFeedback, thread)
+				login := strings.TrimSpace(thread.Author)
+				allowed, ok := collaboratorCache[login]
+				if !ok {
+					allowed, err = m.IsRepositoryCollaborator(ctx, owner, name, login)
+					if err != nil {
+						return ReviewFollowUpScan{}, err
+					}
+					collaboratorCache[login] = allowed
+				}
+				if allowed {
+					humanFeedback = append(humanFeedback, thread)
+				}
 			}
 
 			comments, err := m.reviewThreadComments(ctx, node)
@@ -1652,17 +1704,21 @@ func (m *Manager) prBody(issue domain.Issue, branch string, prTitle string, targ
 		templateText = defaultPRTemplate()
 	}
 	return workflow.RenderTemplate(templateText, map[string]any{
-		"issue":    prIssueMap(issue),
-		"branch":   branch,
-		"base_ref": target.BaseRef,
-		"pr_title": prTitle,
+		"issue":        prIssueMap(issue),
+		"branch":       branch,
+		"base_ref":     target.BaseRef,
+		"pr_title":     prTitle,
+		"last_summary": issueLastSummary(issue),
 	})
 }
 
 func defaultPRTemplate() string {
-	return `## Why
+	return `{{- if .last_summary -}}
+{{ .last_summary }}
+{{- else -}}
+## Why
 
-Explain why this change was made and what reviewer context or motivation matters for this PR.
+Colin opened this pull request for {{.issue.identifier}}: {{.issue.title}}.
 
 - Linear issue: {{.issue.identifier}}
 {{- if .issue.url }}
@@ -1672,28 +1728,48 @@ Explain why this change was made and what reviewer context or motivation matters
 
 ## Before
 
-Describe the reviewer baseline for this PR only.
+No coding handoff summary was available when Colin opened this pull request.
 
 ## After
 
-Describe only the change introduced by this PR.
+Review the commits in this pull request for the implementation details.
 
 ## Evidence
 
-Prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.`
+No coding handoff evidence was available in Colin metadata.
+{{- end -}}`
 }
 
 func prIssueMap(issue domain.Issue) map[string]any {
 	return map[string]any{
-		"id":          issue.ID,
-		"identifier":  issue.Identifier,
-		"title":       issue.Title,
-		"description": derefString(issue.Description),
-		"state":       issue.State,
-		"branch_name": derefString(issue.BranchName),
-		"url":         derefString(issue.URL),
-		"labels":      append([]string(nil), issue.Labels...),
+		"id":             issue.ID,
+		"identifier":     issue.Identifier,
+		"title":          issue.Title,
+		"description":    derefString(issue.Description),
+		"state":          issue.State,
+		"branch_name":    derefString(issue.BranchName),
+		"url":            derefString(issue.URL),
+		"labels":         append([]string(nil), issue.Labels...),
+		"colin_metadata": prColinMetadataMap(issue.ColinMetadata),
 	}
+}
+
+func prColinMetadataMap(metadata *domain.ColinMetadata) map[string]any {
+	if metadata == nil {
+		return map[string]any{
+			"last_summary": "",
+		}
+	}
+	return map[string]any{
+		"last_summary": metadata.LastSummary,
+	}
+}
+
+func issueLastSummary(issue domain.Issue) string {
+	if issue.ColinMetadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(issue.ColinMetadata.LastSummary)
 }
 
 func derefString(value *string) string {

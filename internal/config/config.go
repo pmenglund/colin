@@ -25,9 +25,12 @@ var (
 	ErrMixedTargetConfig       = errors.New("mixed_target_config")
 )
 
-const defaultPRTemplate = `## Why
+const defaultPRTemplate = `{{- if .last_summary -}}
+{{ .last_summary }}
+{{- else -}}
+## Why
 
-Explain why this change was made and what reviewer context or motivation matters for this PR.
+Colin opened this pull request for {{.issue.identifier}}: {{.issue.title}}.
 
 - Linear issue: {{.issue.identifier}}
 {{- if .issue.url }}
@@ -37,15 +40,16 @@ Explain why this change was made and what reviewer context or motivation matters
 
 ## Before
 
-Describe the reviewer baseline for this PR only.
+No coding handoff summary was available when Colin opened this pull request.
 
 ## After
 
-Describe only the change introduced by this PR.
+Review the commits in this pull request for the implementation details.
 
 ## Evidence
 
-Prefer a screenshot. Otherwise include short terminal output in a fenced code block. Otherwise include the exact test command plus the specific tests that cover the change.`
+No coding handoff evidence was available in Colin metadata.
+{{- end -}}`
 
 const defaultBranchTemplate = `colin/{{.issue.identifier}}-{{.issue.title}}`
 

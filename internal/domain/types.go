@@ -116,6 +116,7 @@ type ColinMetadata struct {
 	ReviewPublishDirective   ReviewPublishDirective
 	LastRunType              RunType
 	LastOutcome              RunOutcome
+	LastSummary              string
 	LastSummaryCommentID     string
 	PullRequestNumber        int
 	PullRequestURL           string

@@ -75,6 +75,57 @@ func TestPublishCreatesCommitPushesBranchAndOpensPR(t *testing.T) {
 	}
 }
 
+func TestPublishUsesLastSummaryForDefaultPRBody(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturnsOnCall(0, nil, nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(1, nil, nil)
+	fakeGitHub.CreatePullRequestReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.PullRequestByHeadReturnsOnCall(2, testPullRequest(1, "OPEN", "colin-93"), nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	lastSummary := strings.TrimSpace(`## Why
+
+Fix the failing publish handoff.
+
+## Before
+
+The default PR body used placeholder instructions.
+
+## After
+
+The PR body uses the coding handoff summary.
+
+## Evidence
+
+go test ./internal/repoops`)
+	if _, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Use handoff summary",
+		ColinMetadata: &domain.ColinMetadata{
+			LastSummary: lastSummary,
+		},
+	}, workspacePath); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	_, _, _, input := fakeGitHub.CreatePullRequestArgsForCall(0)
+	if input.Body != lastSummary {
+		t.Fatalf("CreatePullRequest body = %q, want last summary", input.Body)
+	}
+	for _, leaked := range []string{
+		"Explain why this change was made",
+		"Describe the reviewer baseline",
+		"Prefer a screenshot",
+	} {
+		if strings.Contains(input.Body, leaked) {
+			t.Fatalf("CreatePullRequest body = %q, leaked placeholder %q", input.Body, leaked)
+		}
+	}
+}
+
 func TestValidateRepoAccessSkipsWhenTokenMissing(t *testing.T) {
 	fakeGitHub := &fakes.FakeRepoHostClient{}
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
@@ -838,6 +889,95 @@ func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	}
 	if fakeGitHub.CreatePullRequestCallCount() != 0 {
 		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
+	}
+}
+
+func TestPublishFailsWhenAttachedPullRequestHeadDoesNotMatchCurrentBranch(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(99, "OPEN", "attacker-branch"), nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reject mismatched attached PR",
+		AttachedPullRequests: []domain.PullRequestRef{
+			{Number: 99, URL: "https://github.com/pmenglund/colin/pull/99"},
+		},
+	}, workspacePath)
+	if !errors.Is(err, repoops.ErrAttachedPullRequestMismatch) {
+		t.Fatalf("Publish() error = %v, want ErrAttachedPullRequestMismatch", err)
+	}
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
+	}
+	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
+		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
+	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
+	}
+}
+
+func TestPublishFailsWhenAttachedPullRequestBaseDoesNotMatchTargetBase(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      99,
+		URL:         "https://github.com/pmenglund/colin/pull/99",
+		State:       "OPEN",
+		HeadRefName: "colin-93",
+		BaseRefName: "main",
+	}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.Publish(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reject wrong-base attached PR",
+		AttachedPullRequests: []domain.PullRequestRef{
+			{Number: 99, URL: "https://github.com/pmenglund/colin/pull/99"},
+		},
+	}, workspacePath)
+	if !errors.Is(err, repoops.ErrAttachedPullRequestMismatch) {
+		t.Fatalf("Publish() error = %v, want ErrAttachedPullRequestMismatch", err)
+	}
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
+	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
+	}
+}
+
+func TestReviewContextFailsWhenAttachedPullRequestHeadDoesNotMatchIssueBranch(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(99, "OPEN", "attacker-branch"), nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reject mismatched attached PR",
+		AttachedPullRequests: []domain.PullRequestRef{
+			{Number: 99, URL: "https://github.com/pmenglund/colin/pull/99"},
+		},
+	}, workspacePath)
+	if !errors.Is(err, repoops.ErrAttachedPullRequestMismatch) {
+		t.Fatalf("ReviewContext() error = %v, want ErrAttachedPullRequestMismatch", err)
+	}
+	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
+		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
+	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
+	}
+	if fakeGitHub.ReviewThreadsCallCount() != 0 {
+		t.Fatalf("ReviewThreadsCallCount() = %d, want 0", fakeGitHub.ReviewThreadsCallCount())
 	}
 }
 
