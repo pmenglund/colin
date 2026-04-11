@@ -35,3 +35,52 @@ func TestRenderLogLineEscapesEmbeddedControlWhitespace(t *testing.T) {
 		t.Fatalf("renderLogLine() = %q, want escaped tab", got)
 	}
 }
+
+func TestRenderTailscaleStatusLineShowsReadyURLs(t *testing.T) {
+	t.Parallel()
+
+	got := stripANSI(renderTailscaleStatusLine(domain.FunnelSetupStatus{
+		Ready:            true,
+		TailnetUIBaseURL: "https://colin.tail.example.ts.net",
+		PublicBaseURL:    "https://colin.tail.example.ts.net:8443",
+	}, 120))
+
+	for _, want := range []string{
+		"tailscale",
+		"ready",
+		"ui https://colin.tail.example.ts.net",
+		"webhooks https://colin.tail.example.ts.net:8443",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderTailscaleStatusLine() = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRenderTailscaleStatusLineShowsFirstFailedCheck(t *testing.T) {
+	t.Parallel()
+
+	got := stripANSI(renderTailscaleStatusLine(domain.FunnelSetupStatus{
+		Checks: []domain.SetupCheck{
+			{
+				Label:  "Colin can reach the local Tailscale daemon",
+				Status: "ok",
+				Detail: "Connected to the local Tailscale daemon.",
+			},
+			{
+				Label:  "Tailscale is running",
+				Status: "error",
+				Detail: "Backend state is `Stopped`.",
+			},
+		},
+	}, 120))
+
+	for _, want := range []string{
+		"tailscale",
+		"error Tailscale is running: Backend state is `Stopped`.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderTailscaleStatusLine() = %q, want %q", got, want)
+		}
+	}
+}

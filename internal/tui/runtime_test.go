@@ -363,6 +363,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		},
 		logs: sampleLogs(3),
 		setup: domain.FunnelSetupStatus{
+			Ready:            true,
 			TailnetUIBaseURL: "https://colin.tail.example.ts.net",
 			PublicBaseURL:    "https://colin.example.test",
 			LinearWebhookURL: "https://colin.example.test/webhooks/linear",
@@ -393,6 +394,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		"github hook https://colin.example.test/webhooks/github",
 		"https://colin.example.test/webhooks/github",
 		"  Integrations",
+		"  tailscale       ready  ui https://colin.tail.example.ts.net  webhooks https://colin.example.test",
 		"  slack ws        connected 10s ago",
 		"  slack webhook   no messages yet",
 		"  linear webhook  no messages yet",
