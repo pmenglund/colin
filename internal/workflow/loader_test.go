@@ -29,6 +29,29 @@ Work on {{.issue.identifier}}
 	}
 }
 
+func TestLoaderParsesPromptConfig(t *testing.T) {
+	t.Parallel()
+
+	config, _, err := parseWorkflow([]byte(`---
+tracker:
+  kind: linear
+prompts:
+  exec_plan_decision: |
+    Decide for {{.issue.identifier}}
+---
+Work on {{.issue.identifier}}
+`))
+	if err != nil {
+		t.Fatalf("parseWorkflow() error = %v", err)
+	}
+	if config.Prompts.ExecPlanDecision == nil {
+		t.Fatal("prompts.exec_plan_decision = nil, want parsed value")
+	}
+	if got := *config.Prompts.ExecPlanDecision; got != "Decide for {{.issue.identifier}}" {
+		t.Fatalf("prompts.exec_plan_decision = %q, want configured template", got)
+	}
+}
+
 func TestResolvePathUsesDefaultWhenUnset(t *testing.T) {
 	t.Setenv(WorkflowPathEnvVar, "")
 
@@ -130,6 +153,23 @@ func TestRenderTemplateIncludesArbitraryPayload(t *testing.T) {
 		t.Fatalf("RenderTemplate() error = %v", err)
 	}
 	if want := "Issue ABC-123 on main via feature/abc-123"; rendered != want {
+		t.Fatalf("rendered = %q, want %q", rendered, want)
+	}
+}
+
+func TestTemplatePayloadSupportsIssueFields(t *testing.T) {
+	t.Parallel()
+
+	payload := TemplatePayload(domain.Issue{
+		Identifier: "ABC-123",
+		Title:      "Prompt config",
+		Labels:     []string{"backend", "prompt"},
+	}, nil)
+	rendered, err := RenderTemplate(`{{.issue.identifier}} {{.issue.title}}{{range .issue.labels}} {{.}}{{end}}`, payload)
+	if err != nil {
+		t.Fatalf("RenderTemplate() error = %v", err)
+	}
+	if want := "ABC-123 Prompt config backend prompt"; rendered != want {
 		t.Fatalf("rendered = %q, want %q", rendered, want)
 	}
 }

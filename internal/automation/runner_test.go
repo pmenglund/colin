@@ -312,6 +312,9 @@ func TestRunnerStopsEarlyAfterRepeatedReadyForReviewWithoutRepoChanges(t *testin
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
 		},
+		Prompts: domain.PromptConfig{
+			CodingContinuation: "CUSTOM CODING CONTINUATION {{.issue.identifier}} {{.issue.title}}",
+		},
 	}
 	tracker := &stubTracker{
 		refreshedIssue: domain.Issue{
@@ -349,8 +352,12 @@ func TestRunnerStopsEarlyAfterRepeatedReadyForReviewWithoutRepoChanges(t *testin
 	if result.Issue.State != "Refine" {
 		t.Fatalf("Issue.State = %q, want %q", result.Issue.State, "Refine")
 	}
-	if got := strings.Count(readRunnerFile(t, promptsLogPath), "===TURN==="); got != 2 {
+	promptLog := readRunnerFile(t, promptsLogPath)
+	if got := strings.Count(promptLog, "===TURN==="); got != 2 {
 		t.Fatalf("prompt count = %d, want 2", got)
+	}
+	if !strings.Contains(promptLog, "CUSTOM CODING CONTINUATION COLIN-95 Keep coding") {
+		t.Fatalf("prompt log = %q, want custom continuation prompt", promptLog)
 	}
 	for _, want := range []string{
 		"Colin moved this issue to `Refine` because Codex repeatedly reported it as ready for review, but Colin still found no reviewable repository changes.",
@@ -1359,10 +1366,12 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	branch := "pmenglund/colin-124-internal-log-buffer"
 	prepareRunnerMergeConflict(t, tempDir, repoURL, branch, "symphony")
 	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	mergeRecoveryTexts := `["Still resolving the merge conflict.","COLIN_OUTCOME: READY_FOR_MERGE_RETRY\n\nResolved the merge conflict and ran focused verification."]`
 	command := fmt.Sprintf(
-		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_MERGE_RECOVERY_FILE_CONTENT=%q %q -test.run=TestHelperProcessFakeCodex --",
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q COLIN_FAKE_CODEX_MERGE_RECOVERY_FILE_CONTENT=%q COLIN_FAKE_CODEX_MERGE_RECOVERY_TEXTS_JSON=%q %q -test.run=TestHelperProcessFakeCodex --",
 		promptLogPath,
 		"base branch text\nfeature branch text\n",
+		mergeRecoveryTexts,
 		os.Args[0],
 	)
 	cfg := domain.ServiceConfig{
@@ -1378,7 +1387,7 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 			MergeMethod:   "merge",
 		},
 		Agent: domain.AgentConfig{
-			MaxTurns: 1,
+			MaxTurns: 2,
 		},
 		Codex: domain.CodexConfig{
 			Command:           command,
@@ -1388,6 +1397,18 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 			TurnTimeout:       5 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      5 * time.Second,
+		},
+		Prompts: domain.PromptConfig{
+			MergeRecovery: `CUSTOM MERGE RECOVERY {{.issue.identifier}} {{.merge.base_ref}}
+
+Repair the merge conflict for the Linear issue below so Colin can retry the GitHub merge.
+- Base ref: {{.merge.base_ref}}
+{{.outcomes.ready_for_merge_retry}}`,
+			MergeRecoveryContinuation: `CUSTOM MERGE CONTINUATION {{.issue.identifier}} {{.merge.base_ref}}
+
+Repair the merge conflict for the Linear issue below so Colin can retry the GitHub merge.
+- Base ref: {{.merge.base_ref}}
+{{.outcomes.ready_for_merge_retry}}`,
 		},
 	}
 	tracker := &stubTracker{
@@ -1448,6 +1469,12 @@ func TestRunnerRepairsMergeConflictAndRetriesMerge(t *testing.T) {
 	promptLog := readRunnerFile(t, promptLogPath)
 	if !strings.Contains(promptLog, "Repair the merge conflict for the Linear issue below so Colin can retry the GitHub merge.") {
 		t.Fatalf("prompt log = %q, want merge recovery prompt", promptLog)
+	}
+	if !strings.Contains(promptLog, "CUSTOM MERGE RECOVERY COLIN-124 symphony") {
+		t.Fatalf("prompt log = %q, want configured merge recovery prompt", promptLog)
+	}
+	if !strings.Contains(promptLog, "CUSTOM MERGE CONTINUATION COLIN-124 symphony") {
+		t.Fatalf("prompt log = %q, want configured merge recovery continuation prompt", promptLog)
 	}
 	if !strings.Contains(promptLog, outcomeReadyForMergeRetry) {
 		t.Fatalf("prompt log = %q, want merge retry outcome marker", promptLog)
@@ -1688,6 +1715,20 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
 		},
+		Prompts: domain.PromptConfig{
+			ExecPlanDecision: `CUSTOM EXECPLAN DECISION {{.issue.identifier}} {{.issue.title}}
+
+Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.
+{{.exec_plan_decisions.one_shot_line}}
+{{.exec_plan_decisions.exec_plan_line}}`,
+			ExecPlanGeneration: `CUSTOM EXECPLAN GENERATION {{.issue.identifier}}
+
+Create an ExecPlan for the Linear issue below.
+{{.exec_plan_authoring_guide}}`,
+			ExecPlanTracking: `CUSTOM EXECPLAN TRACKING {{.issue.identifier}}
+ExecPlan working copy: {{.exec_plan_working_copy_path}}
+Remaining tasks:{{range .remaining_progress_tasks}} {{.}}{{end}}`,
+		},
 	}
 	tracker := &stubTracker{
 		refreshedIssue: domain.Issue{
@@ -1737,8 +1778,17 @@ func TestRunnerCreatesExecPlanAndInjectsItIntoCodingPrompt(t *testing.T) {
 	if !strings.Contains(logText, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
 		t.Fatalf("prompts log missing exec plan decision turn: %q", logText)
 	}
+	if !strings.Contains(logText, "CUSTOM EXECPLAN DECISION COLIN-108 Add exec plans") {
+		t.Fatalf("prompts log missing configured exec plan decision prompt: %q", logText)
+	}
 	if !strings.Contains(logText, "Create an ExecPlan for the Linear issue below.") {
 		t.Fatalf("prompts log missing exec plan turn: %q", logText)
+	}
+	if !strings.Contains(logText, "CUSTOM EXECPLAN GENERATION COLIN-108") {
+		t.Fatalf("prompts log missing configured exec plan generation prompt: %q", logText)
+	}
+	if !strings.Contains(logText, "CUSTOM EXECPLAN TRACKING COLIN-108") {
+		t.Fatalf("prompts log missing configured exec plan tracking prompt: %q", logText)
 	}
 	if !strings.Contains(logText, "Work on COLIN-108.\n\nExecPlan:\n\n"+fakeExecPlanBody) {
 		t.Fatalf("prompts log missing coding prompt with injected plan: %q", logText)
@@ -2318,6 +2368,77 @@ func TestRunnerFailsWhenExecPlanDecisionOutputIsMalformed(t *testing.T) {
 	}
 }
 
+func TestRunnerFailsBeforeCodexTurnWhenConfiguredPromptTemplateIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	promptLogPath := filepath.Join(tempDir, "prompts.log")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_PROMPTS_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		promptLogPath,
+		os.Args[0],
+	)
+	cfg := domain.ServiceConfig{
+		Tracker: domain.TrackerConfig{
+			ActiveStates: []string{"Todo"},
+		},
+		Workspace: domain.WorkspaceConfig{
+			Root: filepath.Join(tempDir, "workspaces"),
+		},
+		Repo: domain.RepoConfig{
+			PublishStates: []string{"Review"},
+		},
+		Agent: domain.AgentConfig{
+			MaxTurns:       1,
+			CreateExecPlan: true,
+		},
+		Codex: domain.CodexConfig{
+			Command:           command,
+			ApprovalPolicy:    "never",
+			ThreadSandbox:     "danger-full-access",
+			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
+			TurnTimeout:       3 * time.Second,
+			ReadTimeout:       time.Second,
+			StallTimeout:      3 * time.Second,
+		},
+		Prompts: domain.PromptConfig{
+			ExecPlanDecision: "bad template {{.issue.not_a_field}}",
+		},
+	}
+	tracker := &stubTracker{
+		refreshedIssue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "COLIN-129",
+			Title:      "Invalid prompt template",
+			State:      "Todo",
+		},
+	}
+	runner := NewRunner(
+		cfg,
+		domain.WorkflowDefinition{PromptTemplate: "Work on {{ .issue.identifier }}."},
+		tracker,
+		workspace.NewManager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	result := runner.Run(context.Background(), domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-129",
+		Title:      "Invalid prompt template",
+		State:      "Todo",
+	}, nil, nil)
+
+	if result.Status != "failed" {
+		t.Fatalf("Run() status = %q, want failed", result.Status)
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "template_render_error") {
+		t.Fatalf("Run() err = %v, want template render error", result.Err)
+	}
+	if _, err := os.Stat(promptLogPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prompt log stat error = %v, want no Codex turn log", err)
+	}
+}
+
 func TestRunnerRetriesMalformedExecPlanDecisionOnce(t *testing.T) {
 	t.Parallel()
 
@@ -2352,6 +2473,13 @@ func TestRunnerRetriesMalformedExecPlanDecisionOnce(t *testing.T) {
 			TurnTimeout:       3 * time.Second,
 			ReadTimeout:       time.Second,
 			StallTimeout:      3 * time.Second,
+		},
+		Prompts: domain.PromptConfig{
+			ExecPlanDecisionRetry: `CUSTOM EXECPLAN RETRY {{.previous_first_line}}
+
+Your previous ExecPlan strategy response could not be parsed.
+{{.exec_plan_decisions.one_shot_line}}
+{{.exec_plan_decisions.exec_plan_line}}`,
 		},
 	}
 	tracker := &stubTracker{
@@ -2389,6 +2517,9 @@ func TestRunnerRetriesMalformedExecPlanDecisionOnce(t *testing.T) {
 	}
 	if !strings.Contains(string(logData), "Your previous ExecPlan strategy response could not be parsed.") {
 		t.Fatalf("prompts log missing retry prompt: %q", string(logData))
+	}
+	if !strings.Contains(string(logData), "CUSTOM EXECPLAN RETRY maybe one-shot") {
+		t.Fatalf("prompts log missing configured retry prompt: %q", string(logData))
 	}
 }
 
@@ -2934,6 +3065,7 @@ func runFakeCodex() error {
 	var threadID string
 	var turnID string
 	codingTurnCount := 0
+	mergeRecoveryTurnCount := 0
 
 	for {
 		msg, err := readJSONMessage(reader)
@@ -3004,7 +3136,8 @@ func runFakeCodex() error {
 					return err
 				}
 			}
-			if isMergeRecoveryPrompt(promptText) {
+			mergeRecoveryPrompt := isMergeRecoveryPrompt(promptText)
+			if mergeRecoveryPrompt {
 				if err := runFakeMergeRecovery(promptCwd, promptText); err != nil {
 					return err
 				}
@@ -3050,10 +3183,15 @@ func runFakeCodex() error {
 			}); err != nil {
 				return err
 			}
+			mergeRecoveryTurnIndex := 0
+			if mergeRecoveryPrompt {
+				mergeRecoveryTurnCount++
+				mergeRecoveryTurnIndex = mergeRecoveryTurnCount
+			}
 			itemCompletedParams := map[string]any{
 				"threadId": threadID,
 				"item": map[string]any{
-					"text": fakeCodexTurnText(promptText),
+					"text": fakeCodexTurnText(promptText, mergeRecoveryTurnIndex),
 				},
 			}
 			if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_ITEM_COMPLETED_PARAMS_ITEM_JSON"); ok {
@@ -3109,7 +3247,7 @@ func testTimePtr(value time.Time) *time.Time {
 	return &value
 }
 
-func fakeCodexTurnText(prompt string) string {
+func fakeCodexTurnText(prompt string, mergeRecoveryTurnIndex int) string {
 	if strings.Contains(prompt, "Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.") {
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_EXEC_PLAN_DECISION_TEXT"); ok {
 			return value
@@ -3132,6 +3270,9 @@ func fakeCodexTurnText(prompt string) string {
 		return fakeExecPlanBody
 	}
 	if isMergeRecoveryPrompt(prompt) {
+		if value, ok := indexedFakeText("COLIN_FAKE_CODEX_MERGE_RECOVERY_TEXTS_JSON", mergeRecoveryTurnIndex); ok {
+			return value
+		}
 		if value, ok := os.LookupEnv("COLIN_FAKE_CODEX_MERGE_RECOVERY_TEXT"); ok {
 			return value
 		}
@@ -3141,6 +3282,22 @@ func fakeCodexTurnText(prompt string) string {
 		return value
 	}
 	return outcomeReadyForReview + "\n\nImplemented the requested change."
+}
+
+func indexedFakeText(envName string, oneBasedIndex int) (string, bool) {
+	raw := strings.TrimSpace(os.Getenv(envName))
+	if raw == "" || oneBasedIndex <= 0 {
+		return "", false
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil || len(values) == 0 {
+		return "", false
+	}
+	index := oneBasedIndex - 1
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index], true
 }
 
 func extractPromptText(msg map[string]any) string {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/prompts"
 	"github.com/pmenglund/colin/internal/repohost"
 )
 
@@ -98,6 +99,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 			ThreadSandbox:     "danger-full-access",
 			TurnSandboxPolicy: domain.SandboxPolicy{Type: "dangerFullAccess"},
 		},
+		Prompts: prompts.Defaults(),
 		Server: domain.ServerConfig{
 			Port:           intPtr(8888),
 			LogBufferLines: domain.DefaultLogBufferLines,
@@ -125,6 +127,7 @@ func Build(def domain.WorkflowDefinition, workflowPath string) (domain.ServiceCo
 	if err := applyCodexConfig(&cfg, def.Config.Codex); err != nil {
 		return domain.ServiceConfig{}, err
 	}
+	applyPromptConfig(&cfg, def.Config.Prompts)
 	if err := applyServerConfig(&cfg, def.Config.Server); err != nil {
 		return domain.ServiceConfig{}, err
 	}
@@ -535,6 +538,26 @@ func applyAgentConfig(cfg *domain.ServiceConfig, raw domain.WorkflowAgentConfig)
 		}
 	}
 	return nil
+}
+
+func applyPromptConfig(cfg *domain.ServiceConfig, raw domain.WorkflowPromptConfig) {
+	overrides := domain.PromptConfig{}
+	applyPrompt := func(target *string, source *string) {
+		if source == nil {
+			return
+		}
+		*target = strings.TrimSpace(*source)
+	}
+
+	applyPrompt(&overrides.CodingFallback, raw.CodingFallback)
+	applyPrompt(&overrides.CodingContinuation, raw.CodingContinuation)
+	applyPrompt(&overrides.ExecPlanDecision, raw.ExecPlanDecision)
+	applyPrompt(&overrides.ExecPlanDecisionRetry, raw.ExecPlanDecisionRetry)
+	applyPrompt(&overrides.ExecPlanGeneration, raw.ExecPlanGeneration)
+	applyPrompt(&overrides.ExecPlanTracking, raw.ExecPlanTracking)
+	applyPrompt(&overrides.MergeRecovery, raw.MergeRecovery)
+	applyPrompt(&overrides.MergeRecoveryContinuation, raw.MergeRecoveryContinuation)
+	cfg.Prompts = prompts.WithDefaults(overrides)
 }
 
 func applyCodexConfig(cfg *domain.ServiceConfig, raw domain.WorkflowCodexConfig) error {

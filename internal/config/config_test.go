@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pmenglund/colin/internal/domain"
+	"github.com/pmenglund/colin/internal/prompts"
 	"github.com/pmenglund/colin/internal/repohost"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/workflow"
@@ -157,6 +158,74 @@ func TestBuildResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Slack.BotToken != "" || cfg.Slack.AppToken != "" || cfg.Slack.ChannelID != "" {
 		t.Fatalf("cfg.Slack = %#v, want disabled by default", cfg.Slack)
+	}
+	if cfg.Prompts.ExecPlanDecision == "" || cfg.Prompts.ExecPlanGeneration == "" || cfg.Prompts.MergeRecovery == "" {
+		t.Fatalf("cfg.Prompts = %#v, want default prompt templates", cfg.Prompts)
+	}
+}
+
+func TestBuildReadsPromptOverrides(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"prompts": map[string]any{
+			"coding_fallback":             "custom coding fallback {{.issue.identifier}}",
+			"coding_continuation":         "custom coding continuation {{.issue.title}}",
+			"exec_plan_decision":          "custom exec plan decision {{.exec_plan_decisions.exec_plan_line}}",
+			"exec_plan_decision_retry":    "custom exec plan retry {{.previous_first_line}}",
+			"exec_plan_generation":        "custom exec plan generation {{.exec_plan_authoring_guide}}",
+			"exec_plan_tracking":          "custom exec plan tracking {{.exec_plan_working_copy_path}}",
+			"merge_recovery":              "custom merge recovery {{.merge.base_ref}}",
+			"merge_recovery_continuation": "custom merge recovery continuation {{.merge.branch}}",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	assertPrompt := func(name string, got string, want string) {
+		t.Helper()
+		if got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+	assertPrompt("CodingFallback", cfg.Prompts.CodingFallback, "custom coding fallback {{.issue.identifier}}")
+	assertPrompt("CodingContinuation", cfg.Prompts.CodingContinuation, "custom coding continuation {{.issue.title}}")
+	assertPrompt("ExecPlanDecision", cfg.Prompts.ExecPlanDecision, "custom exec plan decision {{.exec_plan_decisions.exec_plan_line}}")
+	assertPrompt("ExecPlanDecisionRetry", cfg.Prompts.ExecPlanDecisionRetry, "custom exec plan retry {{.previous_first_line}}")
+	assertPrompt("ExecPlanGeneration", cfg.Prompts.ExecPlanGeneration, "custom exec plan generation {{.exec_plan_authoring_guide}}")
+	assertPrompt("ExecPlanTracking", cfg.Prompts.ExecPlanTracking, "custom exec plan tracking {{.exec_plan_working_copy_path}}")
+	assertPrompt("MergeRecovery", cfg.Prompts.MergeRecovery, "custom merge recovery {{.merge.base_ref}}")
+	assertPrompt("MergeRecoveryContinuation", cfg.Prompts.MergeRecoveryContinuation, "custom merge recovery continuation {{.merge.branch}}")
+}
+
+func TestBuildKeepsPromptDefaultForWhitespaceOverride(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":         "linear",
+			"project_slug": "cli",
+			"api_key":      "token",
+		},
+		"prompts": map[string]any{
+			"exec_plan_decision": " \n\t ",
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if cfg.Prompts.ExecPlanDecision != prompts.Defaults().ExecPlanDecision {
+		t.Fatalf("ExecPlanDecision = %q, want default", cfg.Prompts.ExecPlanDecision)
 	}
 }
 
