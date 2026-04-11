@@ -269,22 +269,29 @@ func (c *Client) statusChecksForRef(ctx context.Context, owner, repo, ref string
 func classifyCheck(name, status, conclusion, summary string) (repohost.PullRequestCheckState, repohost.PullRequestCheckFailureKind) {
 	status = strings.ToLower(strings.TrimSpace(status))
 	conclusion = strings.ToLower(strings.TrimSpace(conclusion))
-	text := strings.ToLower(strings.Join([]string{name, status, conclusion, summary}, " "))
-	if strings.Contains(text, "timed out") || strings.Contains(text, "timeout") || conclusion == "timed_out" {
-		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindTimeout
-	}
 	switch conclusion {
 	case "success", "neutral", "skipped":
 		return repohost.PullRequestCheckStatePassed, ""
+	case "timed_out":
+		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindTimeout
 	case "failure", "cancelled", "startup_failure":
+		if hasTimeoutSignal(name, status, conclusion, summary) {
+			return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindTimeout
+		}
 		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindActual
 	case "action_required":
+		if hasTimeoutSignal(name, status, conclusion, summary) {
+			return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindTimeout
+		}
 		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindUnknown
 	}
 	switch status {
 	case "success":
 		return repohost.PullRequestCheckStatePassed, ""
 	case "failure", "error":
+		if hasTimeoutSignal(name, status, conclusion, summary) {
+			return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindTimeout
+		}
 		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindActual
 	case "pending", "queued", "in_progress", "requested", "waiting":
 		return repohost.PullRequestCheckStatePending, ""
@@ -293,6 +300,11 @@ func classifyCheck(name, status, conclusion, summary string) (repohost.PullReque
 		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindUnknown
 	}
 	return repohost.PullRequestCheckStatePending, ""
+}
+
+func hasTimeoutSignal(values ...string) bool {
+	text := strings.ToLower(strings.Join(values, " "))
+	return strings.Contains(text, "timed out") || strings.Contains(text, "timeout")
 }
 
 func classifyFlakyChecks(checks []repohost.PullRequestCheck) {

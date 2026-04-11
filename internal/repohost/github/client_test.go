@@ -127,6 +127,114 @@ func TestGoGitHubClientPullRequestChecksNormalizesCheckRunsAndStatuses(t *testin
 	}
 }
 
+func TestGoGitHubClientPullRequestChecksDoesNotTreatSuccessfulTimeoutTextAsFailure(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/widgets/pulls/11":
+			writeJSON(t, w, map[string]any{
+				"number":   11,
+				"html_url": "https://github.com/acme/widgets/pull/11",
+				"state":    "open",
+				"head":     map[string]any{"ref": "feature", "sha": "abc123"},
+				"base":     map[string]any{"ref": "main"},
+			})
+		case "/repos/acme/widgets/commits/abc123/check-runs":
+			writeJSON(t, w, map[string]any{
+				"total_count": 1,
+				"check_runs": []map[string]any{
+					{
+						"name":       "timeout guard",
+						"status":     "completed",
+						"conclusion": "success",
+						"output":     map[string]any{"summary": "validates timeout handling without timing out"},
+					},
+				},
+			})
+		case "/repos/acme/widgets/commits/abc123/status":
+			writeJSON(t, w, map[string]any{
+				"state":    "success",
+				"statuses": []map[string]any{},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestGoGitHubClient(t, server)
+	rollup, err := client.PullRequestChecks(context.Background(), "acme", "widgets", 11)
+	if err != nil {
+		t.Fatalf("PullRequestChecks() error = %v", err)
+	}
+	if rollup.State != repohost.PullRequestCheckStatePassed {
+		t.Fatalf("rollup.State = %q, want passed", rollup.State)
+	}
+	if len(rollup.Failed) != 0 {
+		t.Fatalf("Failed = %#v, want none", rollup.Failed)
+	}
+	if len(rollup.Passed) != 1 || rollup.Passed[0].Name != "timeout guard" {
+		t.Fatalf("Passed = %#v, want timeout guard", rollup.Passed)
+	}
+}
+
+func TestClassifyCheckTimeoutSignalsRequireFailedOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		status      string
+		conclusion  string
+		summary     string
+		wantState   repohost.PullRequestCheckState
+		wantFailure repohost.PullRequestCheckFailureKind
+	}{
+		{
+			name:        "timeout guard",
+			status:      "completed",
+			conclusion:  "success",
+			summary:     "validates timeout handling",
+			wantState:   repohost.PullRequestCheckStatePassed,
+			wantFailure: "",
+		},
+		{
+			name:        "integration tests",
+			status:      "completed",
+			conclusion:  "timed_out",
+			wantState:   repohost.PullRequestCheckStateFailed,
+			wantFailure: repohost.PullRequestCheckFailureKindTimeout,
+		},
+		{
+			name:        "go test",
+			status:      "completed",
+			conclusion:  "failure",
+			summary:     "job timed out after 20 minutes",
+			wantState:   repohost.PullRequestCheckStateFailed,
+			wantFailure: repohost.PullRequestCheckFailureKindTimeout,
+		},
+		{
+			name:        "legacy timeout guard",
+			status:      "success",
+			conclusion:  "success",
+			summary:     "mentions timeout but passed",
+			wantState:   repohost.PullRequestCheckStatePassed,
+			wantFailure: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotState, gotFailure := classifyCheck(tt.name, tt.status, tt.conclusion, tt.summary)
+			if gotState != tt.wantState || gotFailure != tt.wantFailure {
+				t.Fatalf("classifyCheck() = (%q, %q), want (%q, %q)", gotState, gotFailure, tt.wantState, tt.wantFailure)
+			}
+		})
+	}
+}
+
 func TestNewGitHubClientFromConfigAppliesDefaultHTTPTimeout(t *testing.T) {
 	t.Parallel()
 
