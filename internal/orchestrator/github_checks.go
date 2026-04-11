@@ -63,6 +63,7 @@ func (o *Orchestrator) syncGitHubPullRequestCheck(ctx context.Context, issue dom
 	case repohost.PullRequestCheckStateFailed:
 		failed := firstRepairableCheck(rollup.Failed)
 		if failed == nil {
+			metadata.PendingCheckFailure = nil
 			if metadataChangedForChecks(issue.ColinMetadata, metadata) {
 				issue = o.persistPullRequestCheckMetadata(ctx, issue, metadata)
 				issue, _ = o.postIssueStatus(ctx, issue, issue.Identifier, nil, nonRepairableCheckFailureMessage(rollup))

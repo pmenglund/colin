@@ -78,7 +78,16 @@ func TestSyncGitHubPullRequestCheckLeavesTimeoutFailureInReview(t *testing.T) {
 	}, nil)
 
 	tracker, orch := checkTestOrchestrator(cfg, fakeGitHub)
-	updated, queued := orch.syncGitHubPullRequestCheck(context.Background(), checkTestReviewIssue(), time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC))
+	issue := checkTestReviewIssue()
+	issue.ColinMetadata.PendingCheckFailure = &domain.PendingPullRequestCheckFailure{
+		Name:        "go test",
+		FailureKind: string(repohost.PullRequestCheckFailureKindActual),
+		Conclusion:  "failure",
+		HeadSHA:     "oldsha",
+		PRNumber:    11,
+		PRURL:       "https://github.com/pmenglund/colin/pull/11",
+	}
+	updated, queued := orch.syncGitHubPullRequestCheck(context.Background(), issue, time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC))
 
 	if queued {
 		t.Fatal("syncGitHubPullRequestCheck() queued = true, want false for timeout")
