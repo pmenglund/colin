@@ -769,9 +769,9 @@ func renderExecPlanBody(value *domain.ExecPlan) g.Node {
 			g.Text("No ExecPlan is currently recorded for this issue."),
 		)
 	}
-	return h.Pre(
-		h.Class("mockup-code"),
-		g.Text(strings.TrimSpace(value.Body)),
+	return h.Div(
+		h.Class("markdown-output"),
+		codexMarkdownNode(strings.TrimSpace(value.Body)),
 	)
 }
 
