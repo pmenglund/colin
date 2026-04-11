@@ -454,6 +454,43 @@ func (m *Manager) ReviewContext(ctx context.Context, issue domain.Issue, workspa
 	}, nil
 }
 
+// PullRequestChecks returns the current GitHub checks for the issue's pull request.
+func (m *Manager) PullRequestChecks(ctx context.Context, issue domain.Issue, workspacePath string) (repohost.PullRequestCheckRollup, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	pr, _, err := m.resolvePullRequest(ctx, issue, workspacePath, "", false)
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	if pr == nil {
+		return repohost.PullRequestCheckRollup{}, nil
+	}
+	owner, name, err := m.remoteRepository(ctx, workspacePath, target.EffectiveRemoteName(m.cfg.Repo.RemoteName))
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	client, err := m.repoHostClient()
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	rollup, err := client.PullRequestChecks(ctx, owner, name, pr.Number)
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	if rollup.PullRequest.Number == 0 {
+		rollup.PullRequest = *pr
+	}
+	if strings.TrimSpace(rollup.PullRequest.URL) == "" {
+		rollup.PullRequest.URL = pr.URL
+	}
+	if strings.TrimSpace(rollup.HeadSHA) == "" {
+		rollup.HeadSHA = strings.TrimSpace(rollup.PullRequest.HeadSHA)
+	}
+	return rollup, nil
+}
+
 func targetCodexPRReviewsEnabled(cfg domain.ServiceConfig, target domain.TargetConfig) bool {
 	if target.CodexPRReviewsEnabled {
 		return true

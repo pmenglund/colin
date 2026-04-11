@@ -72,6 +72,12 @@ type GitHubWebhookEvent struct {
 	CommentID          int64
 	CommentBody        string
 	CommentAuthorLogin string
+	CheckRunID         int64
+	CheckName          string
+	CheckStatus        string
+	CheckConclusion    string
+	HeadSHA            string
+	PullRequestNumbers []int
 	Relevant           bool
 }
 

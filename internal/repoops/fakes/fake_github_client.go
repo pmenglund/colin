@@ -90,6 +90,22 @@ type FakeGitHubClient struct {
 		result1 *repohost.PullRequest
 		result2 error
 	}
+	PullRequestChecksStub        func(context.Context, string, string, int) (repohost.PullRequestCheckRollup, error)
+	pullRequestChecksMutex       sync.RWMutex
+	pullRequestChecksArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}
+	pullRequestChecksReturns struct {
+		result1 repohost.PullRequestCheckRollup
+		result2 error
+	}
+	pullRequestChecksReturnsOnCall map[int]struct {
+		result1 repohost.PullRequestCheckRollup
+		result2 error
+	}
 	PullRequestReactionsStub        func(context.Context, string, string, int, string) (repohost.ReactionPage, error)
 	pullRequestReactionsMutex       sync.RWMutex
 	pullRequestReactionsArgsForCall []struct {
@@ -526,6 +542,73 @@ func (fake *FakeGitHubClient) PullRequestByNumberReturnsOnCall(i int, result1 *r
 	}
 	fake.pullRequestByNumberReturnsOnCall[i] = struct {
 		result1 *repohost.PullRequest
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeGitHubClient) PullRequestChecks(arg1 context.Context, arg2 string, arg3 string, arg4 int) (repohost.PullRequestCheckRollup, error) {
+	fake.pullRequestChecksMutex.Lock()
+	ret, specificReturn := fake.pullRequestChecksReturnsOnCall[len(fake.pullRequestChecksArgsForCall)]
+	fake.pullRequestChecksArgsForCall = append(fake.pullRequestChecksArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 int
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.PullRequestChecksStub
+	fakeReturns := fake.pullRequestChecksReturns
+	fake.recordInvocation("PullRequestChecks", []interface{}{arg1, arg2, arg3, arg4})
+	fake.pullRequestChecksMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *FakeGitHubClient) PullRequestChecksCallCount() int {
+	fake.pullRequestChecksMutex.RLock()
+	defer fake.pullRequestChecksMutex.RUnlock()
+	return len(fake.pullRequestChecksArgsForCall)
+}
+
+func (fake *FakeGitHubClient) PullRequestChecksCalls(stub func(context.Context, string, string, int) (repohost.PullRequestCheckRollup, error)) {
+	fake.pullRequestChecksMutex.Lock()
+	defer fake.pullRequestChecksMutex.Unlock()
+	fake.PullRequestChecksStub = stub
+}
+
+func (fake *FakeGitHubClient) PullRequestChecksArgsForCall(i int) (context.Context, string, string, int) {
+	fake.pullRequestChecksMutex.RLock()
+	defer fake.pullRequestChecksMutex.RUnlock()
+	argsForCall := fake.pullRequestChecksArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *FakeGitHubClient) PullRequestChecksReturns(result1 repohost.PullRequestCheckRollup, result2 error) {
+	fake.pullRequestChecksMutex.Lock()
+	defer fake.pullRequestChecksMutex.Unlock()
+	fake.PullRequestChecksStub = nil
+	fake.pullRequestChecksReturns = struct {
+		result1 repohost.PullRequestCheckRollup
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeGitHubClient) PullRequestChecksReturnsOnCall(i int, result1 repohost.PullRequestCheckRollup, result2 error) {
+	fake.pullRequestChecksMutex.Lock()
+	defer fake.pullRequestChecksMutex.Unlock()
+	fake.PullRequestChecksStub = nil
+	if fake.pullRequestChecksReturnsOnCall == nil {
+		fake.pullRequestChecksReturnsOnCall = make(map[int]struct {
+			result1 repohost.PullRequestCheckRollup
+			result2 error
+		})
+	}
+	fake.pullRequestChecksReturnsOnCall[i] = struct {
+		result1 repohost.PullRequestCheckRollup
 		result2 error
 	}{result1, result2}
 }

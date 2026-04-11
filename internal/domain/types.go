@@ -110,6 +110,7 @@ type ColinMetadata struct {
 	PendingReviewReactor     string
 	PendingReviewRequestedAt *time.Time
 	QueuedReviewFollowUps    []PendingReviewFollowUp
+	PendingCheckFailure      *PendingPullRequestCheckFailure
 	ReviewReactionWatermarks map[string]string
 	ExecPlanDecision         ExecPlanDecision
 	ReviewPublishDirective   ReviewPublishDirective
@@ -124,6 +125,8 @@ type ColinMetadata struct {
 	PullRequestBackend       string
 	PullRequestRepoOwner     string
 	PullRequestRepoName      string
+	LastCheckHeadSHA         string
+	LastCheckState           string
 	LoopFailureFingerprint   string
 	LoopFailureCount         int
 	PausedAt                 *time.Time
@@ -202,6 +205,20 @@ type PendingReviewFollowUp struct {
 	ReactionID  string
 	Reactor     string
 	RequestedAt *time.Time
+}
+
+// PendingPullRequestCheckFailure is the compact CI failure context Colin stores before starting a repair.
+type PendingPullRequestCheckFailure struct {
+	Name        string
+	FailureKind string
+	Status      string
+	Conclusion  string
+	DetailsURL  string
+	Summary     string
+	HeadSHA     string
+	PRNumber    int
+	PRURL       string
+	ObservedAt  *time.Time
 }
 
 // WorkflowDefinition is the parsed WORKFLOW.md content used for config and prompt rendering.

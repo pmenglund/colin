@@ -1132,6 +1132,14 @@ func TestObservabilityServerGitHubWebhookTriggersRefreshForRelevantEvents(t *tes
 			repository:        "acme/widgets",
 			pullRequestNumber: 11,
 		},
+		{
+			name:              "check run",
+			eventHeader:       "check_run",
+			body:              `{"action":"completed","repository":{"full_name":"acme/widgets"},"check_run":{"id":123,"name":"go test","status":"completed","conclusion":"failure","head_sha":"abc123","pull_requests":[{"number":11}]}}`,
+			action:            "completed",
+			repository:        "acme/widgets",
+			pullRequestNumber: 11,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1185,7 +1193,49 @@ func TestObservabilityServerGitHubWebhookTriggersRefreshForRelevantEvents(t *tes
 			if !events[0].HasPullRequest {
 				t.Fatal("HasPullRequest = false, want true")
 			}
+			if tc.eventHeader == "check_run" {
+				if events[0].CheckName != "go test" || events[0].CheckConclusion != "failure" || events[0].HeadSHA != "abc123" {
+					t.Fatalf("check event = %#v, want check details", events[0])
+				}
+			}
 		})
+	}
+}
+
+func TestObservabilityServerGitHubWebhookTriggersRefreshForStatusEvent(t *testing.T) {
+	t.Parallel()
+
+	var events []GitHubWebhookEvent
+	handler, err := NewObservabilityServer(nil, nil, nil, nil, nil, nil, nil, func(_ context.Context, event GitHubWebhookEvent) GitHubWebhookTriggerResult {
+		events = append(events, event)
+		return GitHubWebhookTriggerResult{Relevant: true, Queued: true}
+	}, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewObservabilityServer() error = %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/webhooks/github", strings.NewReader(`{"state":"failure","context":"ci/build","sha":"abc123","repository":{"full_name":"acme/widgets"}}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("X-GitHub-Event", "status")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /webhooks/github error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(events) != 1 {
+		t.Fatalf("trigger calls = %d, want 1", len(events))
+	}
+	if events[0].CheckName != "ci/build" || events[0].HeadSHA != "abc123" {
+		t.Fatalf("status event = %#v, want status details", events[0])
 	}
 }
 

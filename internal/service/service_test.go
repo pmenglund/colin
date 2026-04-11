@@ -1101,7 +1101,7 @@ Work on {{ .issue.identifier }}.
 	if result.SigningSecretEnvVar != GitHubWebhookSigningSecretEnvVar {
 		t.Fatalf("SigningSecretEnvVar = %q, want %q", result.SigningSecretEnvVar, GitHubWebhookSigningSecretEnvVar)
 	}
-	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread" {
+	if got := strings.Join(result.Events, ","); got != "pull_request,pull_request_review,pull_request_review_comment,pull_request_review_thread,check_run,check_suite,status" {
 		t.Fatalf("Events = %q", got)
 	}
 }
@@ -2133,6 +2133,18 @@ func TestShouldQueueImmediateGitHubRefresh(t *testing.T) {
 			want:        true,
 		},
 		{
+			name: "check run in watched repository",
+			event: app.GitHubWebhookEvent{
+				Event:              "check_run",
+				Action:             "completed",
+				RepositoryFullName: "acme/widgets",
+				HeadSHA:            "abc123",
+				Relevant:           true,
+			},
+			watchedRepo: "acme/widgets",
+			want:        true,
+		},
+		{
 			name: "irrelevant action",
 			event: app.GitHubWebhookEvent{
 				Event:              "pull_request",
@@ -2481,6 +2493,10 @@ func (s *serviceGitHubStub) MergePullRequest(context.Context, string, string, in
 
 func (s *serviceGitHubStub) BranchExists(context.Context, string, string, string) (bool, error) {
 	return false, nil
+}
+
+func (s *serviceGitHubStub) PullRequestChecks(context.Context, string, string, int) (repohost.PullRequestCheckRollup, error) {
+	return repohost.PullRequestCheckRollup{}, nil
 }
 
 func (s *serviceGitHubStub) ReviewThreads(context.Context, string, string, int, string) (repohost.ReviewThreadPage, error) {
