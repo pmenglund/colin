@@ -588,6 +588,7 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		parsedSummary = appendRemainingExecPlanTasks(parsedSummary, execPlanProgress.Remaining())
 	}
 	metadata := codexMetadataWithDirective(current, runType, metadataOutcome, "", "")
+	metadata.LastSummary = strings.TrimSpace(parsedSummary)
 	if runType == RunTypeCoding && isPublishState(r.cfg, handoffState) {
 		metadata.PendingCheckFailure = nil
 	}

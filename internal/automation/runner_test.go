@@ -118,6 +118,9 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	if result.Issue.ColinMetadata.PendingCheckFailure != nil {
 		t.Fatalf("PendingCheckFailure = %#v, want cleared after repair handoff", result.Issue.ColinMetadata.PendingCheckFailure)
 	}
+	if result.Issue.ColinMetadata.LastSummary != "Implemented the requested change." {
+		t.Fatalf("LastSummary = %q, want coding handoff summary", result.Issue.ColinMetadata.LastSummary)
+	}
 }
 
 func TestRunnerResumesPersistedCodexThreadID(t *testing.T) {

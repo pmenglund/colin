@@ -3394,6 +3394,7 @@ func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t 
 											"review_publish_directive":  "skip",
 											"last_run_type":             "coding",
 											"last_outcome":              "needs_spec",
+											"last_summary":              "Needs a clearer spec.",
 											"last_summary_comment_id":   "comment-2",
 											"loop_failure_fingerprint":  "review_publish\nReview\nno commits",
 											"loop_failure_count":        3,
@@ -3469,6 +3470,9 @@ func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t 
 	if metadata.ProgressRootCommentID != "comment-root-1" {
 		t.Fatalf("ProgressRootCommentID = %q, want comment-root-1", metadata.ProgressRootCommentID)
 	}
+	if metadata.LastSummary != "Needs a clearer spec." {
+		t.Fatalf("LastSummary = %q, want preserved summary", metadata.LastSummary)
+	}
 	if metadata.DelegationAckKind != "ready" {
 		t.Fatalf("DelegationAckKind = %q, want ready", metadata.DelegationAckKind)
 	}
@@ -3506,6 +3510,7 @@ func TestColinMetadataRoundTripsPendingCheckFailure(t *testing.T) {
 			PRURL:       "https://github.com/acme/widgets/pull/11",
 			ObservedAt:  &observedAt,
 		},
+		LastSummary:      "## Why\n\nPreserve the handoff summary.",
 		LastCheckHeadSHA: "abc123",
 		LastCheckState:   "failed|abc123|go test:actual:failure",
 	}
@@ -3528,6 +3533,9 @@ func TestColinMetadataRoundTripsPendingCheckFailure(t *testing.T) {
 	}
 	if parsed.LastCheckHeadSHA != "abc123" || parsed.LastCheckState != "failed|abc123|go test:actual:failure" {
 		t.Fatalf("check watermark = (%q, %q), want preserved", parsed.LastCheckHeadSHA, parsed.LastCheckState)
+	}
+	if parsed.LastSummary != "## Why\n\nPreserve the handoff summary." {
+		t.Fatalf("LastSummary = %q, want round-tripped handoff summary", parsed.LastSummary)
 	}
 }
 
