@@ -902,6 +902,21 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 		if pr == nil {
 			return nil, false, fmt.Errorf("attached pull request #%d not found", attached[0].Number)
 		}
+		expectedBranches := []string{currentBranch}
+		if strings.TrimSpace(currentBranch) == "" {
+			expectedBranches = m.reviewLookupBranches(ctx, issue, workspacePath)
+		}
+		if !pullRequestMatchesIssueBranchAndBase(pr, target.BaseRef, expectedBranches) {
+			m.logger.Warn(
+				"ignoring attached pull request due to branch or base mismatch",
+				"pr_number", pr.Number,
+				"pr_head", pr.HeadRefName,
+				"pr_base", pr.BaseRefName,
+				"target_base", target.BaseRef,
+				"expected_branches", strings.Join(expectedBranches, ","),
+			)
+			break
+		}
 		return pr, false, nil
 	default:
 		return nil, false, duplicatePullRequestsError(attached)
@@ -967,6 +982,28 @@ func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath, 
 		return nil, fmt.Errorf("%w: current branch %q does not match tracked pull request head %q", ErrTrackedPullRequestMismatch, value, pr.HeadRefName)
 	}
 	return pr, nil
+}
+
+func pullRequestMatchesIssueBranchAndBase(pr *repohost.PullRequest, baseRef string, branches []string) bool {
+	if pr == nil {
+		return false
+	}
+	if value := strings.TrimSpace(baseRef); value != "" {
+		prBase := strings.TrimSpace(pr.BaseRefName)
+		if prBase == "" || prBase != value {
+			return false
+		}
+	}
+	head := strings.TrimSpace(pr.HeadRefName)
+	if head == "" {
+		return false
+	}
+	for _, branch := range branches {
+		if head == strings.TrimSpace(branch) {
+			return true
+		}
+	}
+	return false
 }
 
 func trackedPullRequest(issue domain.Issue) (domain.PullRequestRef, bool) {
