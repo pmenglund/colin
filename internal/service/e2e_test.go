@@ -436,6 +436,335 @@ Work on {{ .issue.identifier }}.
 	}
 }
 
+func TestServiceMovesNeedsSpecOutcomeToRefine(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	markerPath := filepath.Join(tempDir, "codex.marker")
+
+	linear := newFakeLinearServer(markerPath)
+	server := httptest.NewServer(linear)
+	defer server.Close()
+
+	workflowPath := filepath.Join(tempDir, "WORKFLOW.md")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_OUTCOME=needs_spec COLIN_FAKE_CODEX_MARKER=%q %q -test.run=TestHelperProcessFakeCodex --",
+		markerPath,
+		os.Args[0],
+	)
+	workflow := fmt.Sprintf(`---
+tracker:
+  kind: linear
+  endpoint: %q
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 100
+workspace:
+  root: %q
+agent:
+  max_concurrent_agents: 1
+  max_turns: 1
+  max_retry_backoff_ms: 500
+codex:
+  command: %q
+  turn_timeout_ms: 3000
+  read_timeout_ms: 1000
+  stall_timeout_ms: 3000
+server:
+  port: 0
+---
+Work on {{ .issue.identifier }}.
+`, server.URL, filepath.Join(tempDir, "workspaces"), command)
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	logger := newLogger(io.Discard, false)
+	svc, err := New(context.Background(), logger, workflowPath)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Run(ctx)
+	}()
+
+	waitFor(t, "fake Codex completion marker", serviceE2EWaitTimeout, func() bool {
+		_, err := os.Stat(markerPath)
+		return err == nil
+	})
+	waitFor(t, "Linear issue moved to Refine", serviceE2EWaitTimeout, func() bool {
+		return linear.IssueState("COLIN-93") == "Refine"
+	})
+	waitFor(t, "needs-spec progress comment", serviceE2EWaitTimeout, func() bool {
+		for _, comment := range linear.CommentsForIssue("COLIN-93") {
+			if strings.Contains(comment.Body, "The spec should be improved before implementation.") {
+				return true
+			}
+		}
+		return false
+	})
+	if got := linear.IssueState("COLIN-93"); got == "Review" {
+		t.Fatalf("issue state = %q, want Refine", got)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("service did not stop after cancellation")
+	}
+}
+
+func TestServiceSkipsPausedIssueUntilLabelRemoved(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	markerPath := filepath.Join(tempDir, "codex.marker")
+	requestLogPath := filepath.Join(tempDir, "codex.requests.jsonl")
+
+	linear := newFakeLinearServerWithIssues(markerPath, fakeLinearIssue{
+		ID:          "issue-paused",
+		Identifier:  "COLIN-220",
+		Title:       "Paused e2e issue",
+		Description: "Verify paused issue gating",
+		ProjectSlug: "test-project",
+		BranchName:  "colin-220",
+		URL:         "https://linear.example/COLIN-220",
+		State:       "Todo",
+		Labels:      []string{"e2e", domain.PausedIssueLabel},
+	})
+	server := httptest.NewServer(linear)
+	defer server.Close()
+
+	workflowPath := filepath.Join(tempDir, "WORKFLOW.md")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_MARKER=%q COLIN_FAKE_CODEX_REQUEST_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		markerPath,
+		requestLogPath,
+		os.Args[0],
+	)
+	workflow := fmt.Sprintf(`---
+tracker:
+  kind: linear
+  endpoint: %q
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 100
+workspace:
+  root: %q
+agent:
+  max_concurrent_agents: 1
+  max_turns: 1
+  max_retry_backoff_ms: 500
+codex:
+  command: %q
+  turn_timeout_ms: 3000
+  read_timeout_ms: 1000
+  stall_timeout_ms: 3000
+server:
+  port: 0
+---
+Work on {{ .issue.identifier }}.
+`, server.URL, filepath.Join(tempDir, "workspaces"), command)
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	logger := newLogger(io.Discard, false)
+	svc, err := New(context.Background(), logger, workflowPath)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Run(ctx)
+	}()
+
+	waitFor(t, "paused candidate fetches", serviceE2EWaitTimeout, func() bool {
+		return linear.CandidateFetches() >= 2
+	})
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Fatal("fake Codex marker exists while issue is paused")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat fake Codex marker: %v", err)
+	}
+	if _, err := os.Stat(requestLogPath); err == nil {
+		t.Fatal("fake Codex request log exists while issue is paused")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat fake Codex request log: %v", err)
+	}
+
+	linear.SetIssueLabels("COLIN-220", []string{"e2e"})
+	waitFor(t, "fake Codex marker after unpausing", serviceE2EWaitTimeout, func() bool {
+		_, err := os.Stat(markerPath)
+		return err == nil
+	})
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("service did not stop after cancellation")
+	}
+}
+
+func TestServiceWaitsForBlockedIssueUntilBlockerCompletes(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	markerPath := filepath.Join(tempDir, "codex.marker")
+	cwdLogPath := filepath.Join(tempDir, "codex.cwd.log")
+
+	linear := newFakeLinearServerWithIssues(markerPath,
+		fakeLinearIssue{
+			ID:          "issue-blocker",
+			Identifier:  "COLIN-219",
+			Title:       "Blocker e2e issue",
+			Description: "Blocks the follow-up issue",
+			ProjectSlug: "test-project",
+			BranchName:  "colin-219",
+			URL:         "https://linear.example/COLIN-219",
+			State:       "In Progress",
+			Labels:      []string{"e2e"},
+		},
+		fakeLinearIssue{
+			ID:          "issue-blocked",
+			Identifier:  "COLIN-220",
+			Title:       "Blocked e2e issue",
+			Description: "Verify blocker gating",
+			ProjectSlug: "test-project",
+			BranchName:  "colin-220",
+			URL:         "https://linear.example/COLIN-220",
+			State:       "Todo",
+			Labels:      []string{"e2e"},
+			BlockedBy: []fakeLinearBlocker{{
+				ID:         "issue-blocker",
+				Identifier: "COLIN-219",
+				State:      "In Progress",
+			}},
+		},
+	)
+	server := httptest.NewServer(linear)
+	defer server.Close()
+
+	workflowPath := filepath.Join(tempDir, "WORKFLOW.md")
+	workspaceRoot := filepath.Join(tempDir, "workspaces")
+	command := fmt.Sprintf(
+		"env COLIN_FAKE_CODEX=1 COLIN_FAKE_CODEX_MARKER=%q COLIN_FAKE_CODEX_CWD_LOG=%q %q -test.run=TestHelperProcessFakeCodex --",
+		markerPath,
+		cwdLogPath,
+		os.Args[0],
+	)
+	workflow := fmt.Sprintf(`---
+tracker:
+  kind: linear
+  endpoint: %q
+  api_key: test-linear-key
+  project_slug: test-project
+  active_states:
+    - Todo
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 100
+workspace:
+  root: %q
+agent:
+  max_concurrent_agents: 1
+  max_turns: 1
+  max_retry_backoff_ms: 500
+codex:
+  command: %q
+  turn_timeout_ms: 3000
+  read_timeout_ms: 1000
+  stall_timeout_ms: 3000
+server:
+  port: 0
+---
+Work on {{ .issue.identifier }}.
+`, server.URL, workspaceRoot, command)
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	logger := newLogger(io.Discard, false)
+	svc, err := New(context.Background(), logger, workflowPath)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Run(ctx)
+	}()
+
+	waitFor(t, "blocked candidate fetches", serviceE2EWaitTimeout, func() bool {
+		return linear.CandidateFetches() >= 2
+	})
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Fatal("fake Codex marker exists while issue is blocked")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat fake Codex marker: %v", err)
+	}
+	if _, err := os.Stat(cwdLogPath); err == nil {
+		t.Fatal("fake Codex cwd log exists while issue is blocked")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat fake Codex cwd log: %v", err)
+	}
+
+	linear.SetIssueState("COLIN-219", "Done")
+	waitFor(t, "fake Codex marker after blocker completes", serviceE2EWaitTimeout, func() bool {
+		_, err := os.Stat(markerPath)
+		return err == nil
+	})
+	gotCWD, err := os.ReadFile(cwdLogPath)
+	if err != nil {
+		t.Fatalf("read cwd log: %v", err)
+	}
+	if !strings.Contains(string(gotCWD), filepath.Join(workspaceRoot, "test-project", "COLIN-220")) {
+		t.Fatalf("fake Codex cwd log = %q, want blocked issue workspace", string(gotCWD))
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("service did not stop after cancellation")
+	}
+}
+
 func TestHelperProcessFakeCodex(t *testing.T) {
 	if os.Getenv("COLIN_FAKE_CODEX") != "1" {
 		return
@@ -579,7 +908,7 @@ func runFakeCodex() error {
 				"params": map[string]any{
 					"threadId": threadID,
 					"item": map[string]any{
-						"text": "COLIN_OUTCOME: READY_FOR_REVIEW\n\nImplemented the requested change.",
+						"text": fakeCodexFinalText(),
 					},
 				},
 			}); err != nil {
@@ -603,6 +932,20 @@ func runFakeCodex() error {
 				}
 			}
 		}
+	}
+}
+
+func fakeCodexFinalText() string {
+	if text := os.Getenv("COLIN_FAKE_CODEX_FINAL_TEXT"); text != "" {
+		return text
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("COLIN_FAKE_CODEX_OUTCOME"))) {
+	case "", "ready_for_review":
+		return domain.OutcomeReadyForReviewLine + "\n\nImplemented the requested change."
+	case "needs_spec":
+		return domain.OutcomeNeedsSpecLine + "\n\nThe spec should be improved before implementation."
+	default:
+		return domain.OutcomeReadyForReviewLine + "\n\nImplemented the requested change."
 	}
 }
 
@@ -769,24 +1112,112 @@ type fakeLinearServer struct {
 	mu               sync.Mutex
 	markerPath       string
 	authHeader       string
-	current          string
 	candidateFetches int
 	stateFetches     int
+	issues           map[string]*fakeLinearIssue
+	issueOrder       []string
 	comments         []fakeLinearComment
-	metadata         map[string]any
+	metadata         map[string]map[string]any
+	attachmentIssue  map[string]string
 	labels           map[string]string
+	labelNames       map[string]string
 	nextCommentID    int
 	nextLabelID      int
 }
 
+type fakeLinearIssue struct {
+	ID          string
+	Identifier  string
+	Title       string
+	Description string
+	ProjectID   string
+	ProjectSlug string
+	BranchName  string
+	URL         string
+	State       string
+	Priority    int
+	Labels      []string
+	BlockedBy   []fakeLinearBlocker
+}
+
+type fakeLinearBlocker struct {
+	ID         string
+	Identifier string
+	State      string
+}
+
 func newFakeLinearServer(markerPath string) *fakeLinearServer {
-	return &fakeLinearServer{
-		markerPath:    markerPath,
-		current:       "Todo",
-		labels:        map[string]string{},
-		nextCommentID: 1,
-		nextLabelID:   1,
+	return newFakeLinearServerWithIssues(markerPath, fakeLinearIssue{
+		ID:          "issue-1",
+		Identifier:  "COLIN-93",
+		Title:       "SDK integration e2e",
+		Description: "Verify Colin end-to-end",
+		ProjectSlug: "test-project",
+		BranchName:  "colin-93",
+		URL:         "https://linear.example/COLIN-93",
+		State:       "Todo",
+		Priority:    1,
+		Labels:      []string{"e2e"},
+	})
+}
+
+func newFakeLinearServerWithIssues(markerPath string, issues ...fakeLinearIssue) *fakeLinearServer {
+	server := &fakeLinearServer{
+		markerPath:      markerPath,
+		issues:          map[string]*fakeLinearIssue{},
+		metadata:        map[string]map[string]any{},
+		attachmentIssue: map[string]string{},
+		labels:          map[string]string{},
+		labelNames:      map[string]string{},
+		nextCommentID:   1,
+		nextLabelID:     1,
 	}
+	for _, issue := range issues {
+		normalized := normalizeFakeLinearIssue(issue)
+		server.issues[normalized.ID] = &normalized
+		server.issueOrder = append(server.issueOrder, normalized.ID)
+		for _, label := range normalized.Labels {
+			server.ensureFakeLabelLocked(label)
+		}
+	}
+	return server
+}
+
+func normalizeFakeLinearIssue(issue fakeLinearIssue) fakeLinearIssue {
+	if strings.TrimSpace(issue.ID) == "" {
+		issue.ID = "issue-1"
+	}
+	if strings.TrimSpace(issue.Identifier) == "" {
+		issue.Identifier = issue.ID
+	}
+	if strings.TrimSpace(issue.Title) == "" {
+		issue.Title = issue.Identifier
+	}
+	if strings.TrimSpace(issue.Description) == "" {
+		issue.Description = "Verify Colin end-to-end"
+	}
+	if strings.TrimSpace(issue.ProjectID) == "" {
+		issue.ProjectID = "project-1"
+	}
+	if strings.TrimSpace(issue.ProjectSlug) == "" {
+		issue.ProjectSlug = "test-project"
+	}
+	if strings.TrimSpace(issue.BranchName) == "" {
+		issue.BranchName = strings.ToLower(issue.Identifier)
+	}
+	if strings.TrimSpace(issue.URL) == "" {
+		issue.URL = "https://linear.example/" + issue.Identifier
+	}
+	if strings.TrimSpace(issue.State) == "" {
+		issue.State = "Todo"
+	}
+	if issue.Priority == 0 {
+		issue.Priority = 1
+	}
+	if len(issue.Labels) == 0 {
+		issue.Labels = []string{"e2e"}
+	}
+	return issue
 }
 
 func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -829,9 +1260,7 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		input, _ := request.Variables["input"].(map[string]any)
 		name, _ := input["name"].(string)
 		s.mu.Lock()
-		labelID := fmt.Sprintf("label-%d", s.nextLabelID)
-		s.nextLabelID++
-		s.labels[strings.ToLower(strings.TrimSpace(name))] = labelID
+		labelID := s.ensureFakeLabelLocked(name)
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
@@ -845,12 +1274,41 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case strings.Contains(request.Query, "issueAddLabel"):
+		issueID, _ := request.Variables["id"].(string)
+		labelID, _ := request.Variables["labelId"].(string)
+		s.mu.Lock()
+		if issue := s.issues[issueID]; issue != nil {
+			if labelName := s.labelNames[labelID]; labelName != "" {
+				issue.Labels = appendMissingLabel(issue.Labels, labelName)
+			}
+		}
+		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issueAddLabel": map[string]any{
 					"success": true,
 					"issue": map[string]any{
-						"id": "issue-1",
+						"id": issueID,
+					},
+				},
+			},
+		})
+	case strings.Contains(request.Query, "issueRemoveLabel"):
+		issueID, _ := request.Variables["id"].(string)
+		labelID, _ := request.Variables["labelId"].(string)
+		s.mu.Lock()
+		if issue := s.issues[issueID]; issue != nil {
+			if labelName := s.labelNames[labelID]; labelName != "" {
+				issue.Labels = removeLabel(issue.Labels, labelName)
+			}
+		}
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"issueRemoveLabel": map[string]any{
+					"success": true,
+					"issue": map[string]any{
+						"id": issueID,
 					},
 				},
 			},
@@ -892,47 +1350,50 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	case strings.Contains(request.Query, "attachmentCreate"):
 		input, _ := request.Variables["input"].(map[string]any)
+		issueID, _ := input["issueId"].(string)
 		metadata, _ := input["metadata"].(map[string]any)
+		attachmentID := "attachment-" + strings.TrimSpace(issueID)
+		if attachmentID == "attachment-" {
+			attachmentID = "attachment-1"
+			issueID = s.firstIssueID()
+		}
 		s.mu.Lock()
-		s.metadata = metadata
+		s.metadata[issueID] = metadata
+		s.attachmentIssue[attachmentID] = issueID
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"attachmentCreate": map[string]any{
 					"success": true,
 					"attachment": map[string]any{
-						"id":       "attachment-1",
+						"id":       attachmentID,
 						"title":    "Colin metadata",
-						"url":      "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+						"url":      "http://127.0.0.1:8888/linear/issues/" + issueID + "/metadata",
 						"metadata": metadata,
 					},
 				},
 			},
 		})
 	case strings.Contains(request.Query, "IssueSchedulingMetadata"):
+		ids := stringSlice(request.Variables["ids"])
+		nodes := []map[string]any{}
+		s.mu.Lock()
+		for _, issueID := range ids {
+			if _, ok := s.issues[issueID]; ok {
+				nodes = append(nodes, s.issueMetadataNodeLocked(issueID))
+			}
+		}
+		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{
-					"nodes": []map[string]any{s.issueMetadataNode()},
+					"nodes": nodes,
 				},
 			},
 		})
 	case strings.Contains(request.Query, "IssueMetadataAttachments"):
-		s.mu.Lock()
-		metadata := s.metadata
-		s.mu.Unlock()
-		nodes := []map[string]any{}
-		if metadata != nil {
-			now := time.Now().UTC().Format(time.RFC3339)
-			nodes = append(nodes, map[string]any{
-				"id":        "attachment-1",
-				"title":     "Colin metadata",
-				"url":       "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
-				"createdAt": now,
-				"updatedAt": now,
-				"metadata":  metadata,
-			})
-		}
+		issueID, _ := request.Variables["id"].(string)
+		nodes := s.metadataAttachmentNodes(issueID)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issue": map[string]any{
@@ -943,19 +1404,25 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case strings.Contains(request.Query, "attachmentUpdate"):
+		attachmentID, _ := request.Variables["id"].(string)
 		input, _ := request.Variables["input"].(map[string]any)
 		metadata, _ := input["metadata"].(map[string]any)
 		s.mu.Lock()
-		s.metadata = metadata
+		issueID := s.attachmentIssue[attachmentID]
+		if issueID == "" {
+			issueID = s.firstIssueIDLocked()
+			s.attachmentIssue[attachmentID] = issueID
+		}
+		s.metadata[issueID] = metadata
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"attachmentUpdate": map[string]any{
 					"success": true,
 					"attachment": map[string]any{
-						"id":       "attachment-1",
+						"id":       attachmentID,
 						"title":    "Colin metadata",
-						"url":      "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+						"url":      "http://127.0.0.1:8888/linear/issues/" + issueID + "/metadata",
 						"metadata": metadata,
 					},
 				},
@@ -974,19 +1441,20 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case strings.Contains(request.Query, "issueUpdate"):
+		issueID, _ := request.Variables["id"].(string)
 		inputStateID, _ := request.Variables["stateId"].(string)
 		nextState := fakeLinearStateName(inputStateID)
 		if nextState == "" {
 			http.Error(w, "unknown state id", http.StatusBadRequest)
 			return
 		}
-		s.setCurrentState(nextState)
+		s.SetIssueStateByID(issueID, nextState)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issueUpdate": map[string]any{
 					"success": true,
 					"issue": map[string]any{
-						"id": "issue-1",
+						"id": issueID,
 						"state": map[string]any{
 							"name": nextState,
 						},
@@ -995,32 +1463,47 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case strings.Contains(request.Query, "IssueStates"):
+		ids := stringSlice(request.Variables["ids"])
 		s.mu.Lock()
 		s.stateFetches++
+		nodes := make([]map[string]any, 0, len(ids))
+		for _, issueID := range ids {
+			if issue := s.issues[issueID]; issue != nil {
+				nodes = append(nodes, s.issueSnapshotNodeLocked(*issue))
+			}
+		}
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{
-					"nodes": []map[string]any{s.issueSnapshotNode(s.currentState())},
+					"nodes": nodes,
 				},
 			},
 		})
 	case strings.Contains(request.Query, "IssueByID"):
+		issueID, _ := request.Variables["id"].(string)
+		issue := s.issueByID(issueID)
+		if issue == nil {
+			http.Error(w, "unknown issue", http.StatusBadRequest)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"issue": s.issueDetailNode(s.currentState()),
+				"issue": s.issueDetailNode(*issue),
 			},
 		})
 	case strings.Contains(request.Query, "CandidateIssueSnapshots"):
 		s.mu.Lock()
 		s.candidateFetches++
-		s.mu.Unlock()
-
-		state := s.currentState()
+		requestedStates, _ := request.Variables["states"].([]any)
 		nodes := []map[string]any{}
-		if requestedStates, ok := request.Variables["states"].([]any); ok && stateAllowed(requestedStates, state) {
-			nodes = append(nodes, s.issueSnapshotNode(state))
+		for _, issueID := range s.issueOrder {
+			issue := s.issues[issueID]
+			if issue != nil && stateAllowed(requestedStates, issue.State) {
+				nodes = append(nodes, s.issueSnapshotNodeLocked(*issue))
+			}
 		}
+		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{
@@ -1037,90 +1520,122 @@ func (s *fakeLinearServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *fakeLinearServer) currentState() string {
-	s.mu.Lock()
-	current := s.current
-	s.mu.Unlock()
-	if _, err := os.Stat(s.markerPath); err == nil {
-		return "Done"
-	}
-	return current
-}
-
-func (s *fakeLinearServer) setCurrentState(state string) {
+func (s *fakeLinearServer) IssueState(identifier string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.current = state
-}
-
-func (s *fakeLinearServer) issueSnapshotNode(state string) map[string]any {
-	now := time.Now().UTC().Format(time.RFC3339)
-	return map[string]any{
-		"id":         "issue-1",
-		"identifier": "COLIN-93",
-		"title":      "SDK integration e2e",
-		"priority":   1,
-		"project": map[string]any{
-			"id":     "project-1",
-			"slugId": "test-project",
-		},
-		"branchName": "colin-93",
-		"url":        "https://linear.example/COLIN-93",
-		"createdAt":  now,
-		"updatedAt":  now,
-		"state": map[string]any{
-			"name": state,
-		},
-		"labels": map[string]any{
-			"nodes": []map[string]any{{"name": "e2e"}},
-		},
-		"inverseRelations": map[string]any{
-			"nodes": []map[string]any{},
-		},
+	if issue := s.issueByIdentifierLocked(identifier); issue != nil {
+		return issue.State
 	}
+	return ""
 }
 
-func (s *fakeLinearServer) issueDetailNode(state string) map[string]any {
-	now := time.Now().UTC().Format(time.RFC3339)
+func (s *fakeLinearServer) SetIssueState(identifier string, state string) {
 	s.mu.Lock()
-	metadata := s.metadata
-	s.mu.Unlock()
-	attachments := []map[string]any{}
-	if metadata != nil {
-		attachments = append(attachments, map[string]any{
-			"id":        "attachment-1",
-			"title":     "Colin metadata",
-			"url":       "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
-			"createdAt": now,
-			"updatedAt": now,
-			"metadata":  metadata,
-		})
+	defer s.mu.Unlock()
+	if issue := s.issueByIdentifierLocked(identifier); issue != nil {
+		issue.State = state
 	}
+	for _, issue := range s.issues {
+		for i := range issue.BlockedBy {
+			if issue.BlockedBy[i].Identifier == identifier || issue.BlockedBy[i].ID == identifier {
+				issue.BlockedBy[i].State = state
+			}
+		}
+	}
+}
+
+func (s *fakeLinearServer) SetIssueStateByID(issueID string, state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if issue := s.issues[issueID]; issue != nil {
+		issue.State = state
+	}
+	for _, issue := range s.issues {
+		for i := range issue.BlockedBy {
+			if issue.BlockedBy[i].ID == issueID {
+				issue.BlockedBy[i].State = state
+			}
+		}
+	}
+}
+
+func (s *fakeLinearServer) SetIssueLabels(identifier string, labels []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if issue := s.issueByIdentifierLocked(identifier); issue != nil {
+		issue.Labels = append([]string(nil), labels...)
+		for _, label := range labels {
+			s.ensureFakeLabelLocked(label)
+		}
+	}
+}
+
+func (s *fakeLinearServer) CommentsForIssue(identifier string) []fakeLinearComment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	issue := s.issueByIdentifierLocked(identifier)
+	if issue == nil {
+		return nil
+	}
+	out := []fakeLinearComment{}
+	for _, comment := range s.comments {
+		if comment.IssueID == issue.ID {
+			out = append(out, comment)
+		}
+	}
+	return out
+}
+
+func (s *fakeLinearServer) issueSnapshotNodeLocked(issue fakeLinearIssue) map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
 	return map[string]any{
-		"id":          "issue-1",
-		"identifier":  "COLIN-93",
-		"title":       "SDK integration e2e",
-		"description": "Verify Colin end-to-end",
-		"priority":    1,
+		"id":         issue.ID,
+		"identifier": issue.Identifier,
+		"title":      issue.Title,
+		"priority":   issue.Priority,
 		"project": map[string]any{
-			"id":     "project-1",
-			"slugId": "test-project",
+			"id":     issue.ProjectID,
+			"slugId": issue.ProjectSlug,
 		},
-		"branchName": "colin-93",
-		"url":        "https://linear.example/COLIN-93",
+		"branchName": issue.BranchName,
+		"url":        issue.URL,
 		"createdAt":  now,
 		"updatedAt":  now,
 		"state": map[string]any{
-			"name": state,
+			"name": issue.State,
 		},
 		"labels": map[string]any{
-			"nodes": []map[string]any{{"name": "e2e"}},
+			"nodes": s.labelNodesLocked(issue.Labels),
 		},
-		"inverseRelations": map[string]any{
-			"nodes": []map[string]any{},
+		"inverseRelations": s.inverseRelationsLocked(issue),
+	}
+}
+
+func (s *fakeLinearServer) issueDetailNode(issue fakeLinearIssue) map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return map[string]any{
+		"id":          issue.ID,
+		"identifier":  issue.Identifier,
+		"title":       issue.Title,
+		"description": issue.Description,
+		"priority":    issue.Priority,
+		"project": map[string]any{
+			"id":     issue.ProjectID,
+			"slugId": issue.ProjectSlug,
 		},
+		"branchName": issue.BranchName,
+		"url":        issue.URL,
+		"createdAt":  now,
+		"updatedAt":  now,
+		"state": map[string]any{
+			"name": issue.State,
+		},
+		"labels": map[string]any{
+			"nodes": s.labelNodes(issue.Labels),
+		},
+		"inverseRelations": s.inverseRelations(issue),
 		"attachments": map[string]any{
-			"nodes": attachments,
+			"nodes": s.metadataAttachmentNodes(issue.ID),
 		},
 		"comments": map[string]any{
 			"nodes": []map[string]any{},
@@ -1131,32 +1646,128 @@ func (s *fakeLinearServer) issueDetailNode(state string) map[string]any {
 	}
 }
 
-func (s *fakeLinearServer) issueMetadataNode() map[string]any {
+func (s *fakeLinearServer) issueMetadataNodeLocked(issueID string) map[string]any {
 	return map[string]any{
-		"id": "issue-1",
+		"id": issueID,
 		"attachments": map[string]any{
-			"nodes": s.metadataAttachmentNodes(),
+			"nodes": s.metadataAttachmentNodesLocked(issueID),
 		},
 	}
 }
 
-func (s *fakeLinearServer) metadataAttachmentNodes() []map[string]any {
-	now := time.Now().UTC().Format(time.RFC3339)
+func (s *fakeLinearServer) metadataAttachmentNodes(issueID string) []map[string]any {
 	s.mu.Lock()
-	metadata := s.metadata
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	return s.metadataAttachmentNodesLocked(issueID)
+}
+
+func (s *fakeLinearServer) metadataAttachmentNodesLocked(issueID string) []map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
 	attachments := []map[string]any{}
+	metadata := s.metadata[issueID]
 	if metadata != nil {
 		attachments = append(attachments, map[string]any{
-			"id":        "attachment-1",
+			"id":        "attachment-" + issueID,
 			"title":     "Colin metadata",
-			"url":       "http://127.0.0.1:8888/linear/issues/issue-1/metadata",
+			"url":       "http://127.0.0.1:8888/linear/issues/" + issueID + "/metadata",
 			"createdAt": now,
 			"updatedAt": now,
 			"metadata":  metadata,
 		})
 	}
 	return attachments
+}
+
+func (s *fakeLinearServer) issueByID(issueID string) *fakeLinearIssue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if issue := s.issues[issueID]; issue != nil {
+		copy := *issue
+		copy.Labels = append([]string(nil), issue.Labels...)
+		copy.BlockedBy = append([]fakeLinearBlocker(nil), issue.BlockedBy...)
+		return &copy
+	}
+	return nil
+}
+
+func (s *fakeLinearServer) issueByIdentifierLocked(identifier string) *fakeLinearIssue {
+	for _, issue := range s.issues {
+		if issue.Identifier == identifier || issue.ID == identifier {
+			return issue
+		}
+	}
+	return nil
+}
+
+func (s *fakeLinearServer) firstIssueID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstIssueIDLocked()
+}
+
+func (s *fakeLinearServer) firstIssueIDLocked() string {
+	if len(s.issueOrder) == 0 {
+		return ""
+	}
+	return s.issueOrder[0]
+}
+
+func (s *fakeLinearServer) ensureFakeLabelLocked(name string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		return ""
+	}
+	if labelID := s.labels[key]; labelID != "" {
+		return labelID
+	}
+	labelID := fmt.Sprintf("label-%d", s.nextLabelID)
+	s.nextLabelID++
+	s.labels[key] = labelID
+	s.labelNames[labelID] = name
+	return labelID
+}
+
+func (s *fakeLinearServer) labelNodes(labels []string) []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.labelNodesLocked(labels)
+}
+
+func (s *fakeLinearServer) labelNodesLocked(labels []string) []map[string]any {
+	nodes := make([]map[string]any, 0, len(labels))
+	for _, label := range labels {
+		nodes = append(nodes, map[string]any{"name": label})
+	}
+	return nodes
+}
+
+func (s *fakeLinearServer) inverseRelations(issue fakeLinearIssue) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inverseRelationsLocked(issue)
+}
+
+func (s *fakeLinearServer) inverseRelationsLocked(issue fakeLinearIssue) map[string]any {
+	nodes := make([]map[string]any, 0, len(issue.BlockedBy))
+	for _, blocker := range issue.BlockedBy {
+		state := blocker.State
+		if blocker.ID != "" {
+			if blockingIssue := s.issues[blocker.ID]; blockingIssue != nil {
+				state = blockingIssue.State
+			}
+		}
+		nodes = append(nodes, map[string]any{
+			"type": "blocks",
+			"issue": map[string]any{
+				"id":         blocker.ID,
+				"identifier": blocker.Identifier,
+				"state": map[string]any{
+					"name": state,
+				},
+			},
+		})
+	}
+	return map[string]any{"nodes": nodes}
 }
 
 func (s *fakeLinearServer) AuthHeader() string {
@@ -1250,6 +1861,48 @@ func stateAllowed(requested []any, want string) bool {
 		}
 	}
 	return false
+}
+
+func stringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if value, ok := item.(string); ok {
+				out = append(out, value)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func appendMissingLabel(labels []string, label string) []string {
+	key := strings.ToLower(strings.TrimSpace(label))
+	if key == "" {
+		return labels
+	}
+	for _, existing := range labels {
+		if strings.ToLower(strings.TrimSpace(existing)) == key {
+			return labels
+		}
+	}
+	return append(labels, label)
+}
+
+func removeLabel(labels []string, label string) []string {
+	key := strings.ToLower(strings.TrimSpace(label))
+	out := labels[:0]
+	for _, existing := range labels {
+		if strings.ToLower(strings.TrimSpace(existing)) == key {
+			continue
+		}
+		out = append(out, existing)
+	}
+	return out
 }
 
 func fakeLinearStateName(stateID string) string {

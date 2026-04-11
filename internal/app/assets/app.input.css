@@ -105,6 +105,11 @@ a {
 .dashboard-root {
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard-root > * {
+  min-width: 0;
 }
 
 .card,
@@ -521,20 +526,32 @@ a {
 .stack {
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.stack > * {
+  min-width: 0;
 }
 
 .worker-grid {
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .worker-card {
   display: grid;
   gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   padding: 1rem;
   border-radius: 1.1rem;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.worker-card > * {
+  min-width: 0;
 }
 
 .worker-header {
@@ -891,8 +908,13 @@ a {
     flex-direction: column;
   }
 
+  .worker-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .state-issues-panel {
-    left: 0;
+    right: 0;
+    left: auto;
     width: calc(100vw - 2rem);
   }
 }
