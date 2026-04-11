@@ -619,7 +619,7 @@ func TestExecPlanPageRendersStoredPlan(t *testing.T) {
 		URL:        &issueURL,
 		ExecPlan: &domain.ExecPlan{
 			AttachmentID: "attachment-99",
-			Body:         "# Plan\n\nInspect the stored exec plan body.",
+			Body:         "# Plan\n\n- [x] Inspect the stored exec plan body.\n\n| Area |\n| --- |\n| UI |",
 			UpdatedAt:    &updatedAt,
 		},
 	}, updatedAt))
@@ -632,8 +632,12 @@ func TestExecPlanPageRendersStoredPlan(t *testing.T) {
 		`src="/assets/app.js"`,
 		`COLIN-135 - ExecPlan attachment`,
 		`attachment-99`,
-		`# Plan`,
+		`class="markdown-output"`,
+		`<h1>Plan</h1>`,
+		`type="checkbox"`,
 		`Inspect the stored exec plan body.`,
+		`<table>`,
+		`<td>UI</td>`,
 		`href="/linear/issues/issue-135/metadata"`,
 		`href="/linear/issues/issue-135/exec-plan"`,
 		`href="https://linear.app/example/issue/COLIN-135"`,
@@ -641,6 +645,9 @@ func TestExecPlanPageRendersStoredPlan(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("render missing %q\n%s", want, html)
 		}
+	}
+	if strings.Contains(html, `<pre class="mockup-code"># Plan`) {
+		t.Fatalf("exec plan should not render as escaped preformatted text\n%s", html)
 	}
 }
 

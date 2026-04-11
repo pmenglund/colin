@@ -613,12 +613,16 @@ func TestObservabilityServerRoutes(t *testing.T) {
 			`data-live-refresh-mode="reload"`,
 			`COLIN-93 - Add dashboard`,
 			`attachment-1`,
-			`# Fake ExecPlan`,
+			`class="markdown-output"`,
+			`<h1>Fake ExecPlan</h1>`,
 			`Plan details.`,
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("exec plan page missing %q: %s", want, text)
 			}
+		}
+		if strings.Contains(text, `<pre class="mockup-code"># Fake ExecPlan`) {
+			t.Fatalf("exec plan page should not render markdown as preformatted text: %s", text)
 		}
 	})
 
