@@ -394,7 +394,7 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 		"github hook https://colin.example.test/webhooks/github",
 		"https://colin.example.test/webhooks/github",
 		"  Integrations",
-		"  tailscale       ready  ui https://colin.tail.example.ts.net  webhooks https://colin.example.test",
+		"  tailscale       ready",
 		"  slack ws        connected 10s ago",
 		"  slack webhook   no messages yet",
 		"  linear webhook  no messages yet",

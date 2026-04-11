@@ -249,14 +249,7 @@ func renderTailscaleStatusLine(status domain.FunnelSetupStatus, width int) strin
 
 func tailscaleStatusText(status domain.FunnelSetupStatus) (string, lipgloss.Style) {
 	if status.Ready {
-		parts := []string{"ready"}
-		if value := strings.TrimSpace(status.TailnetUIBaseURL); value != "" {
-			parts = append(parts, "ui "+value)
-		}
-		if value := strings.TrimSpace(status.PublicBaseURL); value != "" {
-			parts = append(parts, "webhooks "+value)
-		}
-		return strings.Join(parts, "  "), successStyle
+		return "ready", successStyle
 	}
 
 	if len(status.Checks) == 0 {

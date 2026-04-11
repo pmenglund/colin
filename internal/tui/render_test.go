@@ -36,7 +36,7 @@ func TestRenderLogLineEscapesEmbeddedControlWhitespace(t *testing.T) {
 	}
 }
 
-func TestRenderTailscaleStatusLineShowsReadyURLs(t *testing.T) {
+func TestRenderTailscaleStatusLineShowsReadyOnly(t *testing.T) {
 	t.Parallel()
 
 	got := stripANSI(renderTailscaleStatusLine(domain.FunnelSetupStatus{
@@ -48,11 +48,17 @@ func TestRenderTailscaleStatusLineShowsReadyURLs(t *testing.T) {
 	for _, want := range []string{
 		"tailscale",
 		"ready",
-		"ui https://colin.tail.example.ts.net",
-		"webhooks https://colin.tail.example.ts.net:8443",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("renderTailscaleStatusLine() = %q, want %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{
+		"ui https://colin.tail.example.ts.net",
+		"webhooks https://colin.tail.example.ts.net:8443",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("renderTailscaleStatusLine() = %q, want no %q", got, unwanted)
 		}
 	}
 }
