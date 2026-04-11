@@ -319,13 +319,12 @@ func renderWorkerLine(position int, worker domain.SnapshotRunning, width int) st
 	state := renderState(worker.State)
 	status := renderWorkerRuntime(worker.StartedAt)
 	return fmt.Sprintf(
-		"%s %s  %s  %s  %s  %s",
+		"%s %s  %s  %s  %s",
 		subtleStyle.Render(fmt.Sprintf("%d.", position)),
 		titleStyle.Render(padRight(worker.Identifier, 12)),
 		state,
 		subtleStyle.Render(fmt.Sprintf("turn %d", worker.TurnCount)),
-		subtleStyle.Render(worker.SessionID),
-		subtleStyle.Render(truncateRunes(status, maxInt(width-56, 16))),
+		subtleStyle.Render(truncateRunes(status, maxInt(width-24, 16))),
 	)
 }
 

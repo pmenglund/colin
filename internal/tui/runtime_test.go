@@ -383,10 +383,9 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 	}
 	view := stripANSI(updated.View().Content)
 	for _, want := range []string{
-		"1. COLIN-147",
+		"1. COLIN-147     In Progress  turn 2  running 2m",
 		"COLIN-147",
 		"In Progress",
-		"019d54ec-2095-7b2d-8e1a-0123456789ab",
 		"running 2m",
 		"https://colin.tail.example.ts.net",
 		"linear hook https://colin.example.test/webhooks/linear",
@@ -403,8 +402,8 @@ func TestModelRefreshPopulatesURLsAndWorkers(t *testing.T) {
 			t.Fatalf("view = %q, want %q", view, want)
 		}
 	}
-	if strings.Contains(view, "019d54ec-2095-7...") {
-		t.Fatalf("view = %q, want full session ID without truncation", view)
+	if strings.Contains(view, "019d54ec-2095-7b2d-8e1a-0123456789ab") {
+		t.Fatalf("view = %q, want worker list without session ID", view)
 	}
 	if strings.Contains(view, "Investigating worker output") {
 		t.Fatalf("view = %q, want worker runtime instead of last message", view)
