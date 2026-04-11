@@ -133,7 +133,7 @@ func TestPrepareReviewIssueAcceptsCrossRepoAttachedPullRequestsWhenWorkspaceRepo
 			URL:         "https://github.com/pmenglund/colin/pull/11",
 			State:       "OPEN",
 			HeadRefName: "colin-123",
-			BaseRefName: "main",
+			BaseRefName: "symphony",
 		}, nil
 	})
 	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
@@ -283,6 +283,85 @@ func TestPrepareReviewIssueDoesNotWaitWhenReviewContextHasNoPullRequest(t *testi
 	}
 	if _, ok := orch.reviewSync[issue.ID]; ok {
 		t.Fatal("reviewSync state was not cleared after no-PR fallback")
+	}
+}
+
+func TestPrepareReviewIssueWaitsWhenAttachedPullRequestDoesNotMatchTarget(t *testing.T) {
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      11,
+		URL:         "https://github.com/pmenglund/colin/pull/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "main",
+	}, nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, fakeGitHub),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		reviewSync: map[string]*reviewSyncState{
+			"1": {
+				firstObserved: time.Now().UTC().Add(-time.Minute),
+				comment:       &commentThreadState{RootCommentID: "root"},
+			},
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	branch := "colin-123"
+	now := time.Date(2026, time.March, 30, 19, 0, 0, 0, time.UTC)
+	issue := domain.Issue{
+		ID:         "1",
+		Identifier: "COLIN-123",
+		Title:      "Wait on invalid attached PR",
+		State:      "Todo",
+		BranchName: &branch,
+		ReviewCycle: &domain.ReviewCycle{
+			EnteredReviewAt:  now.Add(-2 * time.Hour),
+			ReturnedToTodoAt: now.Add(-time.Hour),
+		},
+		AttachedPullRequests: []domain.PullRequestRef{
+			{
+				Backend:         "github",
+				RepositoryOwner: "pmenglund",
+				RepositoryName:  "colin",
+				Number:          11,
+				URL:             "https://github.com/pmenglund/colin/pull/11",
+			},
+		},
+	}
+
+	prepared, ready := orch.prepareReviewIssue(context.Background(), issue, now)
+
+	if ready {
+		t.Fatal("prepareReviewIssue() ready = true, want false")
+	}
+	if prepared.PullRequest != nil {
+		t.Fatalf("PullRequest = %#v, want nil", prepared.PullRequest)
+	}
+	if _, ok := orch.reviewSync[issue.ID]; !ok {
+		t.Fatal("reviewSync state was cleared, want retained blocker state")
+	}
+	if got := len(tracker.commentReplies); got != 1 {
+		t.Fatalf("commentReplies length = %d, want 1", got)
+	}
+	if !strings.Contains(tracker.commentReplies[0], "Blocker: failed to read GitHub review threads") {
+		t.Fatalf("comment reply = %q, want blocker", tracker.commentReplies[0])
+	}
+	if !strings.Contains(tracker.commentReplies[0], "attached_pull_request_mismatch") {
+		t.Fatalf("comment reply = %q, want attached PR mismatch", tracker.commentReplies[0])
+	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
 	}
 }
 

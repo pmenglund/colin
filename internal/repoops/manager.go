@@ -19,11 +19,12 @@ import (
 )
 
 var (
-	ErrNotGitRepository           = errors.New("not_git_repository")
-	ErrNoPullRequest              = errors.New("no_pull_request")
-	ErrNoReviewableChanges        = errors.New("no_reviewable_changes")
-	ErrDuplicatePullRequests      = errors.New("duplicate_pull_requests")
-	ErrTrackedPullRequestMismatch = errors.New("tracked_pull_request_mismatch")
+	ErrNotGitRepository            = errors.New("not_git_repository")
+	ErrNoPullRequest               = errors.New("no_pull_request")
+	ErrNoReviewableChanges         = errors.New("no_reviewable_changes")
+	ErrDuplicatePullRequests       = errors.New("duplicate_pull_requests")
+	ErrTrackedPullRequestMismatch  = errors.New("tracked_pull_request_mismatch")
+	ErrAttachedPullRequestMismatch = errors.New("attached_pull_request_mismatch")
 )
 
 type MergeFailureKind string
@@ -906,16 +907,8 @@ func (m *Manager) resolvePullRequest(ctx context.Context, issue domain.Issue, wo
 		if strings.TrimSpace(currentBranch) == "" {
 			expectedBranches = m.reviewLookupBranches(ctx, issue, workspacePath)
 		}
-		if !pullRequestMatchesIssueBranchAndBase(pr, target.BaseRef, expectedBranches) {
-			m.logger.Warn(
-				"ignoring attached pull request due to branch or base mismatch",
-				"pr_number", pr.Number,
-				"pr_head", pr.HeadRefName,
-				"pr_base", pr.BaseRefName,
-				"target_base", target.BaseRef,
-				"expected_branches", strings.Join(expectedBranches, ","),
-			)
-			break
+		if err := validateAttachedPullRequest(pr, target.BaseRef, expectedBranches); err != nil {
+			return nil, false, fmt.Errorf("attached pull request #%d: %w", attached[0].Number, err)
 		}
 		return pr, false, nil
 	default:
@@ -984,26 +977,37 @@ func (m *Manager) resolveTrackedPullRequest(ctx context.Context, workspacePath, 
 	return pr, nil
 }
 
-func pullRequestMatchesIssueBranchAndBase(pr *repohost.PullRequest, baseRef string, branches []string) bool {
+func validateAttachedPullRequest(pr *repohost.PullRequest, baseRef string, branches []string) error {
 	if pr == nil {
-		return false
+		return fmt.Errorf("%w: pull request not found", ErrAttachedPullRequestMismatch)
 	}
 	if value := strings.TrimSpace(baseRef); value != "" {
 		prBase := strings.TrimSpace(pr.BaseRefName)
 		if prBase == "" || prBase != value {
-			return false
+			return fmt.Errorf("%w: base %q does not match target base %q", ErrAttachedPullRequestMismatch, prBase, value)
 		}
 	}
 	head := strings.TrimSpace(pr.HeadRefName)
 	if head == "" {
-		return false
+		return fmt.Errorf("%w: head branch is empty", ErrAttachedPullRequestMismatch)
 	}
 	for _, branch := range branches {
 		if head == strings.TrimSpace(branch) {
-			return true
+			return nil
 		}
 	}
-	return false
+	return fmt.Errorf("%w: head %q does not match expected branches %q", ErrAttachedPullRequestMismatch, head, strings.Join(trimmedBranches(branches), ", "))
+}
+
+func trimmedBranches(branches []string) []string {
+	out := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		branch = strings.TrimSpace(branch)
+		if branch != "" {
+			out = append(out, branch)
+		}
+	}
+	return out
 }
 
 func trackedPullRequest(issue domain.Issue) (domain.PullRequestRef, bool) {

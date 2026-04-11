@@ -892,26 +892,22 @@ func TestPublishAdoptsSingleAttachedPullRequest(t *testing.T) {
 	}
 }
 
-func TestPublishIgnoresAttachedPullRequestWhenHeadDoesNotMatchCurrentBranch(t *testing.T) {
+func TestPublishFailsWhenAttachedPullRequestHeadDoesNotMatchCurrentBranch(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
 	fakeGitHub := &fakes.FakeRepoHostClient{}
 	fakeGitHub.PullRequestByNumberReturns(testPullRequest(99, "OPEN", "attacker-branch"), nil)
-	fakeGitHub.PullRequestByHeadReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
-	result, err := manager.Publish(context.Background(), domain.Issue{
+	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
-		Title:      "Ignore mismatched attached PR",
+		Title:      "Reject mismatched attached PR",
 		AttachedPullRequests: []domain.PullRequestRef{
 			{Number: 99, URL: "https://github.com/pmenglund/colin/pull/99"},
 		},
 	}, workspacePath)
-	if err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
-	if result.PRNumber != 11 {
-		t.Fatalf("result.PRNumber = %d, want 11", result.PRNumber)
+	if !errors.Is(err, repoops.ErrAttachedPullRequestMismatch) {
+		t.Fatalf("Publish() error = %v, want ErrAttachedPullRequestMismatch", err)
 	}
 	if fakeGitHub.CreatePullRequestCallCount() != 0 {
 		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
@@ -919,38 +915,69 @@ func TestPublishIgnoresAttachedPullRequestWhenHeadDoesNotMatchCurrentBranch(t *t
 	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
 		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
 	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
+	}
 }
 
-func TestReviewContextIgnoresAttachedPullRequestWhenHeadDoesNotMatchIssueBranch(t *testing.T) {
+func TestPublishFailsWhenAttachedPullRequestBaseDoesNotMatchTargetBase(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
 	fakeGitHub := &fakes.FakeRepoHostClient{}
-	fakeGitHub.PullRequestByNumberReturns(testPullRequest(99, "OPEN", "attacker-branch"), nil)
-	fakeGitHub.PullRequestByHeadCalls(func(_ context.Context, _, _, head, _ string) (*repohost.PullRequest, error) {
-		if head == "colin-93" {
-			return testPullRequest(11, "OPEN", "colin-93"), nil
-		}
-		return nil, nil
-	})
-	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
-	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+	fakeGitHub.PullRequestByNumberReturns(&repohost.PullRequest{
+		Number:      99,
+		URL:         "https://github.com/pmenglund/colin/pull/99",
+		State:       "OPEN",
+		HeadRefName: "colin-93",
+		BaseRefName: "main",
+	}, nil)
 
 	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
-	reviewContext, err := manager.ReviewContext(context.Background(), domain.Issue{
+	_, err := manager.Publish(context.Background(), domain.Issue{
 		Identifier: "COLIN-93",
-		Title:      "Ignore mismatched attached PR",
+		Title:      "Reject wrong-base attached PR",
 		AttachedPullRequests: []domain.PullRequestRef{
 			{Number: 99, URL: "https://github.com/pmenglund/colin/pull/99"},
 		},
 	}, workspacePath)
-	if err != nil {
-		t.Fatalf("ReviewContext() error = %v", err)
+	if !errors.Is(err, repoops.ErrAttachedPullRequestMismatch) {
+		t.Fatalf("Publish() error = %v, want ErrAttachedPullRequestMismatch", err)
 	}
-	if reviewContext.PullRequest.Number != 11 {
-		t.Fatalf("pull request number = %d, want 11", reviewContext.PullRequest.Number)
+	if fakeGitHub.CreatePullRequestCallCount() != 0 {
+		t.Fatalf("CreatePullRequestCallCount() = %d, want 0", fakeGitHub.CreatePullRequestCallCount())
+	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
+	}
+}
+
+func TestReviewContextFailsWhenAttachedPullRequestHeadDoesNotMatchIssueBranch(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(99, "OPEN", "attacker-branch"), nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{}, nil)
+	fakeGitHub.PullRequestReactionsReturns(repohost.ReactionPage{}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	_, err := manager.ReviewContext(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Reject mismatched attached PR",
+		AttachedPullRequests: []domain.PullRequestRef{
+			{Number: 99, URL: "https://github.com/pmenglund/colin/pull/99"},
+		},
+	}, workspacePath)
+	if !errors.Is(err, repoops.ErrAttachedPullRequestMismatch) {
+		t.Fatalf("ReviewContext() error = %v, want ErrAttachedPullRequestMismatch", err)
 	}
 	if fakeGitHub.PullRequestByNumberCallCount() != 1 {
 		t.Fatalf("PullRequestByNumberCallCount() = %d, want 1", fakeGitHub.PullRequestByNumberCallCount())
+	}
+	if fakeGitHub.PullRequestByHeadCallCount() != 0 {
+		t.Fatalf("PullRequestByHeadCallCount() = %d, want 0", fakeGitHub.PullRequestByHeadCallCount())
+	}
+	if fakeGitHub.ReviewThreadsCallCount() != 0 {
+		t.Fatalf("ReviewThreadsCallCount() = %d, want 0", fakeGitHub.ReviewThreadsCallCount())
 	}
 }
 
