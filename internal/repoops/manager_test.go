@@ -608,6 +608,93 @@ func TestReviewContextIncludesCodexThreadWhenBotCommentIsOnLaterCommentPage(t *t
 	}
 }
 
+func TestReviewFollowUpScanUsesLatestPaginatedThreadCommentForHumanFeedback(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	threadNode := reviewThreadNode("thread-1", "pmenglund", "Old feedback.", false, true)
+	threadNode.Comments.Comments[0].ID = "PRRC_kwDOOldFeedback"
+	threadNode.Comments.Comments[0].DatabaseID = "3035904000"
+	threadNode.Comments.Comments[0].URL = "https://github.com/pmenglund/colin/pull/11#discussion_r3035904000"
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{threadNode},
+	}, nil)
+	fakeGitHub.ReviewThreadCommentsReturns(repohost.ReviewThreadCommentPage{
+		Comments: []repohost.ReviewComment{
+			{
+				ID:          "PRRC_kwDOLatestFeedback",
+				DatabaseID:  "3035904999",
+				Body:        "Latest feedback from page two.",
+				URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904999",
+				AuthorLogin: "pmenglund",
+			},
+		},
+	}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	scan, err := manager.ReviewFollowUpScan(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber: 11,
+		},
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewFollowUpScan() error = %v", err)
+	}
+	if len(scan.HumanFeedback) != 1 {
+		t.Fatalf("HumanFeedback length = %d, want 1", len(scan.HumanFeedback))
+	}
+	feedback := scan.HumanFeedback[0]
+	if feedback.CommentID != "3035904999" {
+		t.Fatalf("HumanFeedback CommentID = %q, want latest paginated comment", feedback.CommentID)
+	}
+	if feedback.Body != "Latest feedback from page two." {
+		t.Fatalf("HumanFeedback Body = %q, want latest paginated comment body", feedback.Body)
+	}
+	if fakeGitHub.ReviewThreadCommentsCallCount() != 1 {
+		t.Fatalf("ReviewThreadCommentsCallCount() = %d, want 1", fakeGitHub.ReviewThreadCommentsCallCount())
+	}
+	_, threadID, cursor := fakeGitHub.ReviewThreadCommentsArgsForCall(0)
+	if threadID != "thread-1" || cursor != "comments-page-2" {
+		t.Fatalf("ReviewThreadComments args = %q %q, want thread-1 comments-page-2", threadID, cursor)
+	}
+}
+
+func TestReviewFollowUpScanExcludesNonHumanBotAuthorsFromHumanFeedback(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
+			reviewThreadNode("thread-1", "renovate[bot]", "Automated dependency update.", false, false),
+			reviewThreadNode("thread-2", "lint-bot", "Automated lint feedback.", false, false),
+			reviewThreadNode("thread-3", "pmenglund", "Please rename this helper.", false, false),
+		},
+	}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+	scan, err := manager.ReviewFollowUpScan(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber: 11,
+		},
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewFollowUpScan() error = %v", err)
+	}
+	if len(scan.HumanFeedback) != 1 {
+		t.Fatalf("HumanFeedback length = %d, want only the human reviewer thread", len(scan.HumanFeedback))
+	}
+	if scan.HumanFeedback[0].ID != "thread-3" {
+		t.Fatalf("HumanFeedback[0].ID = %q, want thread-3", scan.HumanFeedback[0].ID)
+	}
+}
+
 func TestReviewContextAcceptsCodexBotLoginSuffix(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 

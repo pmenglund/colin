@@ -1186,13 +1186,14 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 				continue
 			}
 			threads = append(threads, thread)
-			if isHumanReviewFeedbackThread(thread) {
-				humanFeedback = append(humanFeedback, thread)
-			}
 
 			comments, err := m.reviewThreadComments(ctx, node)
 			if err != nil {
 				return ReviewFollowUpScan{}, err
+			}
+			feedbackThread, ok := parseReviewThreadWithComments(node, comments)
+			if ok && isHumanReviewFeedbackThread(feedbackThread) {
+				humanFeedback = append(humanFeedback, feedbackThread)
 			}
 			for _, comment := range comments {
 				if !isInvitedCodexReviewComment(comment) {
@@ -1461,13 +1462,17 @@ func (m *Manager) fetchCodexReviewReactions(ctx context.Context, workspacePath, 
 }
 
 func parseReviewThread(node repohost.ReviewThread) (domain.ReviewThread, bool) {
+	return parseReviewThreadWithComments(node, node.Comments.Comments)
+}
+
+func parseReviewThreadWithComments(node repohost.ReviewThread, comments []repohost.ReviewComment) (domain.ReviewThread, bool) {
 	if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Path) == "" {
 		return domain.ReviewThread{}, false
 	}
-	if len(node.Comments.Comments) == 0 {
+	if len(comments) == 0 {
 		return domain.ReviewThread{}, false
 	}
-	comment := node.Comments.Comments[len(node.Comments.Comments)-1]
+	comment := comments[len(comments)-1]
 
 	thread := domain.ReviewThread{
 		ID:         node.ID,
@@ -1530,13 +1535,18 @@ func isInvitedCodexReviewComment(comment repohost.ReviewComment) bool {
 
 func isHumanReviewFeedbackThread(thread domain.ReviewThread) bool {
 	author := strings.TrimSpace(thread.Author)
-	if author == "" || isCodexReviewAuthor(author) {
+	if author == "" || isCodexReviewAuthor(author) || isNonHumanBotReviewAuthor(author) {
 		return false
 	}
 	if strings.EqualFold(author, "colin") || strings.EqualFold(author, "colin[bot]") {
 		return false
 	}
 	return !strings.HasPrefix(strings.TrimSpace(thread.Body), "[colin]")
+}
+
+func isNonHumanBotReviewAuthor(login string) bool {
+	login = strings.ToLower(strings.TrimSpace(login))
+	return login == "bot" || strings.HasSuffix(login, "[bot]") || strings.HasSuffix(login, "-bot")
 }
 
 func isCodexReviewAuthor(login string) bool {
