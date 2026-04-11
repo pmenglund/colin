@@ -64,6 +64,9 @@ query IssuesByCodexThreadID($projectIDs: [ID!], $after: String) {
         id
         slugId
       }
+      team {
+        id
+      }
       branchName
       url
       createdAt
@@ -850,6 +853,9 @@ query IssueStates($ids: [ID!]!) {
         id
         slugId
       }
+      team {
+        id
+      }
       delegate {
         id
       }
@@ -891,6 +897,9 @@ query IssueByID($id: String!) {
     project {
       id
       slugId
+    }
+    team {
+      id
     }
     branchName
     url
@@ -1084,6 +1093,118 @@ mutation UpdateIssueState($id: String!, $stateId: String!) {
 		return err
 	}
 	success, _ := nestedBool(resp, "data", "issueUpdate", "success")
+	if !success {
+		return ErrUnknownPayload
+	}
+	return nil
+}
+
+// CreateIssue creates a Linear issue and optional attachments.
+func (c *Client) CreateIssue(ctx context.Context, input domain.IssueCreateInput) (domain.CreatedIssue, error) {
+	teamID := strings.TrimSpace(input.TeamID)
+	title := strings.TrimSpace(input.Title)
+	if teamID == "" {
+		return domain.CreatedIssue{}, errors.New("missing issue team id")
+	}
+	if title == "" {
+		return domain.CreatedIssue{}, errors.New("missing issue title")
+	}
+
+	labelIDs := make([]string, 0, len(input.LabelNames))
+	seenLabels := map[string]struct{}{}
+	for _, name := range input.LabelNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seenLabels[key]; ok {
+			continue
+		}
+		seenLabels[key] = struct{}{}
+		labelID, err := c.ensureIssueLabelID(ctx, name)
+		if err != nil {
+			return domain.CreatedIssue{}, fmt.Errorf("ensure issue label %q: %w", name, err)
+		}
+		if strings.TrimSpace(labelID) != "" {
+			labelIDs = append(labelIDs, labelID)
+		}
+	}
+
+	createInput := map[string]any{
+		"teamId": teamID,
+		"title":  title,
+	}
+	if description := strings.TrimSpace(input.Description); description != "" {
+		createInput["description"] = description
+	}
+	if projectID := strings.TrimSpace(input.ProjectID); projectID != "" {
+		createInput["projectId"] = projectID
+	}
+	if parentID := strings.TrimSpace(input.ParentIssueID); parentID != "" {
+		createInput["parentId"] = parentID
+	}
+	if len(labelIDs) > 0 {
+		createInput["labelIds"] = labelIDs
+	}
+
+	const query = `
+mutation CreateIssue($input: IssueCreateInput!) {
+  issueCreate(input: $input) {
+    success
+    issue {
+      id
+      identifier
+      title
+      url
+    }
+  }
+}
+`
+	resp, err := c.doQuery(ctx, query, map[string]any{"input": createInput})
+	if err != nil {
+		return domain.CreatedIssue{}, err
+	}
+	created, err := parseCreatedIssue(resp)
+	if err != nil {
+		return domain.CreatedIssue{}, err
+	}
+	for _, attachment := range input.Attachments {
+		if err := c.createIssueAttachment(ctx, created.ID, attachment); err != nil {
+			return created, fmt.Errorf("create attachment for issue %s: %w", strings.TrimSpace(created.Identifier), err)
+		}
+	}
+	return created, nil
+}
+
+func (c *Client) createIssueAttachment(ctx context.Context, issueID string, attachment domain.IssueAttachmentInput) error {
+	issueID = strings.TrimSpace(issueID)
+	title := strings.TrimSpace(attachment.Title)
+	rawURL := strings.TrimSpace(attachment.URL)
+	if issueID == "" || title == "" || rawURL == "" {
+		return nil
+	}
+	const query = `
+mutation CreateIssueAttachment($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) {
+    success
+    attachment { id }
+  }
+}
+`
+	input := map[string]any{
+		"issueId": issueID,
+		"title":   title,
+		"url":     rawURL,
+	}
+	if len(attachment.Metadata) > 0 {
+		input["metadata"] = attachment.Metadata
+	}
+	resp, err := c.doQuery(ctx, query, map[string]any{"input": input})
+	if err != nil {
+		return err
+	}
+	success, _ := nestedBool(resp, "data", "attachmentCreate", "success")
 	if !success {
 		return ErrUnknownPayload
 	}
@@ -1547,6 +1668,9 @@ query CandidateIssueSnapshots($projectIDs: [ID!], $states: [String!], $after: St
         id
         slugId
       }
+      team {
+        id
+      }
       branchName
       url
       createdAt
@@ -1932,6 +2056,7 @@ func (c *Client) normalizeIssueSnapshot(node map[string]any) (domain.Issue, erro
 		ID:          id,
 		Identifier:  identifier,
 		Title:       title,
+		TeamID:      strings.TrimSpace(teamID(node)),
 		ProjectID:   strings.TrimSpace(projectID(node)),
 		ProjectSlug: strings.TrimSpace(projectSlug(node)),
 		State:       state,
@@ -2014,6 +2139,11 @@ func (c *Client) normalizeIssue(node map[string]any) (domain.Issue, error) {
 
 func projectID(node map[string]any) string {
 	value, _ := nestedString(node, "project", "id")
+	return value
+}
+
+func teamID(node map[string]any) string {
+	value, _ := nestedString(node, "team", "id")
 	return value
 }
 
@@ -2384,6 +2514,7 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.QueuedReviewFollowUps = pendingReviewFollowUpsValue(metadataMap["queued_review_follow_ups"])
 	metadata.PendingCheckFailure = pendingCheckFailureValue(metadataMap["pending_check_failure"])
 	metadata.ReviewReactionWatermarks = stringMapValue(metadataMap["review_reaction_watermarks"])
+	metadata.ReviewFeedbackIssueLinks = reviewFeedbackIssueLinksValue(metadataMap["review_feedback_issue_links"])
 	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
 		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
 	}
@@ -2524,45 +2655,46 @@ func parseColinExecPlanAttachment(node map[string]any) (domain.ExecPlan, error) 
 
 func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 	value := map[string]any{
-		"codex_thread_id":            strings.TrimSpace(metadata.CodexThreadID),
-		"progress_root_comment_id":   strings.TrimSpace(metadata.ProgressRootCommentID),
-		"delegation_ack_kind":        strings.TrimSpace(metadata.DelegationAckKind),
-		"delegation_ack_state":       strings.TrimSpace(metadata.DelegationAckState),
-		"delegation_ack_session_id":  strings.TrimSpace(metadata.DelegationAckSessionID),
-		"actual_branch_name":         strings.TrimSpace(metadata.ActualBranchName),
-		"pending_review_comment_id":  strings.TrimSpace(metadata.PendingReviewCommentID),
-		"pending_review_thread_id":   strings.TrimSpace(metadata.PendingReviewThreadID),
-		"pending_review_reaction_id": strings.TrimSpace(metadata.PendingReviewReactionID),
-		"pending_review_reactor":     strings.TrimSpace(metadata.PendingReviewReactor),
-		"queued_review_follow_ups":   pendingReviewFollowUpsAny(metadata.QueuedReviewFollowUps),
-		"pending_check_failure":      pendingCheckFailureAny(metadata.PendingCheckFailure),
-		"review_reaction_watermarks": stringMapAny(metadata.ReviewReactionWatermarks),
-		"exec_plan_decision":         strings.TrimSpace(string(metadata.ExecPlanDecision)),
-		"review_publish_directive":   strings.TrimSpace(string(metadata.ReviewPublishDirective)),
-		"last_run_type":              strings.TrimSpace(string(metadata.LastRunType)),
-		"last_outcome":               strings.TrimSpace(string(metadata.LastOutcome)),
-		"last_summary":               strings.TrimSpace(metadata.LastSummary),
-		"last_summary_comment_id":    strings.TrimSpace(metadata.LastSummaryCommentID),
-		"colin_comment_ids":          stringSliceAny(metadata.ColinCommentIDs),
-		"pull_request_number":        metadata.PullRequestNumber,
-		"pull_request_url":           strings.TrimSpace(metadata.PullRequestURL),
-		"pull_request_state":         strings.TrimSpace(metadata.PullRequestState),
-		"pull_request_head_ref":      strings.TrimSpace(metadata.PullRequestHeadRef),
-		"pull_request_base_ref":      strings.TrimSpace(metadata.PullRequestBaseRef),
-		"pull_request_backend":       strings.TrimSpace(metadata.PullRequestBackend),
-		"pull_request_repo_owner":    strings.TrimSpace(metadata.PullRequestRepoOwner),
-		"pull_request_repo_name":     strings.TrimSpace(metadata.PullRequestRepoName),
-		"last_check_head_sha":        strings.TrimSpace(metadata.LastCheckHeadSHA),
-		"last_check_state":           strings.TrimSpace(metadata.LastCheckState),
-		"loop_failure_fingerprint":   strings.TrimSpace(metadata.LoopFailureFingerprint),
-		"loop_failure_count":         metadata.LoopFailureCount,
-		"paused_run_type":            strings.TrimSpace(metadata.PausedRunType),
-		"paused_state":               strings.TrimSpace(metadata.PausedState),
-		"paused_reason":              strings.TrimSpace(metadata.PausedReason),
-		"slack_channel_id":           strings.TrimSpace(metadata.SlackChannelID),
-		"slack_message_ts":           strings.TrimSpace(metadata.SlackMessageTS),
-		"slack_permalink":            strings.TrimSpace(metadata.SlackPermalink),
-		"slack_summary_fingerprint":  strings.TrimSpace(metadata.SlackSummaryFingerprint),
+		"codex_thread_id":             strings.TrimSpace(metadata.CodexThreadID),
+		"progress_root_comment_id":    strings.TrimSpace(metadata.ProgressRootCommentID),
+		"delegation_ack_kind":         strings.TrimSpace(metadata.DelegationAckKind),
+		"delegation_ack_state":        strings.TrimSpace(metadata.DelegationAckState),
+		"delegation_ack_session_id":   strings.TrimSpace(metadata.DelegationAckSessionID),
+		"actual_branch_name":          strings.TrimSpace(metadata.ActualBranchName),
+		"pending_review_comment_id":   strings.TrimSpace(metadata.PendingReviewCommentID),
+		"pending_review_thread_id":    strings.TrimSpace(metadata.PendingReviewThreadID),
+		"pending_review_reaction_id":  strings.TrimSpace(metadata.PendingReviewReactionID),
+		"pending_review_reactor":      strings.TrimSpace(metadata.PendingReviewReactor),
+		"queued_review_follow_ups":    pendingReviewFollowUpsAny(metadata.QueuedReviewFollowUps),
+		"pending_check_failure":       pendingCheckFailureAny(metadata.PendingCheckFailure),
+		"review_reaction_watermarks":  stringMapAny(metadata.ReviewReactionWatermarks),
+		"review_feedback_issue_links": reviewFeedbackIssueLinksAny(metadata.ReviewFeedbackIssueLinks),
+		"exec_plan_decision":          strings.TrimSpace(string(metadata.ExecPlanDecision)),
+		"review_publish_directive":    strings.TrimSpace(string(metadata.ReviewPublishDirective)),
+		"last_run_type":               strings.TrimSpace(string(metadata.LastRunType)),
+		"last_outcome":                strings.TrimSpace(string(metadata.LastOutcome)),
+		"last_summary":                strings.TrimSpace(metadata.LastSummary),
+		"last_summary_comment_id":     strings.TrimSpace(metadata.LastSummaryCommentID),
+		"colin_comment_ids":           stringSliceAny(metadata.ColinCommentIDs),
+		"pull_request_number":         metadata.PullRequestNumber,
+		"pull_request_url":            strings.TrimSpace(metadata.PullRequestURL),
+		"pull_request_state":          strings.TrimSpace(metadata.PullRequestState),
+		"pull_request_head_ref":       strings.TrimSpace(metadata.PullRequestHeadRef),
+		"pull_request_base_ref":       strings.TrimSpace(metadata.PullRequestBaseRef),
+		"pull_request_backend":        strings.TrimSpace(metadata.PullRequestBackend),
+		"pull_request_repo_owner":     strings.TrimSpace(metadata.PullRequestRepoOwner),
+		"pull_request_repo_name":      strings.TrimSpace(metadata.PullRequestRepoName),
+		"last_check_head_sha":         strings.TrimSpace(metadata.LastCheckHeadSHA),
+		"last_check_state":            strings.TrimSpace(metadata.LastCheckState),
+		"loop_failure_fingerprint":    strings.TrimSpace(metadata.LoopFailureFingerprint),
+		"loop_failure_count":          metadata.LoopFailureCount,
+		"paused_run_type":             strings.TrimSpace(metadata.PausedRunType),
+		"paused_state":                strings.TrimSpace(metadata.PausedState),
+		"paused_reason":               strings.TrimSpace(metadata.PausedReason),
+		"slack_channel_id":            strings.TrimSpace(metadata.SlackChannelID),
+		"slack_message_ts":            strings.TrimSpace(metadata.SlackMessageTS),
+		"slack_permalink":             strings.TrimSpace(metadata.SlackPermalink),
+		"slack_summary_fingerprint":   strings.TrimSpace(metadata.SlackSummaryFingerprint),
 	}
 	if metadata.PausedAt != nil {
 		value["paused_at"] = metadata.PausedAt.UTC().Format(time.RFC3339)
@@ -2807,6 +2939,66 @@ func pendingReviewFollowUpsAny(items []domain.PendingReviewFollowUp) []any {
 		}
 		if item.RequestedAt != nil {
 			entry["requested_at"] = item.RequestedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func reviewFeedbackIssueLinksValue(value any) []domain.ReviewFeedbackIssueLink {
+	nodes, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]domain.ReviewFeedbackIssueLink, 0, len(nodes))
+	for _, node := range nodes {
+		item, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		link := domain.ReviewFeedbackIssueLink{}
+		link.ThreadID, _ = stringValue(item["thread_id"])
+		link.CommentID, _ = stringValue(item["comment_id"])
+		link.ReactionID, _ = stringValue(item["reaction_id"])
+		link.Reactor, _ = stringValue(item["reactor"])
+		link.IssueID, _ = stringValue(item["issue_id"])
+		link.IssueIdentifier, _ = stringValue(item["issue_identifier"])
+		link.IssueURL, _ = stringValue(item["issue_url"])
+		if value, _ := stringValue(item["requested_at"]); strings.TrimSpace(value) != "" {
+			if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+				link.RequestedAt = &parsed
+			}
+		}
+		if value, _ := stringValue(item["created_at"]); strings.TrimSpace(value) != "" {
+			if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+				link.CreatedAt = &parsed
+			}
+		}
+		out = append(out, link)
+	}
+	return out
+}
+
+func reviewFeedbackIssueLinksAny(items []domain.ReviewFeedbackIssueLink) []any {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		entry := map[string]any{
+			"thread_id":        strings.TrimSpace(item.ThreadID),
+			"comment_id":       strings.TrimSpace(item.CommentID),
+			"reaction_id":      strings.TrimSpace(item.ReactionID),
+			"reactor":          strings.TrimSpace(item.Reactor),
+			"issue_id":         strings.TrimSpace(item.IssueID),
+			"issue_identifier": strings.TrimSpace(item.IssueIdentifier),
+			"issue_url":        strings.TrimSpace(item.IssueURL),
+		}
+		if item.RequestedAt != nil {
+			entry["requested_at"] = item.RequestedAt.UTC().Format(time.RFC3339)
+		}
+		if item.CreatedAt != nil {
+			entry["created_at"] = item.CreatedAt.UTC().Format(time.RFC3339)
 		}
 		out = append(out, entry)
 	}
@@ -3086,6 +3278,26 @@ func parseCreatedCommentID(resp map[string]any) (string, error) {
 		return "", ErrUnknownPayload
 	}
 	return commentID, nil
+}
+
+func parseCreatedIssue(resp map[string]any) (domain.CreatedIssue, error) {
+	success, _ := nestedBool(resp, "data", "issueCreate", "success")
+	if !success {
+		return domain.CreatedIssue{}, ErrUnknownPayload
+	}
+	node, ok := nestedMap(resp, "data", "issueCreate", "issue")
+	if !ok {
+		return domain.CreatedIssue{}, ErrUnknownPayload
+	}
+	issue := domain.CreatedIssue{}
+	issue.ID, _ = stringValue(node["id"])
+	issue.Identifier, _ = stringValue(node["identifier"])
+	issue.Title, _ = stringValue(node["title"])
+	issue.URL, _ = stringValue(node["url"])
+	if strings.TrimSpace(issue.ID) == "" || strings.TrimSpace(issue.Identifier) == "" {
+		return domain.CreatedIssue{}, ErrUnknownPayload
+	}
+	return issue, nil
 }
 
 func nestedSlice(root map[string]any, keys ...string) ([]map[string]any, bool) {

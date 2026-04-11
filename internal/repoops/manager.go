@@ -123,12 +123,21 @@ type ReviewCommentApproval struct {
 	Reactor    string
 }
 
+// ReviewFeedbackIssueRequest is one collaborator request to create a Linear issue from PR feedback.
+type ReviewFeedbackIssueRequest struct {
+	Thread     domain.ReviewThread
+	CommentID  string
+	ReactionID string
+	Reactor    string
+}
+
 // ReviewFollowUpScan captures unresolved review threads plus qualifying follow-up signals.
 type ReviewFollowUpScan struct {
 	PullRequest   domain.PullRequestRef
 	Threads       []domain.ReviewThread
 	Approvals     []ReviewCommentApproval
 	HumanFeedback []domain.ReviewThread
+	IssueRequests []ReviewFeedbackIssueRequest
 }
 
 // Manager performs git and repository-host operations for a workspace.
@@ -522,11 +531,14 @@ func (m *Manager) ReviewFollowUpScan(ctx context.Context, issue domain.Issue, wo
 		return ReviewFollowUpScan{}, err
 	}
 	scan.PullRequest = domain.PullRequestRef{
-		Number:  pr.Number,
-		URL:     pr.URL,
-		State:   pr.State,
-		HeadRef: pr.HeadRefName,
-		BaseRef: pr.BaseRefName,
+		Number:          pr.Number,
+		URL:             pr.URL,
+		State:           pr.State,
+		HeadRef:         pr.HeadRefName,
+		BaseRef:         pr.BaseRefName,
+		Backend:         repohost.NormalizeBackend(m.cfg.Repo.Backend),
+		RepositoryOwner: owner,
+		RepositoryName:  name,
 	}
 	return scan, nil
 }
@@ -574,6 +586,25 @@ func (m *Manager) ReplyAndResolveReviewThread(ctx context.Context, workspacePath
 		return err
 	}
 	return client.ResolveReviewThread(ctx, thread.ID)
+}
+
+// ReplyToReviewThread posts a reply without resolving the review thread.
+func (m *Manager) ReplyToReviewThread(ctx context.Context, thread domain.ReviewThread, body string) error {
+	if strings.TrimSpace(thread.ID) == "" {
+		return errors.New("missing review thread id")
+	}
+	if !thread.CanReply {
+		return errors.New("review thread not replyable")
+	}
+	replyBody := strings.TrimSpace(body)
+	if replyBody == "" {
+		return errors.New("missing review reply body")
+	}
+	client, err := m.repoHostClient()
+	if err != nil {
+		return err
+	}
+	return client.ReplyToReviewThread(ctx, thread.ID, replyBody)
 }
 
 func (m *Manager) currentBranch(ctx context.Context, workspacePath string) (string, error) {
@@ -1211,6 +1242,7 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 		threads           []domain.ReviewThread
 		approvals         []ReviewCommentApproval
 		humanFeedback     []domain.ReviewThread
+		issueRequests     []ReviewFeedbackIssueRequest
 		collaboratorCache = map[string]bool{}
 	)
 	for {
@@ -1219,7 +1251,7 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 			return ReviewFollowUpScan{}, err
 		}
 		if len(resp.Threads) == 0 && !resp.HasNextPage {
-			return ReviewFollowUpScan{Threads: threads, Approvals: approvals, HumanFeedback: humanFeedback}, nil
+			return ReviewFollowUpScan{Threads: threads, Approvals: approvals, HumanFeedback: humanFeedback, IssueRequests: issueRequests}, nil
 		}
 		for _, node := range resp.Threads {
 			thread, ok := parseReviewThread(node)
@@ -1247,15 +1279,27 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 				return ReviewFollowUpScan{}, err
 			}
 			for _, comment := range comments {
-				if !isInvitedCodexReviewComment(comment) {
-					continue
-				}
 				commentID := reviewCommentID(comment)
 				commentNumber, err := strconv.ParseInt(commentID, 10, 64)
 				if err != nil {
 					continue
 				}
-				reactionID, reactor, found, err := m.latestCollaboratorReviewCommentApproval(ctx, owner, name, commentNumber, collaboratorCache)
+				reactionID, reactor, found, err := m.latestCollaboratorReviewCommentReaction(ctx, owner, name, commentNumber, "eyes", collaboratorCache)
+				if err != nil {
+					return ReviewFollowUpScan{}, err
+				}
+				if found {
+					issueRequests = append(issueRequests, ReviewFeedbackIssueRequest{
+						Thread:     reviewFeedbackIssueRequestThread(thread, comment),
+						CommentID:  commentID,
+						ReactionID: reactionID,
+						Reactor:    reactor,
+					})
+				}
+				if !isInvitedCodexReviewComment(comment) {
+					continue
+				}
+				reactionID, reactor, found, err = m.latestCollaboratorReviewCommentApproval(ctx, owner, name, commentNumber, collaboratorCache)
 				if err != nil {
 					return ReviewFollowUpScan{}, err
 				}
@@ -1275,7 +1319,17 @@ func (m *Manager) fetchReviewFollowUpScan(ctx context.Context, owner, name strin
 		}
 		cursor = resp.EndCursor
 	}
-	return ReviewFollowUpScan{Threads: threads, Approvals: approvals, HumanFeedback: humanFeedback}, nil
+	return ReviewFollowUpScan{Threads: threads, Approvals: approvals, HumanFeedback: humanFeedback, IssueRequests: issueRequests}, nil
+}
+
+func reviewFeedbackIssueRequestThread(thread domain.ReviewThread, comment repohost.ReviewComment) domain.ReviewThread {
+	out := thread
+	out.CommentID = reviewCommentID(comment)
+	out.CommentURL = strings.TrimSpace(comment.URL)
+	out.Author = strings.TrimSpace(comment.AuthorLogin)
+	out.Body = strings.TrimSpace(comment.Body)
+	out.CreatedAt = comment.CreatedAt
+	return out
 }
 
 func (m *Manager) findReviewThreadByCommentID(ctx context.Context, owner, name string, prNumber int, commentID string) (domain.ReviewThread, bool, error) {
@@ -1418,9 +1472,17 @@ func (m *Manager) reviewThreadComments(ctx context.Context, node repohost.Review
 }
 
 func (m *Manager) latestCollaboratorReviewCommentApproval(ctx context.Context, owner, name string, commentID int64, collaboratorCache map[string]bool) (string, string, bool, error) {
+	return m.latestCollaboratorReviewCommentReaction(ctx, owner, name, commentID, "+1", collaboratorCache)
+}
+
+func (m *Manager) latestCollaboratorReviewCommentReaction(ctx context.Context, owner, name string, commentID int64, content string, collaboratorCache map[string]bool) (string, string, bool, error) {
 	client, err := m.repoHostClient()
 	if err != nil {
 		return "", "", false, err
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", "", false, nil
 	}
 	page := 1
 	var (
@@ -1433,7 +1495,7 @@ func (m *Manager) latestCollaboratorReviewCommentApproval(ctx context.Context, o
 			return "", "", false, err
 		}
 		for _, reaction := range resp.Reactions {
-			if !strings.EqualFold(strings.TrimSpace(reaction.Content), "+1") || reaction.ID <= 0 {
+			if !strings.EqualFold(strings.TrimSpace(reaction.Content), content) || reaction.ID <= 0 {
 				continue
 			}
 			login := strings.TrimSpace(reaction.UserLogin)

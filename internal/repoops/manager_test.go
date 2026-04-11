@@ -585,6 +585,87 @@ func TestReviewContextIncludesCodexReviewSignals(t *testing.T) {
 	}
 }
 
+type collaboratorRepoHostClient struct {
+	*fakes.FakeRepoHostClient
+	allowed bool
+}
+
+func (c *collaboratorRepoHostClient) IsCollaborator(context.Context, string, string, string) (bool, error) {
+	return c.allowed, nil
+}
+
+func TestReviewFollowUpScanIncludesEyesReactionIssueRequest(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
+			reviewThreadWithComment("thread-1", repohost.ReviewComment{
+				ID:          "PRRC_kwDOHumanFeedback",
+				DatabaseID:  "3035904923",
+				Body:        "Please extract this helper.",
+				URL:         "https://github.com/pmenglund/colin/pull/1#discussion_r3035904923",
+				AuthorLogin: "pmenglund",
+			}),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReviewCommentReactionsReturns(repohost.ReviewCommentReactionPage{
+		Reactions: []repohost.Reaction{{ID: 377554834, Content: "eyes", UserLogin: "pmenglund"}},
+	}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), &collaboratorRepoHostClient{FakeRepoHostClient: fakeGitHub, allowed: true})
+	scan, err := manager.ReviewFollowUpScan(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewFollowUpScan() error = %v", err)
+	}
+	if len(scan.IssueRequests) != 1 {
+		t.Fatalf("IssueRequests length = %d, want 1", len(scan.IssueRequests))
+	}
+	request := scan.IssueRequests[0]
+	if request.CommentID != "3035904923" || request.ReactionID != "377554834" || request.Reactor != "pmenglund" {
+		t.Fatalf("IssueRequests[0] = %+v, want eyes reaction request", request)
+	}
+}
+
+func TestReviewFollowUpScanIgnoresNonCollaboratorEyesReaction(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByHeadReturns(testPullRequest(1, "OPEN", "colin-93"), nil)
+	fakeGitHub.ReviewThreadsReturns(repohost.ReviewThreadPage{
+		Threads: []repohost.ReviewThread{
+			reviewThreadWithComment("thread-1", repohost.ReviewComment{
+				ID:          "PRRC_kwDOHumanFeedback",
+				DatabaseID:  "3035904923",
+				Body:        "Please extract this helper.",
+				URL:         "https://github.com/pmenglund/colin/pull/1#discussion_r3035904923",
+				AuthorLogin: "pmenglund",
+			}),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReviewCommentReactionsReturns(repohost.ReviewCommentReactionPage{
+		Reactions: []repohost.Reaction{{ID: 377554834, Content: "eyes", UserLogin: "external-user"}},
+	}, nil)
+
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), &collaboratorRepoHostClient{FakeRepoHostClient: fakeGitHub, allowed: false})
+	scan, err := manager.ReviewFollowUpScan(context.Background(), domain.Issue{
+		Identifier: "COLIN-93",
+		Title:      "Address review",
+		BranchName: stringPtr("colin-93"),
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("ReviewFollowUpScan() error = %v", err)
+	}
+	if len(scan.IssueRequests) != 0 {
+		t.Fatalf("IssueRequests = %+v, want none", scan.IssueRequests)
+	}
+}
+
 func TestReviewContextMarksResolvedCodexReviewAsObservedWithoutReactions(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 
@@ -1242,6 +1323,24 @@ func reviewThreadNode(id, author, body string, resolved bool, commentsHasNextPag
 			},
 			HasNextPage: commentsHasNextPage,
 			EndCursor:   "comments-page-2",
+		},
+	}
+}
+
+func reviewThreadWithComment(id string, comment repohost.ReviewComment) repohost.ReviewThread {
+	line := 42
+	startLine := 40
+	return repohost.ReviewThread{
+		ID:               id,
+		IsResolved:       false,
+		IsOutdated:       false,
+		ViewerCanReply:   true,
+		ViewerCanResolve: true,
+		Path:             "internal/foo.go",
+		Line:             &line,
+		StartLine:        &startLine,
+		Comments: repohost.ReviewCommentConnection{
+			Comments: []repohost.ReviewComment{comment},
 		},
 	}
 }

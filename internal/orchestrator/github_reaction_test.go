@@ -62,11 +62,15 @@ func newReviewFollowUpTestOrchestratorWithCollaborator(t *testing.T, threads []r
 }
 
 func reviewFollowUpIssue() domain.Issue {
+	issueURL := "https://linear.app/bothnia/issue/COLIN-123/address-review-feedback"
 	return domain.Issue{
 		ID:         "issue-1",
 		Identifier: "COLIN-123",
 		Title:      "Address review feedback",
+		TeamID:     "team-1",
+		ProjectID:  "project-1",
 		State:      "Review",
+		URL:        &issueURL,
 		ColinMetadata: &domain.ColinMetadata{
 			PullRequestNumber:     11,
 			PullRequestURL:        "https://github.com/pmenglund/colin/pull/11",
@@ -89,6 +93,15 @@ func reviewThreadWithComments(id string, comments ...repoops.GitHubReviewComment
 			Comments: comments,
 		},
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSyncGitHubReviewFollowUpStoresReactionTargetWithoutMovingIssue(t *testing.T) {
@@ -261,6 +274,111 @@ func TestSyncGitHubReviewFollowUpMovesIssueForHumanReviewComment(t *testing.T) {
 	}
 	if !strings.Contains(tracker.commentReplies[0], "left unresolved PR feedback") {
 		t.Fatalf("comment reply = %q, want PR-feedback status", tracker.commentReplies[0])
+	}
+}
+
+func TestSyncGitHubReviewFollowUpCreatesPausedIssueForEyesReaction(t *testing.T) {
+	cfg, fakeGitHub := setupReviewSyncTestRuntime(t)
+	cfg.Tracker.ActiveStates = []string{"Todo", "In Progress"}
+	cfg.Repo.PublishStates = []string{"Review"}
+
+	fakeGitHub.PullRequestByNumberReturns(&repoops.GitHubPullRequest{
+		Number:      11,
+		URL:         "https://github.com/pmenglund/colin/pull/11",
+		State:       "OPEN",
+		HeadRefName: "colin-123",
+		BaseRefName: "symphony",
+	}, nil)
+	fakeGitHub.ReviewThreadsReturns(repoops.GitHubReviewThreadPage{
+		Threads: []repoops.GitHubReviewThread{
+			reviewThreadWithComments("thread-1", repoops.GitHubReviewComment{
+				ID:          "PRRC_kwDOHumanFeedback",
+				DatabaseID:  "3035904923",
+				Body:        "Please rename this helper.",
+				URL:         "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+				AuthorLogin: "pmenglund",
+			}),
+		},
+	}, nil)
+	fakeGitHub.PullRequestReviewCommentReactionsReturns(repoops.GitHubReviewCommentReactionPage{
+		Reactions: []repoops.GitHubReaction{
+			{ID: 377554834, Content: "eyes", UserLogin: "pmenglund"},
+		},
+	}, nil)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{}
+	orch := &Orchestrator{
+		logger: logger,
+		runtime: Runtime{
+			Config:    cfg,
+			Tracker:   tracker,
+			Repo:      repoops.NewManagerWithRepoHostClient(cfg, logger, &collaboratorGitHubClient{FakeRepoHostClient: fakeGitHub, allowed: true}),
+			Workspace: workspace.NewManager(cfg, logger),
+		},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+
+	now := time.Date(2026, time.April, 4, 19, 18, 0, 0, time.UTC)
+	updated, queued := orch.syncGitHubReviewFollowUp(context.Background(), reviewFollowUpIssue(), now)
+
+	if queued {
+		t.Fatal("syncGitHubReviewFollowUp() queued = true, want false")
+	}
+	if updated.State != "Review" {
+		t.Fatalf("updated.State = %q, want Review", updated.State)
+	}
+	if len(tracker.updatedStates) != 0 {
+		t.Fatalf("updatedStates = %#v, want no source issue state changes", tracker.updatedStates)
+	}
+	if len(tracker.createdIssues) != 1 {
+		t.Fatalf("createdIssues length = %d, want 1", len(tracker.createdIssues))
+	}
+	created := tracker.createdIssues[0]
+	if created.TeamID != "team-1" || created.ProjectID != "project-1" || created.ParentIssueID != "issue-1" {
+		t.Fatalf("created issue routing = %+v, want source team/project/parent", created)
+	}
+	if !containsString(created.LabelNames, domain.PausedIssueLabel) || !containsString(created.LabelNames, domain.PRFeedbackLabel) {
+		t.Fatalf("LabelNames = %#v, want paused and pr-feedback", created.LabelNames)
+	}
+	if !strings.Contains(created.Description, "COLIN-123") ||
+		!strings.Contains(created.Description, "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923") ||
+		!strings.Contains(created.Description, "Please rename this helper.") {
+		t.Fatalf("Description = %q, want source issue, PR comment URL, and feedback body", created.Description)
+	}
+	if len(created.Attachments) != 1 || created.Attachments[0].URL != "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923" {
+		t.Fatalf("Attachments = %#v, want source PR feedback attachment", created.Attachments)
+	}
+	if len(tracker.metadata.ReviewFeedbackIssueLinks) != 1 {
+		t.Fatalf("ReviewFeedbackIssueLinks = %#v, want one link", tracker.metadata.ReviewFeedbackIssueLinks)
+	}
+	link := tracker.metadata.ReviewFeedbackIssueLinks[0]
+	if link.CommentID != "3035904923" || link.ReactionID != "377554834" || link.IssueIdentifier != "COLIN-456" {
+		t.Fatalf("ReviewFeedbackIssueLinks[0] = %#v, want created issue link", link)
+	}
+	if len(tracker.commentReplies) != 1 || !strings.Contains(tracker.commentReplies[0], "Created paused follow-up issue") {
+		t.Fatalf("commentReplies = %#v, want created follow-up source comment", tracker.commentReplies)
+	}
+	if fakeGitHub.ReplyToReviewThreadCallCount() != 1 {
+		t.Fatalf("ReplyToReviewThreadCallCount() = %d, want 1", fakeGitHub.ReplyToReviewThreadCallCount())
+	}
+
+	updated.ColinMetadata = &tracker.metadata
+	updatedAgain, queuedAgain := orch.syncGitHubReviewFollowUp(context.Background(), updated, now.Add(time.Minute))
+	if queuedAgain {
+		t.Fatal("second sync queued = true, want false")
+	}
+	if updatedAgain.State != "Review" {
+		t.Fatalf("updatedAgain.State = %q, want Review", updatedAgain.State)
+	}
+	if len(tracker.createdIssues) != 1 {
+		t.Fatalf("createdIssues length after second sync = %d, want 1", len(tracker.createdIssues))
+	}
+	if len(tracker.updatedStates) != 0 {
+		t.Fatalf("updatedStates after second sync = %#v, want no source issue state changes", tracker.updatedStates)
 	}
 }
 

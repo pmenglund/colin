@@ -1144,6 +1144,14 @@ func TestObservabilityServerGitHubWebhookTriggersRefreshForRelevantEvents(t *tes
 			repository:        "acme/widgets",
 			pullRequestNumber: 11,
 		},
+		{
+			name:              "pull request review comment reaction",
+			eventHeader:       "reaction",
+			body:              `{"action":"created","repository":{"full_name":"acme/widgets"},"reaction":{"content":"eyes","user":{"login":"pmenglund"}},"comment":{"id":3035904923,"body":"Please rename this helper.","pull_request_url":"https://api.github.com/repos/acme/widgets/pulls/11","user":{"login":"reviewer"}}}`,
+			action:            "created",
+			repository:        "acme/widgets",
+			pullRequestNumber: 11,
+		},
 	}
 
 	for _, tc := range cases {

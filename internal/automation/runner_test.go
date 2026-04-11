@@ -2879,6 +2879,10 @@ func (s *stubTracker) UpdateIssueState(_ context.Context, issueID string, stateN
 	return nil
 }
 
+func (s *stubTracker) CreateIssue(context.Context, domain.IssueCreateInput) (domain.CreatedIssue, error) {
+	return domain.CreatedIssue{}, nil
+}
+
 func (s *stubTracker) EnsureIssueLabel(context.Context, string) error {
 	return nil
 }
