@@ -16,6 +16,7 @@ require (
 	github.com/slack-go/slack v0.20.0
 	github.com/spf13/cobra v1.10.2
 	github.com/whilp/git-urls v1.0.0
+	github.com/yuin/goldmark v1.7.13
 	maragu.dev/gomponents v1.2.0
 	tailscale.com v1.96.5
 )
@@ -171,7 +172,6 @@ require (
 	github.com/ysmood/got v0.40.0 // indirect
 	github.com/ysmood/gson v0.7.3 // indirect
 	github.com/ysmood/leakless v0.9.0 // indirect
-	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
