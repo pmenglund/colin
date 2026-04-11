@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"html"
 	"io"
 
 	"github.com/yuin/goldmark"
@@ -16,7 +17,7 @@ var codexMarkdown = goldmark.New(
 func codexMarkdownNode(source string) g.Node {
 	return g.NodeFunc(func(w io.Writer) error {
 		var rendered bytes.Buffer
-		if err := codexMarkdown.Convert([]byte(source), &rendered); err != nil {
+		if err := codexMarkdown.Convert([]byte(html.EscapeString(source)), &rendered); err != nil {
 			return err
 		}
 		_, err := io.WriteString(w, rendered.String())

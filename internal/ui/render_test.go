@@ -423,12 +423,21 @@ func TestWorkerOutputEntryDoesNotRenderUnsafeMarkdownHTML(t *testing.T) {
 	html := renderNode(t, WorkerOutputEntry(domain.OutputLog{
 		Timestamp: time.Date(2026, 3, 28, 11, 59, 2, 0, time.UTC),
 		Event:     "other_message",
-		Message:   `<script>alert("owned")</script> [bad](javascript:alert("owned"))`,
+		Message:   `error at <stdin>:12 <script>alert("owned")</script> [bad](javascript:alert("owned"))`,
 	}))
 
+	for _, want := range []string{
+		`error at &lt;stdin&gt;:12`,
+		`&lt;script&gt;alert(&quot;owned&quot;)&lt;/script&gt;`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("rendered markdown missing %q\n%s", want, html)
+		}
+	}
 	for _, unwanted := range []string{
 		`<script>`,
 		`href="javascript:`,
+		`raw HTML omitted`,
 	} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("rendered markdown should not include unsafe HTML %q\n%s", unwanted, html)
