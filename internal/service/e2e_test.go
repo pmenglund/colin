@@ -254,11 +254,11 @@ Work on {{ .issue.identifier }}.
 		errCh <- svc.Run(ctx)
 	}()
 
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "fake Codex marker", serviceE2EWaitTimeout, func() bool {
 		_, err := os.Stat(markerPath)
 		return err == nil
 	})
-	waitFor(t, serviceE2EWaitTimeout, func() bool {
+	waitFor(t, "fake Codex thread and turn requests", serviceE2EWaitTimeout, func() bool {
 		requests, err := readFakeCodexRequests(requestLogPath)
 		if err != nil {
 			return false
