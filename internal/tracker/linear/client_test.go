@@ -3489,6 +3489,48 @@ func TestFetchIssueSchedulingMetadataByIDsExtractsColinMetadataFromAttachment(t 
 	}
 }
 
+func TestColinMetadataRoundTripsPendingCheckFailure(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
+	metadata := domain.ColinMetadata{
+		PendingCheckFailure: &domain.PendingPullRequestCheckFailure{
+			Name:        "go test",
+			FailureKind: "actual",
+			Status:      "completed",
+			Conclusion:  "failure",
+			DetailsURL:  "https://github.com/acme/widgets/actions/runs/1",
+			Summary:     "unit tests failed",
+			HeadSHA:     "abc123",
+			PRNumber:    11,
+			PRURL:       "https://github.com/acme/widgets/pull/11",
+			ObservedAt:  &observedAt,
+		},
+		LastCheckHeadSHA: "abc123",
+		LastCheckState:   "failed|abc123|go test:actual:failure",
+	}
+
+	parsed, err := parseColinMetadataAttachment(map[string]any{
+		"id":        "attachment-1",
+		"url":       "https://colin.example.test/linear/issues/issue-1/metadata",
+		"metadata":  colinMetadataValue(metadata),
+		"createdAt": observedAt.Format(time.RFC3339),
+		"updatedAt": observedAt.Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("parseColinMetadataAttachment() error = %v", err)
+	}
+	if parsed.PendingCheckFailure == nil {
+		t.Fatal("PendingCheckFailure = nil, want round-tripped failure")
+	}
+	if parsed.PendingCheckFailure.Name != "go test" || parsed.PendingCheckFailure.PRNumber != 11 || parsed.PendingCheckFailure.HeadSHA != "abc123" {
+		t.Fatalf("PendingCheckFailure = %#v, want check failure context", parsed.PendingCheckFailure)
+	}
+	if parsed.LastCheckHeadSHA != "abc123" || parsed.LastCheckState != "failed|abc123|go test:actual:failure" {
+		t.Fatalf("check watermark = (%q, %q), want preserved", parsed.LastCheckHeadSHA, parsed.LastCheckState)
+	}
+}
+
 func TestFetchIssueSchedulingMetadataByIDsPrefersNewestColinMetadataAttachment(t *testing.T) {
 	t.Parallel()
 

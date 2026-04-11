@@ -104,6 +104,40 @@ func TestValidateRepoAccessChecksConfiguredToken(t *testing.T) {
 	}
 }
 
+func TestPullRequestChecksUsesTrackedPullRequest(t *testing.T) {
+	workspacePath, _ := setupRepoAutomationTest(t)
+	fakeGitHub := &fakes.FakeRepoHostClient{}
+	fakeGitHub.PullRequestByNumberReturns(testPullRequest(11, "OPEN", "colin-208"), nil)
+	fakeGitHub.PullRequestChecksReturns(repohost.PullRequestCheckRollup{
+		PullRequest: *testPullRequest(11, "OPEN", "colin-208"),
+		HeadSHA:     "abc123",
+		State:       repohost.PullRequestCheckStatePassed,
+		Passed: []repohost.PullRequestCheck{{
+			Name:  "go test",
+			State: repohost.PullRequestCheckStatePassed,
+		}},
+	}, nil)
+	manager := repoops.NewManagerWithRepoHostClient(testConfig(), testLogger(), fakeGitHub)
+
+	rollup, err := manager.PullRequestChecks(context.Background(), domain.Issue{
+		Identifier: "COLIN-208",
+		Title:      "Watch checks",
+		ColinMetadata: &domain.ColinMetadata{
+			PullRequestNumber: 11,
+			PullRequestURL:    "https://github.com/pmenglund/colin/pull/11",
+		},
+	}, workspacePath)
+	if err != nil {
+		t.Fatalf("PullRequestChecks() error = %v", err)
+	}
+	if rollup.PullRequest.Number != 11 || rollup.HeadSHA != "abc123" {
+		t.Fatalf("rollup = %#v, want PR #11 at abc123", rollup)
+	}
+	if fakeGitHub.PullRequestChecksCallCount() != 1 {
+		t.Fatalf("PullRequestChecksCallCount() = %d, want 1", fakeGitHub.PullRequestChecksCallCount())
+	}
+}
+
 func TestPublishUsesConfiguredPRTemplate(t *testing.T) {
 	workspacePath, _ := setupRepoAutomationTest(t)
 	writeFile(t, filepath.Join(workspacePath, "feature.txt"), "hello\n")

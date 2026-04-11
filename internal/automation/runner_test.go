@@ -91,6 +91,13 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 		Identifier: "COLIN-94",
 		Title:      "Move issue to review",
 		State:      "Todo",
+		ColinMetadata: &domain.ColinMetadata{
+			PendingCheckFailure: &domain.PendingPullRequestCheckFailure{
+				Name:        "go test",
+				FailureKind: "actual",
+				HeadSHA:     "abc123",
+			},
+		},
 	}, nil, nil)
 
 	if result.Status != "succeeded" {
@@ -107,6 +114,9 @@ func TestRunnerMovesSuccessfulActiveIssueToPublishState(t *testing.T) {
 	}
 	if result.Issue.ColinMetadata == nil || result.Issue.ColinMetadata.CodexThreadID != "thread-1" {
 		t.Fatalf("result.Issue.ColinMetadata = %#v, want thread-1", result.Issue.ColinMetadata)
+	}
+	if result.Issue.ColinMetadata.PendingCheckFailure != nil {
+		t.Fatalf("PendingCheckFailure = %#v, want cleared after repair handoff", result.Issue.ColinMetadata.PendingCheckFailure)
 	}
 }
 

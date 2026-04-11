@@ -136,6 +136,29 @@ GitHub review threads:
 
 {{- end }}
 
+{{- if .issue.pending_check_failure }}
+GitHub PR check failure:
+- Check: {{ .issue.pending_check_failure.name }}
+- Classification: {{ .issue.pending_check_failure.failure_kind }}
+- Status: {{ .issue.pending_check_failure.status }}
+- Conclusion: {{ .issue.pending_check_failure.conclusion }}
+{{- if .issue.pending_check_failure.pr_url }}
+- PR: {{ .issue.pending_check_failure.pr_url }}
+{{- end }}
+{{- if .issue.pending_check_failure.details_url }}
+- Details: {{ .issue.pending_check_failure.details_url }}
+{{- end }}
+{{- if .issue.pending_check_failure.head_sha }}
+- Head SHA: {{ .issue.pending_check_failure.head_sha }}
+{{- end }}
+{{- if .issue.pending_check_failure.summary }}
+- Summary: {{ .issue.pending_check_failure.summary }}
+{{- end }}
+
+Repair the actual build or test failure behind this PR check, then include the relevant verification command in your evidence.
+
+{{- end }}
+
 {{- if .attempt }}
 This is continuation or retry attempt {{.attempt}}. Reuse the existing workspace state and continue from prior progress rather than restarting from scratch.
 {{- end }}

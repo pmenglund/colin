@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	neturl "net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -132,6 +133,216 @@ func (c *Client) BranchExists(ctx context.Context, owner, repo, branch string) (
 		return false, nil
 	}
 	return false, err
+}
+
+func (c *Client) PullRequestChecks(ctx context.Context, owner, repo string, number int) (repohost.PullRequestCheckRollup, error) {
+	pr, err := c.PullRequestByNumber(ctx, owner, repo, number)
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	if pr == nil {
+		return repohost.PullRequestCheckRollup{}, nil
+	}
+	headSHA := strings.TrimSpace(pr.HeadSHA)
+	if headSHA == "" {
+		return repohost.PullRequestCheckRollup{
+			PullRequest: *pr,
+			State:       repohost.PullRequestCheckStatePending,
+		}, nil
+	}
+
+	checks, err := c.checksForRef(ctx, owner, repo, headSHA)
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	statuses, err := c.statusChecksForRef(ctx, owner, repo, headSHA)
+	if err != nil {
+		return repohost.PullRequestCheckRollup{}, err
+	}
+	checks = append(checks, statuses...)
+	classifyFlakyChecks(checks)
+
+	rollup := repohost.PullRequestCheckRollup{
+		PullRequest: *pr,
+		HeadSHA:     headSHA,
+		State:       repohost.PullRequestCheckStatePassed,
+	}
+	if len(checks) == 0 {
+		rollup.State = repohost.PullRequestCheckStatePending
+		return rollup, nil
+	}
+	for _, check := range checks {
+		switch check.State {
+		case repohost.PullRequestCheckStateFailed:
+			rollup.Failed = append(rollup.Failed, check)
+		case repohost.PullRequestCheckStatePassed:
+			rollup.Passed = append(rollup.Passed, check)
+		default:
+			rollup.Pending = append(rollup.Pending, check)
+		}
+	}
+	switch {
+	case len(rollup.Failed) > 0:
+		rollup.State = repohost.PullRequestCheckStateFailed
+	case len(rollup.Pending) > 0:
+		rollup.State = repohost.PullRequestCheckStatePending
+	default:
+		rollup.State = repohost.PullRequestCheckStatePassed
+	}
+	sortChecks(rollup.Failed)
+	sortChecks(rollup.Pending)
+	sortChecks(rollup.Passed)
+	return rollup, nil
+}
+
+func (c *Client) checksForRef(ctx context.Context, owner, repo, ref string) ([]repohost.PullRequestCheck, error) {
+	opts := &githubapi.ListCheckRunsOptions{
+		ListOptions: githubapi.ListOptions{PerPage: 100},
+	}
+	var checks []repohost.PullRequestCheck
+	for {
+		result, resp, err := c.client.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, run := range result.CheckRuns {
+			if run == nil {
+				continue
+			}
+			check := repohost.PullRequestCheck{
+				Name:       strings.TrimSpace(run.GetName()),
+				Status:     strings.TrimSpace(run.GetStatus()),
+				Conclusion: strings.TrimSpace(run.GetConclusion()),
+				DetailsURL: firstNonEmpty(run.GetDetailsURL(), run.GetHTMLURL()),
+				Summary:    strings.TrimSpace(run.GetOutput().GetSummary()),
+			}
+			if started := run.GetStartedAt(); !started.Time.IsZero() {
+				value := started.Time.UTC()
+				check.StartedAt = &value
+			}
+			if completed := run.GetCompletedAt(); !completed.Time.IsZero() {
+				value := completed.Time.UTC()
+				check.CompletedAt = &value
+			}
+			check.State, check.FailureKind = classifyCheck(check.Name, check.Status, check.Conclusion, check.Summary)
+			checks = append(checks, check)
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return checks, nil
+}
+
+func (c *Client) statusChecksForRef(ctx context.Context, owner, repo, ref string) ([]repohost.PullRequestCheck, error) {
+	status, _, err := c.client.Repositories.GetCombinedStatus(ctx, owner, repo, ref, &githubapi.ListOptions{PerPage: 100})
+	if err != nil {
+		return nil, err
+	}
+	var checks []repohost.PullRequestCheck
+	for _, item := range status.Statuses {
+		if item == nil {
+			continue
+		}
+		check := repohost.PullRequestCheck{
+			Name:       strings.TrimSpace(item.GetContext()),
+			Status:     strings.TrimSpace(item.GetState()),
+			Conclusion: strings.TrimSpace(item.GetState()),
+			DetailsURL: strings.TrimSpace(item.GetTargetURL()),
+			Summary:    strings.TrimSpace(item.GetDescription()),
+		}
+		if created := item.GetCreatedAt(); !created.Time.IsZero() {
+			value := created.Time.UTC()
+			check.StartedAt = &value
+		}
+		if updated := item.GetUpdatedAt(); !updated.Time.IsZero() {
+			value := updated.Time.UTC()
+			check.CompletedAt = &value
+		}
+		check.State, check.FailureKind = classifyCheck(check.Name, check.Status, check.Conclusion, check.Summary)
+		checks = append(checks, check)
+	}
+	return checks, nil
+}
+
+func classifyCheck(name, status, conclusion, summary string) (repohost.PullRequestCheckState, repohost.PullRequestCheckFailureKind) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	conclusion = strings.ToLower(strings.TrimSpace(conclusion))
+	text := strings.ToLower(strings.Join([]string{name, status, conclusion, summary}, " "))
+	if strings.Contains(text, "timed out") || strings.Contains(text, "timeout") || conclusion == "timed_out" {
+		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindTimeout
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return repohost.PullRequestCheckStatePassed, ""
+	case "failure", "cancelled", "startup_failure":
+		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindActual
+	case "action_required":
+		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindUnknown
+	}
+	switch status {
+	case "success":
+		return repohost.PullRequestCheckStatePassed, ""
+	case "failure", "error":
+		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindActual
+	case "pending", "queued", "in_progress", "requested", "waiting":
+		return repohost.PullRequestCheckStatePending, ""
+	}
+	if conclusion != "" {
+		return repohost.PullRequestCheckStateFailed, repohost.PullRequestCheckFailureKindUnknown
+	}
+	return repohost.PullRequestCheckStatePending, ""
+}
+
+func classifyFlakyChecks(checks []repohost.PullRequestCheck) {
+	passedByName := map[string][]repohost.PullRequestCheck{}
+	for _, check := range checks {
+		if check.State != repohost.PullRequestCheckStatePassed {
+			continue
+		}
+		passedByName[checkNameKey(check.Name)] = append(passedByName[checkNameKey(check.Name)], check)
+	}
+	for i := range checks {
+		if checks[i].State != repohost.PullRequestCheckStateFailed || checks[i].FailureKind == repohost.PullRequestCheckFailureKindTimeout {
+			continue
+		}
+		for _, passed := range passedByName[checkNameKey(checks[i].Name)] {
+			if checkCompletedAfter(passed, checks[i]) {
+				checks[i].FailureKind = repohost.PullRequestCheckFailureKindFlaky
+				break
+			}
+		}
+	}
+}
+
+func checkCompletedAfter(left, right repohost.PullRequestCheck) bool {
+	if left.CompletedAt == nil || right.CompletedAt == nil {
+		return true
+	}
+	return left.CompletedAt.After(*right.CompletedAt)
+}
+
+func checkNameKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func sortChecks(checks []repohost.PullRequestCheck) {
+	sort.SliceStable(checks, func(i, j int) bool {
+		if checks[i].Name != checks[j].Name {
+			return checks[i].Name < checks[j].Name
+		}
+		return checks[i].DetailsURL < checks[j].DetailsURL
+	})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (c *Client) IsCollaborator(ctx context.Context, owner, repo, user string) (bool, error) {
@@ -408,6 +619,7 @@ func pullRequestFromAPI(pr *githubapi.PullRequest) *repohost.PullRequest {
 		URL:         pr.GetHTMLURL(),
 		State:       state,
 		Body:        pr.GetBody(),
+		HeadSHA:     pr.GetHead().GetSHA(),
 		Mergeable:   pr.Mergeable,
 		HeadRefName: pr.GetHead().GetRef(),
 		BaseRefName: pr.GetBase().GetRef(),

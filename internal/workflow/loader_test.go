@@ -91,6 +91,28 @@ func TestRenderPromptIncludesReviewFeedback(t *testing.T) {
 	}
 }
 
+func TestRenderPromptIncludesPendingCheckFailure(t *testing.T) {
+	t.Parallel()
+
+	def := domain.WorkflowDefinition{PromptTemplate: `{{.issue.pending_check_failure.name}} {{.issue.colin_metadata.pending_check_failure.failure_kind}} {{.issue.pending_check_failure.head_sha}}`}
+	prompt, err := RenderPrompt(def, domain.Issue{
+		Identifier: "ABC-123",
+		ColinMetadata: &domain.ColinMetadata{
+			PendingCheckFailure: &domain.PendingPullRequestCheckFailure{
+				Name:        "go test",
+				FailureKind: "actual",
+				HeadSHA:     "abc123",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RenderPrompt() error = %v", err)
+	}
+	if prompt != "go test actual abc123" {
+		t.Fatalf("prompt = %q, want check failure context", prompt)
+	}
+}
+
 func TestRenderTemplateIncludesArbitraryPayload(t *testing.T) {
 	t.Parallel()
 

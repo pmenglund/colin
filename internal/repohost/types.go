@@ -36,9 +36,50 @@ type PullRequest struct {
 	URL         string
 	State       string
 	Body        string
+	HeadSHA     string
 	Mergeable   *bool
 	HeadRefName string
 	BaseRefName string
+}
+
+type PullRequestCheckState string
+
+const (
+	PullRequestCheckStatePending PullRequestCheckState = "pending"
+	PullRequestCheckStatePassed  PullRequestCheckState = "passed"
+	PullRequestCheckStateFailed  PullRequestCheckState = "failed"
+)
+
+type PullRequestCheckFailureKind string
+
+const (
+	PullRequestCheckFailureKindActual  PullRequestCheckFailureKind = "actual"
+	PullRequestCheckFailureKindFlaky   PullRequestCheckFailureKind = "flaky"
+	PullRequestCheckFailureKindTimeout PullRequestCheckFailureKind = "timeout"
+	PullRequestCheckFailureKindUnknown PullRequestCheckFailureKind = "unknown"
+)
+
+// PullRequestCheck is one normalized CI result for a pull request head commit.
+type PullRequestCheck struct {
+	Name        string
+	Status      string
+	Conclusion  string
+	State       PullRequestCheckState
+	FailureKind PullRequestCheckFailureKind
+	DetailsURL  string
+	Summary     string
+	StartedAt   *time.Time
+	CompletedAt *time.Time
+}
+
+// PullRequestCheckRollup is Colin's current view of all checks on a pull request.
+type PullRequestCheckRollup struct {
+	PullRequest PullRequest
+	HeadSHA     string
+	State       PullRequestCheckState
+	Pending     []PullRequestCheck
+	Passed      []PullRequestCheck
+	Failed      []PullRequestCheck
 }
 
 // ReviewComment is the minimal review comment payload Colin consumes.
@@ -114,6 +155,7 @@ type Client interface {
 	CreatePullRequest(ctx context.Context, owner, repo string, input CreatePullRequestInput) (*PullRequest, error)
 	MergePullRequest(ctx context.Context, owner, repo string, number int, method string) error
 	BranchExists(ctx context.Context, owner, repo, branch string) (bool, error)
+	PullRequestChecks(ctx context.Context, owner, repo string, number int) (PullRequestCheckRollup, error)
 	ReviewThreads(ctx context.Context, owner, repo string, number int, cursor string) (ReviewThreadPage, error)
 	ReviewThreadComments(ctx context.Context, threadID, cursor string) (ReviewThreadCommentPage, error)
 	PullRequestReactions(ctx context.Context, owner, repo string, number int, cursor string) (ReactionPage, error)

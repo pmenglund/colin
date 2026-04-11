@@ -25,7 +25,29 @@ type gitHubWebhookEnvelope struct {
 	PullRequest *struct {
 		Number int `json:"number"`
 	} `json:"pull_request"`
-	Issue *struct {
+	CheckRun *struct {
+		ID           int64  `json:"id"`
+		Name         string `json:"name"`
+		Status       string `json:"status"`
+		Conclusion   string `json:"conclusion"`
+		HeadSHA      string `json:"head_sha"`
+		PullRequests []struct {
+			Number int `json:"number"`
+		} `json:"pull_requests"`
+	} `json:"check_run"`
+	CheckSuite *struct {
+		Status       string `json:"status"`
+		Conclusion   string `json:"conclusion"`
+		HeadSHA      string `json:"head_sha"`
+		PullRequests []struct {
+			Number int `json:"number"`
+		} `json:"pull_requests"`
+	} `json:"check_suite"`
+	SHA         string `json:"sha"`
+	State       string `json:"state"`
+	Context     string `json:"context"`
+	Description string `json:"description"`
+	Issue       *struct {
 		PullRequest *struct{} `json:"pull_request"`
 	} `json:"issue"`
 	Comment *struct {
@@ -180,6 +202,48 @@ func gitHubWebhookEventFromRequest(r *http.Request, envelope gitHubWebhookEnvelo
 		event.PullRequestNumber = envelope.PullRequest.Number
 		event.HasPullRequest = true
 	}
+	if envelope.CheckRun != nil {
+		event.CheckRunID = envelope.CheckRun.ID
+		event.CheckName = strings.TrimSpace(envelope.CheckRun.Name)
+		event.CheckStatus = strings.TrimSpace(envelope.CheckRun.Status)
+		event.CheckConclusion = strings.TrimSpace(envelope.CheckRun.Conclusion)
+		event.HeadSHA = strings.TrimSpace(envelope.CheckRun.HeadSHA)
+		for _, pr := range envelope.CheckRun.PullRequests {
+			if pr.Number <= 0 {
+				continue
+			}
+			event.PullRequestNumbers = append(event.PullRequestNumbers, pr.Number)
+			if event.PullRequestNumber == 0 {
+				event.PullRequestNumber = pr.Number
+			}
+			event.HasPullRequest = true
+		}
+	}
+	if envelope.CheckSuite != nil {
+		event.CheckStatus = strings.TrimSpace(envelope.CheckSuite.Status)
+		event.CheckConclusion = strings.TrimSpace(envelope.CheckSuite.Conclusion)
+		event.HeadSHA = strings.TrimSpace(envelope.CheckSuite.HeadSHA)
+		for _, pr := range envelope.CheckSuite.PullRequests {
+			if pr.Number <= 0 {
+				continue
+			}
+			event.PullRequestNumbers = append(event.PullRequestNumbers, pr.Number)
+			if event.PullRequestNumber == 0 {
+				event.PullRequestNumber = pr.Number
+			}
+			event.HasPullRequest = true
+		}
+	}
+	if strings.TrimSpace(envelope.SHA) != "" {
+		event.HeadSHA = strings.TrimSpace(envelope.SHA)
+	}
+	if strings.TrimSpace(envelope.Context) != "" {
+		event.CheckName = strings.TrimSpace(envelope.Context)
+	}
+	if strings.TrimSpace(envelope.State) != "" {
+		event.CheckStatus = strings.TrimSpace(envelope.State)
+		event.CheckConclusion = strings.TrimSpace(envelope.State)
+	}
 	if envelope.Issue != nil && envelope.Issue.PullRequest != nil {
 		event.HasPullRequest = true
 	}
@@ -234,6 +298,12 @@ func shouldTriggerGitHubWebhook(event GitHubWebhookEvent) bool {
 		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "created", "edited", "deleted")
 	case "pull_request_review_thread":
 		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "resolved", "unresolved")
+	case "check_run":
+		return event.PullRequestNumber > 0 || strings.TrimSpace(event.HeadSHA) != ""
+	case "check_suite":
+		return event.PullRequestNumber > 0 || strings.TrimSpace(event.HeadSHA) != ""
+	case "status":
+		return strings.TrimSpace(event.HeadSHA) != ""
 	default:
 		return false
 	}

@@ -2382,6 +2382,7 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.PendingReviewReactionID, _ = stringValue(metadataMap["pending_review_reaction_id"])
 	metadata.PendingReviewReactor, _ = stringValue(metadataMap["pending_review_reactor"])
 	metadata.QueuedReviewFollowUps = pendingReviewFollowUpsValue(metadataMap["queued_review_follow_ups"])
+	metadata.PendingCheckFailure = pendingCheckFailureValue(metadataMap["pending_check_failure"])
 	metadata.ReviewReactionWatermarks = stringMapValue(metadataMap["review_reaction_watermarks"])
 	if value, ok := stringValue(metadataMap["exec_plan_decision"]); ok {
 		metadata.ExecPlanDecision = domain.ExecPlanDecision(value)
@@ -2407,6 +2408,8 @@ func parseColinMetadataAttachmentNode(node map[string]any) (colinMetadataAttachm
 	metadata.PullRequestBackend, _ = stringValue(metadataMap["pull_request_backend"])
 	metadata.PullRequestRepoOwner, _ = stringValue(metadataMap["pull_request_repo_owner"])
 	metadata.PullRequestRepoName, _ = stringValue(metadataMap["pull_request_repo_name"])
+	metadata.LastCheckHeadSHA, _ = stringValue(metadataMap["last_check_head_sha"])
+	metadata.LastCheckState, _ = stringValue(metadataMap["last_check_state"])
 	metadata.LoopFailureFingerprint, _ = stringValue(metadataMap["loop_failure_fingerprint"])
 	if value, ok := intValue(metadataMap["loop_failure_count"]); ok {
 		metadata.LoopFailureCount = value
@@ -2531,6 +2534,7 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		"pending_review_reaction_id": strings.TrimSpace(metadata.PendingReviewReactionID),
 		"pending_review_reactor":     strings.TrimSpace(metadata.PendingReviewReactor),
 		"queued_review_follow_ups":   pendingReviewFollowUpsAny(metadata.QueuedReviewFollowUps),
+		"pending_check_failure":      pendingCheckFailureAny(metadata.PendingCheckFailure),
 		"review_reaction_watermarks": stringMapAny(metadata.ReviewReactionWatermarks),
 		"exec_plan_decision":         strings.TrimSpace(string(metadata.ExecPlanDecision)),
 		"review_publish_directive":   strings.TrimSpace(string(metadata.ReviewPublishDirective)),
@@ -2546,6 +2550,8 @@ func colinMetadataValue(metadata domain.ColinMetadata) map[string]any {
 		"pull_request_backend":       strings.TrimSpace(metadata.PullRequestBackend),
 		"pull_request_repo_owner":    strings.TrimSpace(metadata.PullRequestRepoOwner),
 		"pull_request_repo_name":     strings.TrimSpace(metadata.PullRequestRepoName),
+		"last_check_head_sha":        strings.TrimSpace(metadata.LastCheckHeadSHA),
+		"last_check_state":           strings.TrimSpace(metadata.LastCheckState),
 		"loop_failure_fingerprint":   strings.TrimSpace(metadata.LoopFailureFingerprint),
 		"loop_failure_count":         metadata.LoopFailureCount,
 		"paused_run_type":            strings.TrimSpace(metadata.PausedRunType),
@@ -2801,6 +2807,58 @@ func pendingReviewFollowUpsAny(items []domain.PendingReviewFollowUp) []any {
 			entry["requested_at"] = item.RequestedAt.UTC().Format(time.RFC3339)
 		}
 		out = append(out, entry)
+	}
+	return out
+}
+
+func pendingCheckFailureValue(value any) *domain.PendingPullRequestCheckFailure {
+	node, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	failure := &domain.PendingPullRequestCheckFailure{}
+	failure.Name, _ = stringValue(node["name"])
+	failure.FailureKind, _ = stringValue(node["failure_kind"])
+	failure.Status, _ = stringValue(node["status"])
+	failure.Conclusion, _ = stringValue(node["conclusion"])
+	failure.DetailsURL, _ = stringValue(node["details_url"])
+	failure.Summary, _ = stringValue(node["summary"])
+	failure.HeadSHA, _ = stringValue(node["head_sha"])
+	if value, ok := intValue(node["pr_number"]); ok {
+		failure.PRNumber = value
+	}
+	failure.PRURL, _ = stringValue(node["pr_url"])
+	if value, _ := stringValue(node["observed_at"]); strings.TrimSpace(value) != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			failure.ObservedAt = &parsed
+		}
+	}
+	if strings.TrimSpace(failure.Name) == "" &&
+		strings.TrimSpace(failure.FailureKind) == "" &&
+		strings.TrimSpace(failure.HeadSHA) == "" &&
+		failure.PRNumber == 0 {
+		return nil
+	}
+	return failure
+}
+
+func pendingCheckFailureAny(failure *domain.PendingPullRequestCheckFailure) map[string]any {
+	if failure == nil {
+		return nil
+	}
+	out := map[string]any{
+		"name":         strings.TrimSpace(failure.Name),
+		"failure_kind": strings.TrimSpace(failure.FailureKind),
+		"status":       strings.TrimSpace(failure.Status),
+		"conclusion":   strings.TrimSpace(failure.Conclusion),
+		"details_url":  strings.TrimSpace(failure.DetailsURL),
+		"summary":      strings.TrimSpace(failure.Summary),
+		"head_sha":     strings.TrimSpace(failure.HeadSHA),
+		"pr_number":    failure.PRNumber,
+		"pr_url":       strings.TrimSpace(failure.PRURL),
+	}
+	if failure.ObservedAt != nil {
+		out["observed_at"] = failure.ObservedAt.UTC().Format(time.RFC3339)
 	}
 	return out
 }

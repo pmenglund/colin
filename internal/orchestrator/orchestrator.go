@@ -234,6 +234,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	}
 	var reviewFollowUpIssues []domain.Issue
 	trackedIssues, reviewFollowUpIssues = o.syncGitHubReviewFollowUps(ctx, trackedIssues, now)
+	var checkRepairIssues []domain.Issue
+	trackedIssues, checkRepairIssues = o.syncGitHubPullRequestChecks(ctx, trackedIssues, now)
 	o.syncCodexReviewLabels(ctx, trackedIssues)
 	o.syncSlackIssues(ctx, trackedIssues)
 	for _, issue := range reviewFollowUpIssues {
@@ -243,6 +245,16 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		issue, ready := o.prepareReviewIssue(ctx, issue, now)
 		if !ready {
 			continue
+		}
+		if !o.shouldDispatch(issue) {
+			continue
+		}
+		o.dispatch(ctx, issue, nil, nil)
+		dispatched++
+	}
+	for _, issue := range checkRepairIssues {
+		if !o.hasGlobalSlots() {
+			break
 		}
 		if !o.shouldDispatch(issue) {
 			continue

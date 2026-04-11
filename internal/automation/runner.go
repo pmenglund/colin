@@ -587,7 +587,11 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	if (maxTurnsReached || strings.TrimSpace(forcedSummary) != "") && execPlanCopy != nil {
 		parsedSummary = appendRemainingExecPlanTasks(parsedSummary, execPlanProgress.Remaining())
 	}
-	current, err = r.persistIssueMetadata(ctx, current, codexMetadataWithDirective(current, runType, metadataOutcome, "", ""))
+	metadata := codexMetadataWithDirective(current, runType, metadataOutcome, "", "")
+	if runType == RunTypeCoding && isPublishState(r.cfg, handoffState) {
+		metadata.PendingCheckFailure = nil
+	}
+	current, err = r.persistIssueMetadata(ctx, current, metadata)
 	if err != nil {
 		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: parsedSummary, PR: prRef, ThreadsHandled: threadsHandled, ThreadsRemaining: threadsRemaining, Err: err}
 	}

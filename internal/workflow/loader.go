@@ -136,26 +136,27 @@ func parseWorkflow(data []byte) (domain.WorkflowConfig, string, error) {
 
 func issueToMap(issue domain.Issue) map[string]any {
 	return map[string]any{
-		"id":              issue.ID,
-		"identifier":      issue.Identifier,
-		"title":           issue.Title,
-		"description":     derefString(issue.Description),
-		"priority":        derefInt(issue.Priority),
-		"project_id":      issue.ProjectID,
-		"project_slug":    issue.ProjectSlug,
-		"state":           issue.State,
-		"branch_name":     derefString(issue.BranchName),
-		"url":             derefString(issue.URL),
-		"labels":          cloneStrings(issue.Labels),
-		"colin_metadata":  colinMetadataToMap(issue.ColinMetadata),
-		"exec_plan":       execPlanToMap(issue.ExecPlan),
-		"blocked_by":      blockersToMaps(issue.BlockedBy),
-		"review_cycle":    reviewCycleToMap(issue.ReviewCycle),
-		"review_feedback": reviewFeedbackToMaps(issue.ReviewFeedback),
-		"review_threads":  reviewThreadsToMaps(issue.ReviewThreads),
-		"pull_request":    pullRequestToMap(issue.PullRequest),
-		"created_at":      derefTime(issue.CreatedAt),
-		"updated_at":      derefTime(issue.UpdatedAt),
+		"id":                    issue.ID,
+		"identifier":            issue.Identifier,
+		"title":                 issue.Title,
+		"description":           derefString(issue.Description),
+		"priority":              derefInt(issue.Priority),
+		"project_id":            issue.ProjectID,
+		"project_slug":          issue.ProjectSlug,
+		"state":                 issue.State,
+		"branch_name":           derefString(issue.BranchName),
+		"url":                   derefString(issue.URL),
+		"labels":                cloneStrings(issue.Labels),
+		"colin_metadata":        colinMetadataToMap(issue.ColinMetadata),
+		"exec_plan":             execPlanToMap(issue.ExecPlan),
+		"blocked_by":            blockersToMaps(issue.BlockedBy),
+		"review_cycle":          reviewCycleToMap(issue.ReviewCycle),
+		"review_feedback":       reviewFeedbackToMaps(issue.ReviewFeedback),
+		"review_threads":        reviewThreadsToMaps(issue.ReviewThreads),
+		"pull_request":          pullRequestToMap(issue.PullRequest),
+		"pending_check_failure": pendingCheckFailureToMap(pendingCheckFailure(issue.ColinMetadata)),
+		"created_at":            derefTime(issue.CreatedAt),
+		"updated_at":            derefTime(issue.UpdatedAt),
 	}
 }
 
@@ -233,6 +234,31 @@ func pullRequestToMap(value *domain.PullRequestRef) any {
 	}
 }
 
+func pendingCheckFailure(metadata *domain.ColinMetadata) *domain.PendingPullRequestCheckFailure {
+	if metadata == nil {
+		return nil
+	}
+	return metadata.PendingCheckFailure
+}
+
+func pendingCheckFailureToMap(value *domain.PendingPullRequestCheckFailure) any {
+	if value == nil {
+		return nil
+	}
+	return map[string]any{
+		"name":         value.Name,
+		"failure_kind": value.FailureKind,
+		"status":       value.Status,
+		"conclusion":   value.Conclusion,
+		"details_url":  value.DetailsURL,
+		"summary":      value.Summary,
+		"head_sha":     value.HeadSHA,
+		"pr_number":    value.PRNumber,
+		"pr_url":       value.PRURL,
+		"observed_at":  derefTime(value.ObservedAt),
+	}
+}
+
 func colinMetadataToMap(value *domain.ColinMetadata) any {
 	if value == nil {
 		return nil
@@ -250,6 +276,7 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"pending_review_reactor":      value.PendingReviewReactor,
 		"pending_review_requested_at": derefTime(value.PendingReviewRequestedAt),
 		"queued_review_follow_ups":    pendingReviewFollowUpsToMaps(value.QueuedReviewFollowUps),
+		"pending_check_failure":       pendingCheckFailureToMap(value.PendingCheckFailure),
 		"review_reaction_watermarks":  value.ReviewReactionWatermarks,
 		"exec_plan_decision":          value.ExecPlanDecision,
 		"review_publish_directive":    value.ReviewPublishDirective,
@@ -264,6 +291,8 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"pull_request_backend":        value.PullRequestBackend,
 		"pull_request_repo_owner":     value.PullRequestRepoOwner,
 		"pull_request_repo_name":      value.PullRequestRepoName,
+		"last_check_head_sha":         value.LastCheckHeadSHA,
+		"last_check_state":            value.LastCheckState,
 		"slack_channel_id":            value.SlackChannelID,
 		"slack_message_ts":            value.SlackMessageTS,
 		"slack_permalink":             value.SlackPermalink,

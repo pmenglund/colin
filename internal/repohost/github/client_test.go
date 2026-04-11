@@ -64,6 +64,69 @@ func TestGoGitHubClientPullRequestByHeadReturnsMergedState(t *testing.T) {
 	}
 }
 
+func TestGoGitHubClientPullRequestChecksNormalizesCheckRunsAndStatuses(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/widgets/pulls/11":
+			writeJSON(t, w, map[string]any{
+				"number":   11,
+				"html_url": "https://github.com/acme/widgets/pull/11",
+				"state":    "open",
+				"head":     map[string]any{"ref": "feature", "sha": "abc123"},
+				"base":     map[string]any{"ref": "main"},
+			})
+		case "/repos/acme/widgets/commits/abc123/check-runs":
+			writeJSON(t, w, map[string]any{
+				"total_count": 2,
+				"check_runs": []map[string]any{
+					{
+						"name":        "go test",
+						"status":      "completed",
+						"conclusion":  "failure",
+						"details_url": "https://github.com/acme/widgets/actions/runs/1",
+						"output":      map[string]any{"summary": "unit tests failed"},
+					},
+					{
+						"name":       "lint",
+						"status":     "completed",
+						"conclusion": "success",
+					},
+				},
+			})
+		case "/repos/acme/widgets/commits/abc123/status":
+			writeJSON(t, w, map[string]any{
+				"state": "success",
+				"statuses": []map[string]any{
+					{"context": "legacy/status", "state": "success"},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestGoGitHubClient(t, server)
+	rollup, err := client.PullRequestChecks(context.Background(), "acme", "widgets", 11)
+	if err != nil {
+		t.Fatalf("PullRequestChecks() error = %v", err)
+	}
+	if rollup.State != repohost.PullRequestCheckStateFailed {
+		t.Fatalf("rollup.State = %q, want failed", rollup.State)
+	}
+	if rollup.HeadSHA != "abc123" {
+		t.Fatalf("HeadSHA = %q, want abc123", rollup.HeadSHA)
+	}
+	if len(rollup.Failed) != 1 || rollup.Failed[0].Name != "go test" || rollup.Failed[0].FailureKind != repohost.PullRequestCheckFailureKindActual {
+		t.Fatalf("Failed = %#v, want actual go test failure", rollup.Failed)
+	}
+	if len(rollup.Passed) != 2 {
+		t.Fatalf("Passed count = %d, want lint plus legacy status", len(rollup.Passed))
+	}
+}
+
 func TestNewGitHubClientFromConfigAppliesDefaultHTTPTimeout(t *testing.T) {
 	t.Parallel()
 
