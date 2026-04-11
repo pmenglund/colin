@@ -26,6 +26,7 @@ type Client interface {
 	// FetchIssueByID returns the full issue detail used by UI pages, review preparation, and prompts.
 	FetchIssueByID(ctx context.Context, issueID string) (domain.Issue, error)
 	UpdateIssueState(ctx context.Context, issueID string, stateName string) error
+	CreateIssue(ctx context.Context, input domain.IssueCreateInput) (domain.CreatedIssue, error)
 	EnsureIssueLabel(ctx context.Context, labelName string) error
 	AddIssueLabel(ctx context.Context, issueID string, labelName string) error
 	RemoveIssueLabel(ctx context.Context, issueID string, labelName string) error

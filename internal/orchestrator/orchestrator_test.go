@@ -45,6 +45,9 @@ type trackerStub struct {
 	rateLimits              domain.RateLimitSnapshot
 	issueComments           []string
 	commentReplies          []string
+	createdIssues           []domain.IssueCreateInput
+	createIssueResults      []domain.CreatedIssue
+	createIssueErr          error
 	metadata                domain.ColinMetadata
 	ensuredLabels           []string
 	addedLabels             []string
@@ -123,6 +126,22 @@ func (s *trackerStub) FetchIssueByID(_ context.Context, issueID string) (domain.
 func (s *trackerStub) UpdateIssueState(_ context.Context, issueID string, state string) error {
 	s.updatedStates = append(s.updatedStates, issueID+":"+state)
 	return nil
+}
+
+func (s *trackerStub) CreateIssue(_ context.Context, input domain.IssueCreateInput) (domain.CreatedIssue, error) {
+	s.createdIssues = append(s.createdIssues, input)
+	if s.createIssueErr != nil {
+		return domain.CreatedIssue{}, s.createIssueErr
+	}
+	if len(s.createIssueResults) >= len(s.createdIssues) {
+		return s.createIssueResults[len(s.createdIssues)-1], nil
+	}
+	return domain.CreatedIssue{
+		ID:         "created-issue-1",
+		Identifier: "COLIN-456",
+		Title:      strings.TrimSpace(input.Title),
+		URL:        "https://linear.app/bothnia/issue/COLIN-456/follow-up-pr-feedback",
+	}, nil
 }
 
 func (s *trackerStub) EnsureIssueLabel(_ context.Context, labelName string) error {

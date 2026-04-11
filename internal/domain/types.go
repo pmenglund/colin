@@ -16,6 +16,7 @@ const (
 	ReviewPublishDirectivePublish ReviewPublishDirective = "publish"
 	ReviewPublishDirectiveSkip    ReviewPublishDirective = "skip"
 	PausedIssueLabel                                     = "paused"
+	PRFeedbackLabel                                      = "pr-feedback"
 
 	CodexReviewPendingLabel    = "codex-review: pending"
 	CodexReviewApprovedLabel   = "codex-review: approved"
@@ -54,6 +55,7 @@ type Issue struct {
 	Title                string
 	Description          *string
 	Priority             *int
+	TeamID               string
 	ProjectID            string
 	ProjectSlug          string
 	State                string
@@ -78,6 +80,7 @@ type Issue struct {
 func ManagedIssueLabels() []string {
 	return []string{
 		PausedIssueLabel,
+		PRFeedbackLabel,
 		CodexReviewPendingLabel,
 		CodexReviewApprovedLabel,
 		CodexReviewUnresolvedLabel,
@@ -112,6 +115,7 @@ type ColinMetadata struct {
 	QueuedReviewFollowUps    []PendingReviewFollowUp
 	PendingCheckFailure      *PendingPullRequestCheckFailure
 	ReviewReactionWatermarks map[string]string
+	ReviewFeedbackIssueLinks []ReviewFeedbackIssueLink
 	ExecPlanDecision         ExecPlanDecision
 	ReviewPublishDirective   ReviewPublishDirective
 	LastRunType              RunType
@@ -148,6 +152,32 @@ type ExecPlan struct {
 	URL          string
 	Body         string
 	UpdatedAt    *time.Time
+}
+
+// IssueCreateInput captures the fields Colin needs to create a Linear issue.
+type IssueCreateInput struct {
+	TeamID        string
+	ProjectID     string
+	ParentIssueID string
+	Title         string
+	Description   string
+	LabelNames    []string
+	Attachments   []IssueAttachmentInput
+}
+
+// IssueAttachmentInput captures one attachment to add after issue creation.
+type IssueAttachmentInput struct {
+	Title    string
+	URL      string
+	Metadata map[string]any
+}
+
+// CreatedIssue is the minimal created issue payload Colin needs after tracker creation.
+type CreatedIssue struct {
+	ID         string
+	Identifier string
+	Title      string
+	URL        string
 }
 
 // BlockerRef captures the minimal blocker fields needed for eligibility checks and prompt context.
@@ -206,6 +236,19 @@ type PendingReviewFollowUp struct {
 	ReactionID  string
 	Reactor     string
 	RequestedAt *time.Time
+}
+
+// ReviewFeedbackIssueLink records a PR review comment that Colin turned into a follow-up issue.
+type ReviewFeedbackIssueLink struct {
+	ThreadID        string
+	CommentID       string
+	ReactionID      string
+	Reactor         string
+	IssueID         string
+	IssueIdentifier string
+	IssueURL        string
+	RequestedAt     *time.Time
+	CreatedAt       *time.Time
 }
 
 // PendingPullRequestCheckFailure is the compact CI failure context Colin stores before starting a repair.

@@ -141,6 +141,7 @@ func issueToMap(issue domain.Issue) map[string]any {
 		"title":                 issue.Title,
 		"description":           derefString(issue.Description),
 		"priority":              derefInt(issue.Priority),
+		"team_id":               issue.TeamID,
 		"project_id":            issue.ProjectID,
 		"project_slug":          issue.ProjectSlug,
 		"state":                 issue.State,
@@ -278,6 +279,7 @@ func colinMetadataToMap(value *domain.ColinMetadata) any {
 		"queued_review_follow_ups":    pendingReviewFollowUpsToMaps(value.QueuedReviewFollowUps),
 		"pending_check_failure":       pendingCheckFailureToMap(value.PendingCheckFailure),
 		"review_reaction_watermarks":  value.ReviewReactionWatermarks,
+		"review_feedback_issue_links": reviewFeedbackIssueLinksToMaps(value.ReviewFeedbackIssueLinks),
 		"exec_plan_decision":          value.ExecPlanDecision,
 		"review_publish_directive":    value.ReviewPublishDirective,
 		"last_run_type":               value.LastRunType,
@@ -323,6 +325,24 @@ func pendingReviewFollowUpsToMaps(values []domain.PendingReviewFollowUp) []map[s
 			"reaction_id":  value.ReactionID,
 			"reactor":      value.Reactor,
 			"requested_at": derefTime(value.RequestedAt),
+		})
+	}
+	return out
+}
+
+func reviewFeedbackIssueLinksToMaps(values []domain.ReviewFeedbackIssueLink) []map[string]any {
+	out := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, map[string]any{
+			"thread_id":        value.ThreadID,
+			"comment_id":       value.CommentID,
+			"reaction_id":      value.ReactionID,
+			"reactor":          value.Reactor,
+			"issue_id":         value.IssueID,
+			"issue_identifier": value.IssueIdentifier,
+			"issue_url":        value.IssueURL,
+			"requested_at":     derefTime(value.RequestedAt),
+			"created_at":       derefTime(value.CreatedAt),
 		})
 	}
 	return out

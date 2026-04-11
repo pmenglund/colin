@@ -2245,6 +2245,117 @@ func TestEnsureIssueLabelCreatesMissingLabel(t *testing.T) {
 	}
 }
 
+func TestCreateIssueCreatesIssueWithLabelsParentAndAttachment(t *testing.T) {
+	t.Parallel()
+
+	var createdIssueInput map[string]any
+	var createdAttachmentInput map[string]any
+	labelIDsByName := map[string]string{
+		domain.PausedIssueLabel: "label-paused",
+		domain.PRFeedbackLabel:  "label-pr-feedback",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+
+		switch {
+		case strings.Contains(request.Query, "query IssueLabelsByName"):
+			name, _ := request.Variables["name"].(string)
+			labelID := labelIDsByName[name]
+			nodes := []map[string]any{}
+			if labelID != "" {
+				nodes = append(nodes, map[string]any{"id": labelID, "name": name})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueLabels": map[string]any{"nodes": nodes},
+				},
+			})
+		case strings.Contains(request.Query, "mutation CreateIssue($input"):
+			input, _ := request.Variables["input"].(map[string]any)
+			createdIssueInput = input
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"issueCreate": map[string]any{
+						"success": true,
+						"issue": map[string]any{
+							"id":         "issue-created",
+							"identifier": "COLIN-456",
+							"title":      "Follow up PR feedback from COLIN-123",
+							"url":        "https://linear.app/bothnia/issue/COLIN-456/follow-up-pr-feedback",
+						},
+					},
+				},
+			})
+		case strings.Contains(request.Query, "mutation CreateIssueAttachment"):
+			input, _ := request.Variables["input"].(map[string]any)
+			createdAttachmentInput = input
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"attachmentCreate": map[string]any{
+						"success":    true,
+						"attachment": map[string]any{"id": "attachment-1"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		endpoint: server.URL,
+		apiKey:   "token",
+		client:   &http.Client{Timeout: 5 * time.Second},
+		labelIDs: map[string]string{},
+	}
+	created, err := client.CreateIssue(context.Background(), domain.IssueCreateInput{
+		TeamID:        "team-1",
+		ProjectID:     "project-1",
+		ParentIssueID: "issue-source",
+		Title:         "Follow up PR feedback from COLIN-123",
+		Description:   "Track this feedback.",
+		LabelNames:    []string{domain.PausedIssueLabel, domain.PRFeedbackLabel},
+		Attachments: []domain.IssueAttachmentInput{
+			{
+				Title: "Source PR feedback",
+				URL:   "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923",
+				Metadata: map[string]any{
+					"source_issue_identifier": "COLIN-123",
+					"review_comment_id":       "3035904923",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if created.Identifier != "COLIN-456" || created.URL == "" {
+		t.Fatalf("CreateIssue() = %+v, want created issue", created)
+	}
+	if createdIssueInput["teamId"] != "team-1" || createdIssueInput["projectId"] != "project-1" || createdIssueInput["parentId"] != "issue-source" {
+		t.Fatalf("issueCreate input = %#v, want team/project/parent", createdIssueInput)
+	}
+	labelIDs, ok := createdIssueInput["labelIds"].([]any)
+	if !ok || len(labelIDs) != 2 || labelIDs[0] != "label-paused" || labelIDs[1] != "label-pr-feedback" {
+		t.Fatalf("labelIds = %#v, want paused and pr-feedback ids", createdIssueInput["labelIds"])
+	}
+	if createdAttachmentInput["issueId"] != "issue-created" || createdAttachmentInput["url"] != "https://github.com/pmenglund/colin/pull/11#discussion_r3035904923" {
+		t.Fatalf("attachmentCreate input = %#v, want created issue attachment", createdAttachmentInput)
+	}
+	metadata, _ := createdAttachmentInput["metadata"].(map[string]any)
+	if metadata["source_issue_identifier"] != "COLIN-123" || metadata["review_comment_id"] != "3035904923" {
+		t.Fatalf("attachment metadata = %#v, want source fields", metadata)
+	}
+}
+
 func TestAddIssueLabelUsesExistingLabelID(t *testing.T) {
 	t.Parallel()
 

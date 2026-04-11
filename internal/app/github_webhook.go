@@ -298,6 +298,8 @@ func shouldTriggerGitHubWebhook(event GitHubWebhookEvent) bool {
 		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "created", "edited", "deleted")
 	case "pull_request_review_thread":
 		return event.HasPullRequest && isRelevantGitHubAction(event.Action, "resolved", "unresolved")
+	case "reaction":
+		return event.HasPullRequest && event.CommentID > 0 && isRelevantGitHubAction(event.Action, "created", "deleted")
 	case "check_run":
 		return event.PullRequestNumber > 0 || strings.TrimSpace(event.HeadSHA) != ""
 	case "check_suite":

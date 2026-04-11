@@ -544,6 +544,7 @@ Work on {{ .issue.identifier }}.
 	}
 
 	wantCreated := []string{
+		domain.PRFeedbackLabel,
 		domain.CodexReviewPendingLabel,
 		domain.CodexReviewApprovedLabel,
 		domain.CodexReviewUnresolvedLabel,
@@ -2330,6 +2331,7 @@ type serviceTrackerStub struct {
 	agentActivities   []string
 	issueComments     []string
 	commentReplies    []string
+	createdIssues     []domain.IssueCreateInput
 	replyParentIDs    []string
 	watchedProjectIDs []string
 	upsertMetadataErr error
@@ -2552,6 +2554,11 @@ func (s *serviceTrackerStub) FetchIssueByID(_ context.Context, issueID string) (
 
 func (s *serviceTrackerStub) UpdateIssueState(context.Context, string, string) error {
 	return nil
+}
+
+func (s *serviceTrackerStub) CreateIssue(_ context.Context, input domain.IssueCreateInput) (domain.CreatedIssue, error) {
+	s.createdIssues = append(s.createdIssues, input)
+	return domain.CreatedIssue{ID: "created-issue-1", Identifier: "COLIN-456", Title: input.Title}, nil
 }
 
 func (s *serviceTrackerStub) EnsureIssueLabel(_ context.Context, labelName string) error {

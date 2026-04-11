@@ -75,6 +75,8 @@ func (o *Orchestrator) syncGitHubReviewFollowUp(ctx context.Context, issue domai
 	if pruneQueuedReviewFollowUps(&metadata, threadsByID) {
 		changed = true
 	}
+	issue, createdIssueComments, createdIssueThreads := o.createReviewFeedbackIssues(ctx, issue, scan, metadata, now)
+	metadata = reviewFollowUpMetadata(issue)
 
 	approvals := append([]repoops.ReviewCommentApproval(nil), scan.Approvals...)
 	sort.Slice(approvals, func(i, j int) bool {
@@ -83,6 +85,9 @@ func (o *Orchestrator) syncGitHubReviewFollowUp(ctx context.Context, issue domai
 	for _, approval := range approvals {
 		commentID := strings.TrimSpace(approval.CommentID)
 		if commentID == "" || strings.TrimSpace(approval.Thread.ID) == "" {
+			continue
+		}
+		if createdIssueComments[commentID] || reviewFeedbackIssueLinked(metadata, commentID) || reviewFeedbackIssueThreadLinked(metadata, approval.Thread.ID) {
 			continue
 		}
 		if !reviewReactionIDGreater(approval.ReactionID, metadata.ReviewReactionWatermarks[commentID]) {
@@ -112,6 +117,9 @@ func (o *Orchestrator) syncGitHubReviewFollowUp(ctx context.Context, issue domai
 			commentID = threadID
 		}
 		if threadID == "" || commentID == "" {
+			continue
+		}
+		if createdIssueComments[commentID] || createdIssueThreads[threadID] || reviewFeedbackIssueLinked(metadata, commentID) || reviewFeedbackIssueThreadLinked(metadata, threadID) {
 			continue
 		}
 		if !thread.CanReply || !thread.CanResolve {
@@ -165,6 +173,182 @@ func (o *Orchestrator) syncGitHubReviewFollowUp(ctx context.Context, issue domai
 	metadata.PendingReviewReactor = strings.TrimSpace(next.Reactor)
 	metadata.PendingReviewRequestedAt = next.RequestedAt
 	return o.activatePendingReviewFollowUp(ctx, issue, reviewFollowUpMetadata(issue), metadata)
+}
+
+func (o *Orchestrator) createReviewFeedbackIssues(ctx context.Context, issue domain.Issue, scan repoops.ReviewFollowUpScan, metadata domain.ColinMetadata, now time.Time) (domain.Issue, map[string]bool, map[string]bool) {
+	handledComments := reviewFeedbackIssueCommentIDs(metadata)
+	handledThreads := reviewFeedbackIssueThreadIDs(metadata)
+	if len(scan.IssueRequests) == 0 || o.runtime.Tracker == nil {
+		return issue, handledComments, handledThreads
+	}
+	for _, request := range scan.IssueRequests {
+		commentID := strings.TrimSpace(request.CommentID)
+		threadID := strings.TrimSpace(request.Thread.ID)
+		if commentID == "" || threadID == "" {
+			continue
+		}
+		if handledComments[commentID] {
+			continue
+		}
+		handledComments[commentID] = true
+		handledThreads[threadID] = true
+		if strings.TrimSpace(issue.TeamID) == "" {
+			o.logger.Warn("failed to create review feedback issue because source issue has no team id", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "thread_id", threadID, "comment_id", commentID)
+			continue
+		}
+
+		input := reviewFeedbackIssueCreateInput(issue, scan.PullRequest, request)
+		created, err := o.runtime.Tracker.CreateIssue(ctx, input)
+		if err != nil {
+			o.logger.Warn("failed to create Linear issue for GitHub review feedback", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "thread_id", threadID, "comment_id", commentID, "error", err)
+			continue
+		}
+
+		createdAt := now
+		requestedAt := now
+		link := domain.ReviewFeedbackIssueLink{
+			ThreadID:        threadID,
+			CommentID:       commentID,
+			ReactionID:      strings.TrimSpace(request.ReactionID),
+			Reactor:         strings.TrimSpace(request.Reactor),
+			IssueID:         strings.TrimSpace(created.ID),
+			IssueIdentifier: strings.TrimSpace(created.Identifier),
+			IssueURL:        strings.TrimSpace(created.URL),
+			RequestedAt:     &requestedAt,
+			CreatedAt:       &createdAt,
+		}
+		metadata = reviewFollowUpMetadata(issue)
+		metadata.ReviewFeedbackIssueLinks = append(metadata.ReviewFeedbackIssueLinks, link)
+		issue = o.persistReviewFollowUpMetadata(ctx, issue, metadata)
+		o.postReviewFeedbackIssueCreated(ctx, issue, created, request)
+		o.replyToReviewFeedbackThread(ctx, issue, created, request)
+	}
+	return issue, handledComments, handledThreads
+}
+
+func reviewFeedbackIssueCreateInput(issue domain.Issue, pr domain.PullRequestRef, request repoops.ReviewFeedbackIssueRequest) domain.IssueCreateInput {
+	commentURL := strings.TrimSpace(request.Thread.CommentURL)
+	title := fmt.Sprintf("Follow up PR feedback from %s", strings.TrimSpace(issue.Identifier))
+	description := reviewFeedbackIssueDescription(issue, pr, request)
+	return domain.IssueCreateInput{
+		TeamID:        strings.TrimSpace(issue.TeamID),
+		ProjectID:     strings.TrimSpace(issue.ProjectID),
+		ParentIssueID: strings.TrimSpace(issue.ID),
+		Title:         title,
+		Description:   description,
+		LabelNames:    []string{domain.PausedIssueLabel, domain.PRFeedbackLabel},
+		Attachments: []domain.IssueAttachmentInput{
+			{
+				Title: "Source PR feedback",
+				URL:   commentURL,
+				Metadata: map[string]any{
+					"source_issue_id":         strings.TrimSpace(issue.ID),
+					"source_issue_identifier": strings.TrimSpace(issue.Identifier),
+					"pull_request_number":     pr.Number,
+					"pull_request_url":        strings.TrimSpace(pr.URL),
+					"repository_owner":        strings.TrimSpace(pr.RepositoryOwner),
+					"repository_name":         strings.TrimSpace(pr.RepositoryName),
+					"review_thread_id":        strings.TrimSpace(request.Thread.ID),
+					"review_comment_id":       strings.TrimSpace(request.CommentID),
+					"review_comment_url":      commentURL,
+					"reviewer":                strings.TrimSpace(request.Reactor),
+					"reaction_id":             strings.TrimSpace(request.ReactionID),
+				},
+			},
+		},
+	}
+}
+
+func reviewFeedbackIssueDescription(issue domain.Issue, pr domain.PullRequestRef, request repoops.ReviewFeedbackIssueRequest) string {
+	lines := []string{
+		"Track this pull request feedback as follow-up work.",
+		"",
+		fmt.Sprintf("- Source issue: %s", sourceIssueLink(issue)),
+	}
+	if pr.Number > 0 || strings.TrimSpace(pr.URL) != "" {
+		lines = append(lines, fmt.Sprintf("- Pull request: %s", pullRequestLink(pr)))
+	}
+	if value := strings.TrimSpace(request.Thread.CommentURL); value != "" {
+		lines = append(lines, fmt.Sprintf("- Review comment: %s", value))
+	}
+	if value := reviewThreadLocation(request.Thread); value != "" {
+		lines = append(lines, fmt.Sprintf("- Location: `%s`", value))
+	}
+	if value := strings.TrimSpace(request.Reactor); value != "" {
+		lines = append(lines, fmt.Sprintf("- Requested by: `%s`", value))
+	}
+	lines = append(lines, "", "Feedback:", "")
+	body := strings.TrimSpace(request.Thread.Body)
+	if body == "" {
+		body = "(No review comment body was available.)"
+	}
+	lines = append(lines, body)
+	return strings.Join(lines, "\n")
+}
+
+func sourceIssueLink(issue domain.Issue) string {
+	identifier := strings.TrimSpace(issue.Identifier)
+	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
+		return fmt.Sprintf("%s (%s)", identifier, strings.TrimSpace(*issue.URL))
+	}
+	return identifier
+}
+
+func pullRequestLink(pr domain.PullRequestRef) string {
+	if strings.TrimSpace(pr.URL) != "" && pr.Number > 0 {
+		return fmt.Sprintf("#%d (%s)", pr.Number, strings.TrimSpace(pr.URL))
+	}
+	if strings.TrimSpace(pr.URL) != "" {
+		return strings.TrimSpace(pr.URL)
+	}
+	if pr.Number > 0 {
+		return fmt.Sprintf("#%d", pr.Number)
+	}
+	return ""
+}
+
+func reviewThreadLocation(thread domain.ReviewThread) string {
+	path := strings.TrimSpace(thread.Path)
+	if path == "" {
+		return ""
+	}
+	if thread.Line != nil {
+		return fmt.Sprintf("%s:%d", path, *thread.Line)
+	}
+	if thread.StartLine != nil {
+		return fmt.Sprintf("%s:%d", path, *thread.StartLine)
+	}
+	return path
+}
+
+func (o *Orchestrator) postReviewFeedbackIssueCreated(ctx context.Context, issue domain.Issue, created domain.CreatedIssue, request repoops.ReviewFeedbackIssueRequest) {
+	body := fmt.Sprintf(
+		"Created paused follow-up issue %s for GitHub PR feedback from `%s`.",
+		createdIssueLink(created),
+		strings.TrimSpace(request.Reactor),
+	)
+	if strings.TrimSpace(request.Thread.CommentURL) != "" {
+		body += "\n- Review comment: " + strings.TrimSpace(request.Thread.CommentURL)
+	}
+	o.postIssueStatus(ctx, issue, issue.Identifier, nil, body)
+}
+
+func (o *Orchestrator) replyToReviewFeedbackThread(ctx context.Context, issue domain.Issue, created domain.CreatedIssue, request repoops.ReviewFeedbackIssueRequest) {
+	if o.runtime.Repo == nil {
+		return
+	}
+	body := fmt.Sprintf("Tracked this feedback as paused Linear issue %s from %s.", createdIssueLink(created), strings.TrimSpace(issue.Identifier))
+	if err := o.runtime.Repo.ReplyToReviewThread(ctx, request.Thread, body); err != nil {
+		o.logger.Warn("failed to reply to GitHub review thread after creating feedback issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "thread_id", request.Thread.ID, "error", err)
+	}
+}
+
+func createdIssueLink(issue domain.CreatedIssue) string {
+	identifier := strings.TrimSpace(issue.Identifier)
+	if strings.TrimSpace(issue.URL) != "" {
+		return fmt.Sprintf("%s (%s)", identifier, strings.TrimSpace(issue.URL))
+	}
+	return identifier
 }
 
 func (o *Orchestrator) startPendingReviewFollowUp(ctx context.Context, issue domain.Issue) (domain.Issue, bool) {
@@ -366,6 +550,52 @@ func queuedOrPendingReviewThread(metadata domain.ColinMetadata, threadID string)
 
 func hasQueuedReviewFollowUps(issue domain.Issue) bool {
 	return issue.ColinMetadata != nil && len(issue.ColinMetadata.QueuedReviewFollowUps) > 0
+}
+
+func reviewFeedbackIssueCommentIDs(metadata domain.ColinMetadata) map[string]bool {
+	out := make(map[string]bool, len(metadata.ReviewFeedbackIssueLinks))
+	for _, link := range metadata.ReviewFeedbackIssueLinks {
+		if commentID := strings.TrimSpace(link.CommentID); commentID != "" {
+			out[commentID] = true
+		}
+	}
+	return out
+}
+
+func reviewFeedbackIssueThreadIDs(metadata domain.ColinMetadata) map[string]bool {
+	out := make(map[string]bool, len(metadata.ReviewFeedbackIssueLinks))
+	for _, link := range metadata.ReviewFeedbackIssueLinks {
+		if threadID := strings.TrimSpace(link.ThreadID); threadID != "" {
+			out[threadID] = true
+		}
+	}
+	return out
+}
+
+func reviewFeedbackIssueLinked(metadata domain.ColinMetadata, commentID string) bool {
+	commentID = strings.TrimSpace(commentID)
+	if commentID == "" {
+		return false
+	}
+	for _, link := range metadata.ReviewFeedbackIssueLinks {
+		if strings.EqualFold(strings.TrimSpace(link.CommentID), commentID) {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewFeedbackIssueThreadLinked(metadata domain.ColinMetadata, threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	for _, link := range metadata.ReviewFeedbackIssueLinks {
+		if strings.EqualFold(strings.TrimSpace(link.ThreadID), threadID) {
+			return true
+		}
+	}
+	return false
 }
 
 func compareReviewReactionIDs(left string, right string) int {
