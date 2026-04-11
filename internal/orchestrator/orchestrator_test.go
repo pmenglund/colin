@@ -1102,6 +1102,77 @@ func TestHandleTickDispatchesWhenSlackSyncFails(t *testing.T) {
 	}
 }
 
+func TestHandleTickDoesNotDispatchReviewPendingReactionFollowUpAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	candidate := domain.Issue{
+		ID:         "issue-1",
+		Identifier: "COLIN-216",
+		Title:      "Reaction follow-up",
+		State:      "Review",
+	}
+	detailed := candidate
+	detailed.ColinMetadata = &domain.ColinMetadata{
+		PullRequestNumber:       11,
+		PullRequestURL:          "https://github.com/pmenglund/colin/pull/96",
+		PullRequestHeadRef:      "colin-216",
+		PullRequestBaseRef:      "main",
+		PendingReviewThreadID:   "thread-1",
+		PendingReviewCommentID:  "3035904923",
+		PendingReviewReactionID: "377554834",
+		PendingReviewReactor:    "pmenglund",
+	}
+	tracker := &trackerStub{
+		candidateIssues: []domain.Issue{candidate},
+		issuesByID:      []domain.Issue{detailed},
+	}
+	runner := &runnerStub{invoked: make(chan struct{})}
+	orch := &Orchestrator{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		eventCh: make(chan any, 4),
+		runtime: Runtime{
+			Tracker: tracker,
+			Runner:  runner,
+			Config: domain.ServiceConfig{
+				Tracker: domain.TrackerConfig{
+					Kind:           "linear",
+					APIKey:         "token",
+					ProjectSlug:    "project-1",
+					ActiveStates:   []string{"Todo"},
+					TerminalStates: []string{"Done"},
+				},
+				Repo:  domain.RepoConfig{PublishStates: []string{"Review"}},
+				Agent: domain.AgentConfig{MaxConcurrentAgents: 1},
+				Codex: domain.CodexConfig{Command: "codex app-server"},
+			},
+		},
+		running:           map[string]*runningEntry{},
+		claimed:           map[string]struct{}{},
+		retrying:          map[string]*retryState{},
+		reviewSync:        map[string]*reviewSyncState{},
+		completed:         map[string]string{},
+		issueStates:       map[string]int{},
+		pausedIssueStates: map[string]domain.PausedStateSummary{},
+	}
+
+	orch.handleTick(context.Background())
+
+	select {
+	case <-runner.invoked:
+		t.Fatal("runner was invoked for Review issue with pending reaction follow-up")
+	default:
+	}
+	if runner.runs != 0 {
+		t.Fatalf("runner runs = %d, want 0", runner.runs)
+	}
+	if got := len(orch.running); got != 0 {
+		t.Fatalf("running entries = %d, want 0", got)
+	}
+	if got := tracker.fetchIssueByIDCalls; got != 1 {
+		t.Fatalf("FetchIssueByID calls = %d, want 1", got)
+	}
+}
+
 func TestShouldDispatchRejectsRefine(t *testing.T) {
 	t.Parallel()
 
@@ -1123,6 +1194,48 @@ func TestShouldDispatchRejectsRefine(t *testing.T) {
 		State:      "Refine",
 	}) {
 		t.Fatal("shouldDispatch() = true, want false")
+	}
+}
+
+func TestShouldDispatchRejectsPublishStatePendingReactionFollowUp(t *testing.T) {
+	t.Parallel()
+
+	orch := &Orchestrator{
+		logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		runtime: Runtime{Config: domain.ServiceConfig{
+			Tracker: domain.TrackerConfig{ActiveStates: []string{"Todo"}},
+			Repo:    domain.RepoConfig{PublishStates: []string{"Review"}},
+			Agent:   domain.AgentConfig{MaxConcurrentAgents: 1},
+		}},
+		running:   map[string]*runningEntry{},
+		claimed:   map[string]struct{}{},
+		retrying:  map[string]*retryState{},
+		completed: map[string]string{},
+	}
+	metadata := &domain.ColinMetadata{
+		PendingReviewThreadID:   "thread-1",
+		PendingReviewCommentID:  "3035904923",
+		PendingReviewReactionID: "377554834",
+		PendingReviewReactor:    "pmenglund",
+	}
+
+	if orch.shouldDispatch(domain.Issue{
+		ID:            "1",
+		Identifier:    "ABC-1",
+		Title:         "Review pending reaction",
+		State:         "Review",
+		ColinMetadata: metadata,
+	}) {
+		t.Fatal("shouldDispatch() = true, want false for Review pending reaction follow-up")
+	}
+	if !orch.shouldDispatch(domain.Issue{
+		ID:            "2",
+		Identifier:    "ABC-2",
+		Title:         "Todo pending reaction",
+		State:         "Todo",
+		ColinMetadata: metadata,
+	}) {
+		t.Fatal("shouldDispatch() = false, want true for Todo pending reaction follow-up")
 	}
 }
 
