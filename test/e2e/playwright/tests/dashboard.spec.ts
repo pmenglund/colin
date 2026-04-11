@@ -149,6 +149,54 @@ test("dashboard codex output loads once and streams new entries without flicker"
   await expect.poll(() => fragmentRequests).toBe(1);
 });
 
+test("issue pages are navigable from dashboard links", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("state-issues-trigger-review").click();
+
+  const reviewIssue = page.getByTestId("state-issue-review-COLIN-24");
+  await expect(reviewIssue).toBeVisible();
+  await reviewIssue.locator(".state-issue-title-link").click();
+
+  await expect(page).toHaveURL(/\/linear\/issues\/issue-demo-5\/metadata$/);
+  await expect(page.getByTestId("issue-metadata-panel")).toBeVisible();
+
+  await page.getByRole("link", { name: "ExecPlan" }).click();
+  await expect(page).toHaveURL(/\/linear\/issues\/issue-demo-5\/exec-plan$/);
+  await expect(page.getByTestId("issue-exec-plan-panel")).toBeVisible();
+  const body = page.getByTestId("issue-exec-plan-body");
+  await expect(body.locator(".markdown-output")).toBeVisible();
+  await expect(body.locator("h1")).toHaveText("Demo ExecPlan");
+});
+
+test("setup funnel page renders webhook readiness", async ({ page }) => {
+  await page.goto("/setup/funnel");
+
+  const urls = page.getByTestId("funnel-urls");
+  const checks = page.getByTestId("funnel-checks");
+  await expect(urls).toBeVisible();
+  await expect(checks).toBeVisible();
+  await expect(urls).toContainText("https://colin-demo.tail.example.ts.net:8443/webhooks/linear");
+  await expect(urls).toContainText("https://colin-demo.tail.example.ts.net:8443/webhooks/github");
+  await expect(checks).toContainText("Funnel proxies Colin at `/webhooks`");
+});
+
+test("dashboard remains usable on mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  await expect(page.getByTestId("dashboard-root")).toBeVisible();
+  await expect(page.getByTestId("refresh-button")).toBeVisible();
+  await page.getByTestId("state-issues-trigger-review").click();
+  await expect(page.getByTestId("state-issues-review")).toBeVisible();
+
+  const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(horizontalOverflow).toBeLessThanOrEqual(2);
+
+  const screenshotPath = join("test-results", "evidence", "dashboard-mobile.png");
+  mkdirSync(dirname(screenshotPath), { recursive: true });
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+});
+
 test("paused dashboard still lazy-loads codex output history and resumes streaming later", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("refresh-button").click();

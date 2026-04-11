@@ -288,13 +288,19 @@ Run the normal Go test suite with:
 task test
 ```
 
-End-to-end assets live under `test/`: Playwright UI tests are in `test/e2e/playwright`, the local Playwright server helper is in `test/testserver`, and the real Linear/GitHub workflow fixture is in `test/real`. Run the browser tests with:
+End-to-end assets live under `test/`: Playwright UI tests are in `test/e2e/playwright`, the local Playwright server helper is in `test/testserver`, and the real Linear/GitHub workflow fixture is in `test/real`. Before cutting a release, run the expanded e2e regression suite with:
+
+```bash
+task test-e2e
+```
+
+That command runs the deterministic browser regression suite and the credential-backed real Linear/GitHub e2e test. The real test skips cleanly when `LINEAR_API_KEY` is not exported, so `task test-e2e` remains safe to run on a local machine without live Linear credentials. To run only the local browser suite:
 
 ```bash
 task test-e2e-ui
 ```
 
-The real external-service e2e test requires live credentials and local tools, so it stays separate:
+To run only the real external-service e2e test with live credentials and local tools:
 
 ```bash
 task test-e2e-real

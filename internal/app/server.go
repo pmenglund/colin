@@ -898,23 +898,7 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 			Title:      entry.Title,
 			State:      entry.State,
 			URL:        entry.URL,
-			ExecPlan: &domain.ExecPlan{
-				AttachmentID: "attachment-demo-exec-plan",
-				URL:          domain.ColinExecPlanPath(entry.IssueID),
-				Body: strings.Join([]string{
-					"# Demo ExecPlan",
-					"",
-					"## Progress",
-					"",
-					"- [x] Render stored markdown as HTML.",
-					"- [ ] Capture screenshot evidence.",
-					"",
-					"| Area | Status |",
-					"| --- | --- |",
-					"| UI | Rendered markdown |",
-				}, "\n"),
-				UpdatedAt: ptrTime(snapshot.GeneratedAt),
-			},
+			ExecPlan:   demoExecPlan(entry.IssueID, snapshot.GeneratedAt),
 			ColinMetadata: &domain.ColinMetadata{
 				LastRunType: "coding",
 				LastOutcome: "ready_for_review",
@@ -935,6 +919,7 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 				Title:      issue.Title,
 				State:      state,
 				URL:        &issueURL,
+				ExecPlan:   demoExecPlan(issue.ID, snapshot.GeneratedAt),
 				ColinMetadata: &domain.ColinMetadata{
 					LastRunType: "coding",
 					LastOutcome: "ready_for_review",
@@ -944,6 +929,26 @@ func (s *demoSnapshotSource) Issue(ctx context.Context, issueID string) (domain.
 		}
 	}
 	return domain.Issue{}, errors.New("issue not found")
+}
+
+func demoExecPlan(issueID string, generatedAt time.Time) *domain.ExecPlan {
+	return &domain.ExecPlan{
+		AttachmentID: "attachment-demo-exec-plan",
+		URL:          domain.ColinExecPlanPath(issueID),
+		Body: strings.Join([]string{
+			"# Demo ExecPlan",
+			"",
+			"## Progress",
+			"",
+			"- [x] Render stored markdown as HTML.",
+			"- [ ] Capture screenshot evidence.",
+			"",
+			"| Area | Status |",
+			"| --- | --- |",
+			"| UI | Rendered markdown |",
+		}, "\n"),
+		UpdatedAt: ptrTime(generatedAt),
+	}
 }
 
 func (s *demoSnapshotSource) FunnelSetup(context.Context) (domain.FunnelSetupStatus, error) {
