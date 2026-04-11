@@ -23,4 +23,4 @@
 ## Quality gates before finishing any task
 - gofmt on changed Go files
 - go test ./...
-- e2e Playwright tests pass
+- `task test-e2e-ui` passes from `test/e2e/playwright`

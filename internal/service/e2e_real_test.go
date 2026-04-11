@@ -942,7 +942,7 @@ func realE2EWorkflowPath(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "e2e", "real", "WORKFLOW.md")
+	return filepath.Join(filepath.Dir(file), "..", "..", "test", "real", "WORKFLOW.md")
 }
 
 func underspecifiedIssueDescription(runID string) string {

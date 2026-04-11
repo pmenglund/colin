@@ -267,6 +267,26 @@ Once those webhooks are configured, Colin acknowledges `POST` requests to `/webh
 
 Linear metadata attachments point at `server.ui_url` when configured. If that is unset but Tailscale Serve proxies Colin from `/`, Colin uses the preferred Tailscale Serve URL for metadata links, favoring HTTPS when available; otherwise it falls back to the local loopback dashboard URL.
 
+## Development
+
+Run the normal Go test suite with:
+
+```bash
+task test
+```
+
+End-to-end assets live under `test/`: Playwright UI tests are in `test/e2e/playwright`, the local Playwright server helper is in `test/testserver`, and the real Linear/GitHub workflow fixture is in `test/real`. Run the browser tests with:
+
+```bash
+task test-e2e-ui
+```
+
+The real external-service e2e test requires live credentials and local tools, so it stays separate:
+
+```bash
+task test-e2e-real
+```
+
 ## Releasing
 
 Colin releases are built with GoReleaser and published from GitHub Actions when you push a version tag that starts with `v`, for example `v0.1.0`.

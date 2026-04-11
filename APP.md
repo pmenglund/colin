@@ -65,6 +65,9 @@ The orchestrator owns claims, running sessions, retries, and live telemetry.
 - `internal/notify/` - external issue-summary delivery interfaces and implementations such as Slack
 - `internal/repoops/` - publish and merge automation via git plus the configured repository backend client
 - `internal/repohost/` - repository backend abstraction and the current GitHub adapter
+- `test/e2e/playwright/` - Playwright browser tests for the embedded dashboard
+- `test/testserver/` - local helper server used by Playwright e2e tests
+- `test/real/` - fixtures for real external-service e2e tests
 
 ## Architecture Rules
 
