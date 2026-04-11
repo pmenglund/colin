@@ -624,9 +624,6 @@ func (s *Service) hydrateLinearWebhookEvent(ctx context.Context, runtime orchest
 	if runtime.Tracker == nil {
 		return event, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(event.ResourceType), "AgentSessionEvent") {
-		return event, nil
-	}
 	if strings.TrimSpace(event.IssueID) == "" || strings.TrimSpace(event.ProjectID) != "" {
 		return event, nil
 	}
@@ -636,7 +633,7 @@ func (s *Service) hydrateLinearWebhookEvent(ctx context.Context, runtime orchest
 
 	issue, err := runtime.Tracker.FetchIssueByID(lookupCtx, event.IssueID)
 	if err != nil {
-		s.logger.Warn("failed to load Linear issue for AgentSessionEvent webhook", "issue_id", event.IssueID, "error", err)
+		s.logger.Warn("failed to load Linear issue for project-scoped webhook", "issue_id", event.IssueID, "resource_type", event.ResourceType, "error", err)
 		return event, nil
 	}
 	if strings.TrimSpace(issue.ID) == "" {
