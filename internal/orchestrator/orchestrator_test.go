@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/pmenglund/colin/internal/notify"
 	"github.com/pmenglund/colin/internal/repohost/builtin"
 	"github.com/pmenglund/colin/internal/userworkflow"
+	"github.com/pmenglund/colin/internal/workspace"
 )
 
 func init() {
@@ -279,6 +281,54 @@ func TestRequestShutdownDrainLatchesImmediately(t *testing.T) {
 
 func (s *trackerStub) CurrentRateLimits() domain.RateLimitSnapshot {
 	return s.rateLimits
+}
+
+func TestStartupTerminalCleanupUsesCheckoutPathWorkspaceLayout(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	newPath := filepath.Join(root, "project", "issue-uuid")
+	oldPath := filepath.Join(root, "ABC-123")
+	if err := os.MkdirAll(newPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(oldPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{Root: root},
+		Tracker:   domain.TrackerConfig{TerminalStates: []string{"Done"}},
+		Targets: []domain.TargetConfig{{
+			Key:          "project-repo",
+			ProjectSlug:  "project",
+			RepoURL:      "git@example.com:acme/repo.git",
+			BaseRef:      "main",
+			CheckoutPath: "/tmp/source",
+		}},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := &trackerStub{issuesByState: []domain.Issue{{
+		ID:          "issue-uuid",
+		Identifier:  "ABC-123",
+		ProjectSlug: "project",
+		State:       "Done",
+	}}}
+	orch := New(Runtime{
+		Config:    cfg,
+		Tracker:   tracker,
+		Workspace: workspace.NewManager(cfg, logger),
+	}, logger)
+
+	if err := orch.StartupTerminalCleanup(context.Background()); err != nil {
+		t.Fatalf("StartupTerminalCleanup() error = %v", err)
+	}
+	if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+		t.Fatalf("new checkout workspace path should be removed, err = %v", err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("old identifier path should be untouched, err = %v", err)
+	}
 }
 
 func TestSyncIssueCodexReviewLabelAddsDesiredAndRemovesOthers(t *testing.T) {

@@ -47,8 +47,9 @@ targets:
     merge_method: squash
     branch_template: colin/{{.issue.title}}
     codex_pr_reviews_enabled: true
-    # Optional: set checkout_path to an existing checkout if you do not want Colin
-    # to manage a shared source checkout under workspace.repo_cache_root.
+    # Optional: set checkout_path to an existing source checkout instead of
+    # using workspace.repo_cache_root. Colin still works in a managed worktree
+    # under <workspace.root>/<project_slug>/<linear_issue_id>.
     # checkout_path: /path/to/existing/checkout
 
 hooks:

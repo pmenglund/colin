@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -184,19 +185,103 @@ func TestEnsureUsesConfiguredCheckoutPathForWorktrees(t *testing.T) {
 	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	ws, err := manager.Ensure(context.Background(), domain.Issue{
+		ID:          "issue-uuid",
 		Identifier:  "ABC-123",
 		ProjectSlug: "project",
 	})
 	if err != nil {
 		t.Fatalf("Ensure() error = %v", err)
 	}
+	wantPath := filepath.Join(root, "project", "issue-uuid")
+	if ws.Path != wantPath {
+		t.Fatalf("ws.Path = %q, want %q", ws.Path, wantPath)
+	}
 	if _, err := os.Stat(repoCacheRoot); !os.IsNotExist(err) {
 		t.Fatalf("repo cache root should not exist when checkout_path is used, err = %v", err)
 	}
 	wsPath := realPath(t, ws.Path)
 	output := mustRunOutput(t, checkoutPath, "git", "worktree", "list", "--porcelain")
-	if !strings.Contains(output, "worktree "+wsPath) {
-		t.Fatalf("worktree list = %q, want workspace from checkout_path", output)
+	if got := strings.Count(output, "worktree "+wsPath); got != 1 {
+		t.Fatalf("worktree list contains workspace %d times, want 1\n%s", got, output)
+	}
+
+	reused, err := manager.Ensure(context.Background(), domain.Issue{
+		ID:          "issue-uuid",
+		Identifier:  "ABC-123",
+		ProjectSlug: "project",
+	})
+	if err != nil {
+		t.Fatalf("Ensure() reuse error = %v", err)
+	}
+	if reused.Path != ws.Path {
+		t.Fatalf("reused.Path = %q, want %q", reused.Path, ws.Path)
+	}
+	output = mustRunOutput(t, checkoutPath, "git", "worktree", "list", "--porcelain")
+	if got := strings.Count(output, "worktree "+wsPath); got != 1 {
+		t.Fatalf("worktree list contains workspace %d times after reuse, want 1\n%s", got, output)
+	}
+}
+
+func TestEnsureRejectsStandaloneCloneAtCheckoutPathWorkspace(t *testing.T) {
+	t.Parallel()
+
+	origin := newTestOrigin(t)
+	tempDir := t.TempDir()
+	checkoutPath := filepath.Join(tempDir, "checkout")
+	mustRun(t, "", "git", "clone", origin, checkoutPath)
+	root := filepath.Join(tempDir, "workspaces")
+	workspacePath := filepath.Join(root, "project", "issue-uuid")
+	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "", "git", "clone", origin, workspacePath)
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{Root: root},
+		Repo: domain.RepoConfig{
+			RemoteName:     "origin",
+			BranchTemplate: "colin/{{.issue.identifier}}",
+		},
+		Targets: []domain.TargetConfig{{
+			Key:          "project-repo",
+			ProjectSlug:  "project",
+			RepoURL:      origin,
+			BaseRef:      "main",
+			CheckoutPath: checkoutPath,
+		}},
+	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	_, err := manager.Ensure(context.Background(), domain.Issue{
+		ID:          "issue-uuid",
+		Identifier:  "ABC-123",
+		ProjectSlug: "project",
+	})
+	if !errors.Is(err, ErrWorkspacePathExists) {
+		t.Fatalf("Ensure() error = %v, want %v", err, ErrWorkspacePathExists)
+	}
+}
+
+func TestEnsureRequiresIssueIDForCheckoutPathWorkspace(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{Root: t.TempDir()},
+		Targets: []domain.TargetConfig{{
+			Key:          "project-repo",
+			ProjectSlug:  "project",
+			RepoURL:      "git@example.com:acme/repo.git",
+			BaseRef:      "main",
+			CheckoutPath: "/tmp/source",
+		}},
+	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	_, err := manager.Ensure(context.Background(), domain.Issue{
+		Identifier:  "ABC-123",
+		ProjectSlug: "project",
+	})
+	if !errors.Is(err, ErrMissingIssueID) {
+		t.Fatalf("Ensure() error = %v, want %v", err, ErrMissingIssueID)
 	}
 }
 

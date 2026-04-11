@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/pmenglund/colin/internal/domain"
-	"github.com/pmenglund/colin/internal/workspace"
 )
 
 // Snapshot returns a read-only summary of current runtime state for logs and future status surfaces.
@@ -231,8 +230,10 @@ func (o *Orchestrator) StartupTerminalCleanup(ctx context.Context) error {
 		return fmt.Errorf("startup terminal cleanup: %w", err)
 	}
 	for _, issue := range issues {
-		ws := domain.Workspace{
-			Path: fmt.Sprintf("%s/%s", o.runtime.Config.Workspace.Root, workspace.SanitizeWorkspaceKey(issue.Identifier)),
+		ws, _, err := o.runtime.Workspace.WorkspaceForIssue(issue)
+		if err != nil {
+			o.logger.Warn("terminal workspace path resolution failed", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+			continue
 		}
 		if err := o.runtime.Workspace.Remove(ctx, ws.Path); err != nil {
 			o.logger.Warn("terminal workspace cleanup failed", "issue_identifier", issue.Identifier, "error", err)

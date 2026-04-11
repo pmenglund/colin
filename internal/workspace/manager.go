@@ -20,6 +20,7 @@ import (
 var (
 	ErrWorkspaceOutsideRoot = errors.New("invalid_workspace_cwd")
 	ErrWorkspacePathExists  = errors.New("workspace_path_not_directory")
+	ErrMissingIssueID       = errors.New("missing_issue_id")
 )
 
 var invalidWorkspaceChar = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -80,45 +81,35 @@ func SanitizeBranchName(value string) string {
 
 // Ensure creates or reuses the workspace for an issue and runs first-creation setup.
 func (m *Manager) Ensure(ctx context.Context, issue domain.Issue) (domain.Workspace, error) {
-	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	workspace, target, err := m.WorkspaceForIssue(issue)
 	if err != nil {
-		return domain.Workspace{}, err
-	}
-	key := SanitizeWorkspaceKey(issue.Identifier)
-	path := filepath.Join(m.root, workspaceRelativePath(m.cfg, target, key))
-	if err := ensureWithinRoot(m.root, path); err != nil {
 		return domain.Workspace{}, err
 	}
 	if err := os.MkdirAll(m.root, 0o755); err != nil {
 		return domain.Workspace{}, err
 	}
 
-	info, err := os.Stat(path)
+	info, err := os.Stat(workspace.Path)
 	createdNow := false
 	switch {
 	case err == nil && !info.IsDir():
 		return domain.Workspace{}, ErrWorkspacePathExists
 	case err == nil:
 	case os.IsNotExist(err):
-		if err := os.MkdirAll(path, 0o755); err != nil {
+		if err := os.MkdirAll(workspace.Path, 0o755); err != nil {
 			return domain.Workspace{}, err
 		}
 		createdNow = true
 	default:
 		return domain.Workspace{}, err
 	}
-
-	workspace := domain.Workspace{
-		Path:         path,
-		WorkspaceKey: key,
-		CreatedNow:   createdNow,
-	}
+	workspace.CreatedNow = createdNow
 
 	if strings.TrimSpace(target.RepoURL) != "" {
 		if err := m.populateGitWorkspace(ctx, workspace, issue, target); err != nil {
 			if createdNow {
-				if cleanupErr := m.cleanupNewWorkspaceAfterError(ctx, path); cleanupErr != nil {
-					m.logger.Warn("failed to clean up newly created workspace after git setup error", "workspace_path", path, "error", cleanupErr)
+				if cleanupErr := m.cleanupNewWorkspaceAfterError(ctx, workspace.Path); cleanupErr != nil {
+					m.logger.Warn("failed to clean up newly created workspace after git setup error", "workspace_path", workspace.Path, "error", cleanupErr)
 				}
 			}
 			return domain.Workspace{}, err
@@ -127,14 +118,34 @@ func (m *Manager) Ensure(ctx context.Context, issue domain.Issue) (domain.Worksp
 
 	if createdNow && strings.TrimSpace(m.cfg.Hooks.AfterCreate) != "" {
 		if err := m.runHook(ctx, "after_create", m.cfg.Hooks.AfterCreate, workspace.Path); err != nil {
-			if cleanupErr := m.cleanupNewWorkspaceAfterError(ctx, path); cleanupErr != nil {
-				m.logger.Warn("failed to clean up newly created workspace after hook error", "workspace_path", path, "error", cleanupErr)
+			if cleanupErr := m.cleanupNewWorkspaceAfterError(ctx, workspace.Path); cleanupErr != nil {
+				m.logger.Warn("failed to clean up newly created workspace after hook error", "workspace_path", workspace.Path, "error", cleanupErr)
 			}
 			return domain.Workspace{}, err
 		}
 	}
 
 	return workspace, nil
+}
+
+// WorkspaceForIssue returns the managed workspace path for an issue without creating it.
+func (m *Manager) WorkspaceForIssue(issue domain.Issue) (domain.Workspace, domain.TargetConfig, error) {
+	target, err := domain.ResolveTargetForIssue(m.cfg, issue)
+	if err != nil {
+		return domain.Workspace{}, domain.TargetConfig{}, err
+	}
+	key, relative, err := workspaceKeyAndRelativePath(m.cfg, target, issue)
+	if err != nil {
+		return domain.Workspace{}, domain.TargetConfig{}, err
+	}
+	path := filepath.Join(m.root, relative)
+	if err := ensureWithinRoot(m.root, path); err != nil {
+		return domain.Workspace{}, domain.TargetConfig{}, err
+	}
+	return domain.Workspace{
+		Path:         path,
+		WorkspaceKey: key,
+	}, target, nil
 }
 
 // RunBeforeRun executes the pre-run hook if configured.
@@ -198,12 +209,34 @@ func workspaceRelativePath(cfg domain.ServiceConfig, target domain.TargetConfig,
 	return filepath.Join(SanitizeWorkspaceKey(target.Key), issueKey)
 }
 
+func workspaceKeyAndRelativePath(cfg domain.ServiceConfig, target domain.TargetConfig, issue domain.Issue) (string, string, error) {
+	if strings.TrimSpace(target.CheckoutPath) != "" {
+		issueKey := SanitizeWorkspaceKey(issue.ID)
+		if strings.TrimSpace(issueKey) == "" {
+			return "", "", ErrMissingIssueID
+		}
+		projectKey := SanitizeWorkspaceKey(target.ProjectSlug)
+		if strings.TrimSpace(projectKey) == "" {
+			projectKey = SanitizeWorkspaceKey(target.Key)
+		}
+		if strings.TrimSpace(projectKey) == "" {
+			projectKey = "project"
+		}
+		return issueKey, filepath.Join(projectKey, issueKey), nil
+	}
+	key := SanitizeWorkspaceKey(issue.Identifier)
+	return key, workspaceRelativePath(cfg, target, key), nil
+}
+
 func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Workspace, issue domain.Issue, target domain.TargetConfig) error {
 	branch, err := branchName(issue, target.EffectiveBranchTemplate(m.cfg.Repo.BranchTemplate))
 	if err != nil {
 		return err
 	}
 	remoteName := target.EffectiveRemoteName(m.cfg.Repo.RemoteName)
+	if strings.TrimSpace(target.CheckoutPath) != "" {
+		return m.populateCheckoutPathWorkspace(ctx, workspace.Path, target, remoteName, branch)
+	}
 	if isGitCheckout(ctx, workspace.Path) {
 		if err := runCommand(ctx, workspace.Path, 2*time.Minute, "git", "fetch", remoteName, "--prune"); err != nil {
 			return fmt.Errorf("git fetch: %w", err)
@@ -227,6 +260,35 @@ func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Wor
 		return err
 	}
 	if err := addWorktree(ctx, source, workspace.Path, remoteName, target.BaseRef, branch); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) populateCheckoutPathWorkspace(ctx context.Context, workspacePath string, target domain.TargetConfig, remoteName, branch string) error {
+	if isGitCheckout(ctx, workspacePath) {
+		if !isLinkedWorktree(workspacePath) {
+			return ErrWorkspacePathExists
+		}
+		if _, err := m.prepareSharedCheckout(ctx, target); err != nil {
+			return err
+		}
+		return prepareBranch(ctx, workspacePath, remoteName, target.BaseRef, branch, false)
+	}
+	if empty, err := isEmptyDir(workspacePath); err != nil {
+		return err
+	} else if !empty {
+		return ErrWorkspacePathExists
+	}
+
+	m.gitSetup.Lock()
+	defer m.gitSetup.Unlock()
+
+	source, err := m.prepareSharedCheckout(ctx, target)
+	if err != nil {
+		return err
+	}
+	if err := addWorktree(ctx, source, workspacePath, remoteName, target.BaseRef, branch); err != nil {
 		return err
 	}
 	return nil
