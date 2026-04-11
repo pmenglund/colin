@@ -81,10 +81,15 @@ func RenderPrompt(def domain.WorkflowDefinition, issue domain.Issue, attempt *in
 	if text == "" {
 		text = "You are working on an issue from Linear."
 	}
-	return RenderTemplate(text, map[string]any{
+	return RenderTemplate(text, TemplatePayload(issue, attempt))
+}
+
+// TemplatePayload returns the standard workflow template payload.
+func TemplatePayload(issue domain.Issue, attempt *int) map[string]any {
+	return map[string]any{
 		"issue":   issueToMap(issue),
 		"attempt": attempt,
-	})
+	}
 }
 
 // RenderTemplate renders arbitrary workflow-configured text with strict missing-key behavior.

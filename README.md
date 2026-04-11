@@ -163,6 +163,8 @@ At the review step Colin runs live checks when it has the required credentials:
 
 Once the review passes, the wizard writes `WORKFLOW.md`.
 
+The Markdown body after the YAML front matter is the primary coding prompt Colin sends to Codex for the first coding turn. The optional `prompts:` YAML section controls Colin's other prompt parts, including the empty-body coding fallback, continuation turns, ExecPlan decision and generation turns, ExecPlan tracking instructions, and merge-conflict recovery turns. Each prompt field is a Go `text/template` rendered with the same `.issue.*` data shape as the primary coding prompt, plus specialized maps such as `.outcomes`, `.exec_plan_decisions`, `.remaining_progress_tasks`, and `.merge`; deleting any prompt key restores Colin's built-in default for that part.
+
 For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, `base_ref`, and repository-specific options such as `remote_name`, `merge_method`, `branch_template`, `pr_template`, and `codex_pr_reviews_enabled`. Each target can also override the Codex security policy for that repository with a nested `codex:` object containing `approval_policy`, `thread_sandbox`, and `turn_sandbox_policy`; unspecified fields inherit from the top-level `codex:` defaults. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
 
 ```yaml

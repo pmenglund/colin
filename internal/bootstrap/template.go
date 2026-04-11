@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"github.com/pmenglund/colin/internal/prompts"
 )
 
 const defaultWorkflowTemplate = `---
@@ -86,6 +88,8 @@ codex:
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
+
+{{.PromptYAML}}
 
 server:
   port: {{.ServerPort}}
@@ -192,8 +196,15 @@ func RenderWorkflow(answers Answers) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse workflow template: %w", err)
 	}
+	data := struct {
+		Answers
+		PromptYAML string
+	}{
+		Answers:    answers,
+		PromptYAML: prompts.WorkflowYAML(prompts.Defaults()),
+	}
 	var buf bytes.Buffer
-	if err := tpl.Execute(&buf, answers); err != nil {
+	if err := tpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("render workflow template: %w", err)
 	}
 	return strings.TrimSpace(buf.String()) + "\n", nil

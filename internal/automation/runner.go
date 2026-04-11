@@ -12,6 +12,7 @@ import (
 	"github.com/pmenglund/colin/internal/config"
 	"github.com/pmenglund/colin/internal/domain"
 	"github.com/pmenglund/colin/internal/execplan"
+	"github.com/pmenglund/colin/internal/prompts"
 	"github.com/pmenglund/colin/internal/repoops"
 	"github.com/pmenglund/colin/internal/tracker"
 	"github.com/pmenglund/colin/internal/userworkflow"
@@ -80,6 +81,7 @@ func NewRunner(cfg domain.ServiceConfig, def domain.WorkflowDefinition, trackerC
 }
 
 func newRunner(cfg domain.ServiceConfig, def domain.WorkflowDefinition, trackerClient tracker.Client, manager *workspace.Manager, repoManager *repoops.Manager, logger *slog.Logger) *Runner {
+	cfg.Prompts = prompts.WithDefaults(cfg.Prompts)
 	return &Runner{
 		cfg:        cfg,
 		workflow:   def,
@@ -325,15 +327,21 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 	turnsUsed := 0
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
 		turnsUsed = turn
-		prompt, err := workflow.RenderPrompt(r.workflow, current, attempt)
+		prompt, err := r.renderCodingPrompt(current, attempt)
 		if err != nil {
 			return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
 		}
 		if turn == 1 && r.cfg.Agent.CreateExecPlan {
-			prompt = injectExecPlanPrompt(prompt, current.ExecPlan, execPlanCopy, execPlanProgress)
+			prompt, err = r.injectExecPlanPrompt(prompt, current, current.ExecPlan, execPlanCopy, execPlanProgress)
+			if err != nil {
+				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
+			}
 		}
 		if turn > 1 {
-			prompt = buildCodingContinuationPrompt(current.Identifier, execPlanCopy, execPlanProgress)
+			prompt, err = r.buildCodingContinuationPrompt(current, execPlanCopy, execPlanProgress)
+			if err != nil {
+				return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Summary: client.FinalSummary(), Err: err}
+			}
 		}
 		r.logger.Info(
 			"runner turn starting",
@@ -873,9 +881,15 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 
 func (r *Runner) runMergeRecoveryTurns(ctx context.Context, client *codex.Client, issue domain.Issue, workspacePath string, result repoops.Result, mergeErr error, emit func(Event)) (string, bool, error) {
 	for turn := 1; turn <= r.cfg.Agent.MaxTurns; turn++ {
-		prompt := buildMergeRecoveryPrompt(issue, result, mergeErr)
+		prompt, err := r.buildMergeRecoveryPrompt(issue, result, mergeErr)
+		if err != nil {
+			return "", false, err
+		}
 		if turn > 1 {
-			prompt = buildMergeRecoveryContinuationPrompt(issue, result)
+			prompt, err = r.buildMergeRecoveryContinuationPrompt(issue, result)
+			if err != nil {
+				return "", false, err
+			}
 		}
 		r.logger.Info(
 			"merge recovery turn starting",
@@ -1626,56 +1640,18 @@ func buildMergeRetrySummary(result repoops.Result, err error, recoverySummary st
 	}, result.Branch, result.BaseRef, reason, recoverySummary)
 }
 
-func buildMergeRecoveryPrompt(issue domain.Issue, result repoops.Result, mergeErr error) string {
-	var b strings.Builder
-	b.WriteString("Repair the merge conflict for the Linear issue below so Colin can retry the GitHub merge.\n\n")
-	b.WriteString("You are working in the issue branch workspace that GitHub reported as not mergeable.\n")
-	b.WriteString("Fetch the base branch, merge it into the current branch, resolve any conflicts without dropping valid changes from either side, run focused verification, and leave the branch ready for Colin to publish and retry the merge.\n\n")
-	b.WriteString("Return a short answer.\n")
-	b.WriteString("The first line must be exactly:\n")
-	b.WriteString(outcomeReadyForMergeRetry + "\n\n")
-	b.WriteString("Only return that line when the branch is ready for Colin to retry the merge.\n")
-	b.WriteString("After the first line, include a brief 1-3 sentence summary of what you resolved and any verification you ran.\n\n")
-	b.WriteString("Issue context:\n")
-	b.WriteString(fmt.Sprintf("- Identifier: %s\n", issue.Identifier))
-	b.WriteString(fmt.Sprintf("- Title: %s\n", issue.Title))
-	b.WriteString(fmt.Sprintf("- State: %s\n", issue.State))
-	if result.PRNumber > 0 {
-		b.WriteString(fmt.Sprintf("- PR: #%d\n", result.PRNumber))
-	}
-	if strings.TrimSpace(result.PRURL) != "" {
-		b.WriteString(fmt.Sprintf("- PR URL: %s\n", result.PRURL))
-	}
-	if strings.TrimSpace(result.Branch) != "" {
-		b.WriteString(fmt.Sprintf("- Branch: %s\n", result.Branch))
-	}
-	if strings.TrimSpace(result.BaseRef) != "" {
-		b.WriteString(fmt.Sprintf("- Base ref: %s\n", result.BaseRef))
-	}
-	if mergeErr != nil {
-		b.WriteString("\nOriginal merge error:\n\n")
-		b.WriteString(strings.TrimSpace(mergeErr.Error()))
-		b.WriteString("\n")
-	}
-	b.WriteString("\nRequirements:\n")
-	b.WriteString("- Merge the latest base branch into the current branch inside this workspace.\n")
-	b.WriteString("- Resolve conflicts fully; do not leave conflict markers or an unfinished merge.\n")
-	b.WriteString("- Preserve both the branch changes and the relevant base-branch updates.\n")
-	b.WriteString("- Run the most relevant focused checks for the conflicted files.\n")
-	b.WriteString("- Do not move the Linear issue or open/close PRs yourself; Colin will handle publish and merge retry after your turn.\n")
-	return strings.TrimSpace(b.String())
+func (r *Runner) buildMergeRecoveryPrompt(issue domain.Issue, result repoops.Result, mergeErr error) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.MergeRecovery, issue, nil, func(payload map[string]any) error {
+		payload["merge"] = mergePayload(result, mergeErr)
+		return nil
+	})
 }
 
-func buildMergeRecoveryContinuationPrompt(issue domain.Issue, result repoops.Result) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Continue resolving the merge conflict for %s.", issue.Identifier))
-	if strings.TrimSpace(result.BaseRef) != "" {
-		b.WriteString(fmt.Sprintf(" The goal is to leave the current branch ready to merge %s.", result.BaseRef))
-	}
-	b.WriteString("\n\nReturn `")
-	b.WriteString(outcomeReadyForMergeRetry)
-	b.WriteString("` only when the branch is fully ready for Colin to retry the merge.")
-	return strings.TrimSpace(b.String())
+func (r *Runner) buildMergeRecoveryContinuationPrompt(issue domain.Issue, result repoops.Result) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.MergeRecoveryContinuation, issue, nil, func(payload map[string]any) error {
+		payload["merge"] = mergePayload(result, nil)
+		return nil
+	})
 }
 
 func buildMergeRecoveryFailureSummary(result repoops.Result, reviewState string, mergeErr error, reason string, recoveryOutput string) string {
@@ -1975,7 +1951,10 @@ func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *codex.Clien
 		return r.persistExecPlanDecision(ctx, issue, domain.ExecPlanDecisionExecPlan)
 	}
 
-	prompt := buildExecPlanDecisionPrompt(issue)
+	prompt, err := r.buildExecPlanDecisionPrompt(issue)
+	if err != nil {
+		return issue, fmt.Errorf("render exec plan decision prompt: %w", err)
+	}
 	r.logger.Info(
 		"deciding issue exec plan strategy",
 		"issue_id", issue.ID,
@@ -2000,7 +1979,11 @@ func (r *Runner) ensureExecPlanDecision(ctx context.Context, client *codex.Clien
 		"invalid_first_line", firstLine(output),
 		"captured_from_completed_item", client.LastOutputCapturedFromCompletedItem(),
 	)
-	if err := client.RunTurn(ctx, workspacePath, issue, buildExecPlanDecisionRetryPrompt(output)); err != nil {
+	retryPrompt, err := r.buildExecPlanDecisionRetryPrompt(issue, output)
+	if err != nil {
+		return issue, fmt.Errorf("render exec plan decision retry prompt: %w", err)
+	}
+	if err := client.RunTurn(ctx, workspacePath, issue, retryPrompt); err != nil {
 		return issue, fmt.Errorf("decide exec plan strategy: %w", err)
 	}
 
@@ -2032,7 +2015,10 @@ func (r *Runner) ensureExecPlan(ctx context.Context, client *codex.Client, works
 		return issue, nil
 	}
 
-	prompt := buildExecPlanPrompt(issue)
+	prompt, err := r.buildExecPlanPrompt(issue)
+	if err != nil {
+		return issue, fmt.Errorf("render exec plan prompt: %w", err)
+	}
 	r.logger.Info(
 		"generating issue exec plan",
 		"issue_id", issue.ID,
@@ -2055,110 +2041,23 @@ func (r *Runner) ensureExecPlan(ctx context.Context, client *codex.Client, works
 	})
 }
 
-func buildExecPlanDecisionPrompt(issue domain.Issue) string {
-	var b strings.Builder
-	b.WriteString("Decide whether the Linear issue below should be handled as a one-shot change or should first get an ExecPlan.\n\n")
-	b.WriteString("Return a short answer.\n")
-	b.WriteString("The first line must be exactly one of:\n")
-	b.WriteString(execPlanDecisionOneShotLine + "\n")
-	b.WriteString(execPlanDecisionExecPlanLine + "\n\n")
-	b.WriteString("After the first line, include a brief rationale in 1-3 sentences.\n")
-	b.WriteString("Choose `ONE_SHOT` only when the change is small and safe enough to implement directly without a stored plan.\n")
-	b.WriteString("Choose `EXEC_PLAN` when the issue is large, risky, multi-step, or would benefit from a persistent implementation plan.\n\n")
-	b.WriteString("Issue context:\n")
-	b.WriteString(fmt.Sprintf("- Identifier: %s\n", issue.Identifier))
-	b.WriteString(fmt.Sprintf("- Title: %s\n", issue.Title))
-	b.WriteString(fmt.Sprintf("- State: %s\n", issue.State))
-	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
-		b.WriteString(fmt.Sprintf("- URL: %s\n", strings.TrimSpace(*issue.URL)))
-	}
-	if len(issue.Labels) > 0 {
-		b.WriteString("- Labels:\n")
-		for _, label := range issue.Labels {
-			b.WriteString(fmt.Sprintf("  - %s\n", label))
-		}
-	}
-	if issue.Description != nil && strings.TrimSpace(*issue.Description) != "" {
-		b.WriteString("\nIssue description:\n\n")
-		b.WriteString(strings.TrimSpace(*issue.Description))
-		b.WriteString("\n")
-	}
-	if len(issue.ReviewFeedback) > 0 {
-		b.WriteString("\nReview feedback:\n")
-		for _, item := range issue.ReviewFeedback {
-			b.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(item.Body)))
-		}
-	}
-	if len(issue.ReviewThreads) > 0 {
-		b.WriteString("\nGitHub review threads:\n")
-		for _, thread := range issue.ReviewThreads {
-			lineText := ""
-			if thread.Line != nil {
-				lineText = fmt.Sprintf(":%d", *thread.Line)
-			}
-			b.WriteString(fmt.Sprintf("- %s%s by %s: %s\n", thread.Path, lineText, thread.Author, strings.TrimSpace(thread.Body)))
-		}
-	}
-	return strings.TrimSpace(b.String())
+func (r *Runner) buildExecPlanDecisionPrompt(issue domain.Issue) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.ExecPlanDecision, issue, nil, nil)
 }
 
-func buildExecPlanDecisionRetryPrompt(previousOutput string) string {
-	var b strings.Builder
-	b.WriteString("Your previous ExecPlan strategy response could not be parsed.\n\n")
-	b.WriteString("Return a short answer.\n")
-	b.WriteString("The first line must be exactly one of:\n")
-	b.WriteString(execPlanDecisionOneShotLine + "\n")
-	b.WriteString(execPlanDecisionExecPlanLine + "\n\n")
-	b.WriteString("After the first line, include a brief rationale in 1-3 sentences.\n")
-	b.WriteString("Do not repeat the original question or issue description.\n")
-	if invalid := firstLine(previousOutput); invalid != "" {
-		b.WriteString(fmt.Sprintf("Your previous first line was: %q\n", invalid))
-	}
-	return strings.TrimSpace(b.String())
+func (r *Runner) buildExecPlanDecisionRetryPrompt(issue domain.Issue, previousOutput string) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.ExecPlanDecisionRetry, issue, nil, func(payload map[string]any) error {
+		payload["previous_output"] = strings.TrimSpace(previousOutput)
+		payload["previous_first_line"] = firstLine(previousOutput)
+		return nil
+	})
 }
 
-func buildExecPlanPrompt(issue domain.Issue) string {
-	var b strings.Builder
-	b.WriteString("Create an ExecPlan for the Linear issue below.\n\n")
-	b.WriteString("Do not modify repository files or implement the change yet.\n")
-	b.WriteString("Return only the final ExecPlan markdown document as file contents, without surrounding commentary and without wrapping it in an outer triple-backtick fence.\n\n")
-	b.WriteString("Issue context:\n")
-	b.WriteString(fmt.Sprintf("- Identifier: %s\n", issue.Identifier))
-	b.WriteString(fmt.Sprintf("- Title: %s\n", issue.Title))
-	b.WriteString(fmt.Sprintf("- State: %s\n", issue.State))
-	if issue.URL != nil && strings.TrimSpace(*issue.URL) != "" {
-		b.WriteString(fmt.Sprintf("- URL: %s\n", strings.TrimSpace(*issue.URL)))
-	}
-	if len(issue.Labels) > 0 {
-		b.WriteString("- Labels:\n")
-		for _, label := range issue.Labels {
-			b.WriteString(fmt.Sprintf("  - %s\n", label))
-		}
-	}
-	if issue.Description != nil && strings.TrimSpace(*issue.Description) != "" {
-		b.WriteString("\nIssue description:\n\n")
-		b.WriteString(strings.TrimSpace(*issue.Description))
-		b.WriteString("\n")
-	}
-	if len(issue.ReviewFeedback) > 0 {
-		b.WriteString("\nReview feedback:\n")
-		for _, item := range issue.ReviewFeedback {
-			b.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(item.Body)))
-		}
-	}
-	if len(issue.ReviewThreads) > 0 {
-		b.WriteString("\nGitHub review threads:\n")
-		for _, thread := range issue.ReviewThreads {
-			lineText := ""
-			if thread.Line != nil {
-				lineText = fmt.Sprintf(":%d", *thread.Line)
-			}
-			b.WriteString(fmt.Sprintf("- %s%s by %s: %s\n", thread.Path, lineText, thread.Author, strings.TrimSpace(thread.Body)))
-		}
-	}
-	b.WriteString("\nExecPlan authoring guide:\n\n")
-	b.WriteString(execplan.Template())
-	return strings.TrimSpace(b.String())
+func (r *Runner) buildExecPlanPrompt(issue domain.Issue) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.ExecPlanGeneration, issue, nil, func(payload map[string]any) error {
+		payload["exec_plan_authoring_guide"] = execplan.Template()
+		return nil
+	})
 }
 
 func normalizeExecPlanBody(value string) string {
@@ -2239,7 +2138,15 @@ func hasDuplicateExecPlans(issue domain.Issue) bool {
 	return issue.ExecPlanCount > 1
 }
 
-func injectExecPlanPrompt(prompt string, plan *domain.ExecPlan, workingCopy *execplan.WorkingCopy, progress execplan.Progress) string {
+func (r *Runner) renderCodingPrompt(issue domain.Issue, attempt *int) (string, error) {
+	text := strings.TrimSpace(r.workflow.PromptTemplate)
+	if text == "" {
+		text = r.cfg.Prompts.CodingFallback
+	}
+	return r.renderConfiguredPrompt(text, issue, attempt, nil)
+}
+
+func (r *Runner) injectExecPlanPrompt(prompt string, issue domain.Issue, plan *domain.ExecPlan, workingCopy *execplan.WorkingCopy, progress execplan.Progress) (string, error) {
 	body := execPlanBody(plan)
 	parts := make([]string, 0, 3)
 	if trimmed := strings.TrimSpace(prompt); trimmed != "" {
@@ -2249,36 +2156,88 @@ func injectExecPlanPrompt(prompt string, plan *domain.ExecPlan, workingCopy *exe
 		parts = append(parts, "ExecPlan:\n\n"+body)
 	}
 	if workingCopy != nil {
-		parts = append(parts, buildExecPlanTrackingInstructions(workingCopy.Path(), progress.Remaining()))
+		tracking, err := r.buildExecPlanTrackingInstructions(issue, workingCopy.Path(), progress.Remaining())
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, tracking)
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
 }
 
-func buildCodingContinuationPrompt(identifier string, workingCopy *execplan.WorkingCopy, progress execplan.Progress) string {
-	prompt := fmt.Sprintf(
-		"Continue working on %s without restating the original plan. Pick up from the current thread history and leave the issue in a handoff-ready state if appropriate.",
-		identifier,
-	)
-	if workingCopy == nil {
-		return prompt
-	}
-	return prompt + "\n\n" + buildExecPlanTrackingInstructions(workingCopy.Path(), progress.Remaining())
+func (r *Runner) buildCodingContinuationPrompt(issue domain.Issue, workingCopy *execplan.WorkingCopy, progress execplan.Progress) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.CodingContinuation, issue, nil, func(payload map[string]any) error {
+		if workingCopy == nil {
+			payload["exec_plan_working_copy_path"] = ""
+			payload["remaining_progress_tasks"] = []string{}
+			payload["exec_plan_tracking"] = ""
+			return nil
+		}
+		remaining := progress.Remaining()
+		tracking, err := r.buildExecPlanTrackingInstructions(issue, workingCopy.Path(), remaining)
+		if err != nil {
+			return err
+		}
+		payload["exec_plan_working_copy_path"] = workingCopy.Path()
+		payload["remaining_progress_tasks"] = remaining
+		payload["exec_plan_tracking"] = tracking
+		return nil
+	})
 }
 
-func buildExecPlanTrackingInstructions(path string, remaining []string) string {
-	lines := []string{
-		fmt.Sprintf("ExecPlan working copy: %s", path),
-		"Keep that file updated as you work. It is the live copy Colin will sync back to the Linear issue after each turn.",
-		"For ExecPlan-backed issues, do not return `COLIN_OUTCOME: READY_FOR_REVIEW` until every checkbox under `## Progress` is complete.",
-		"If you cannot safely complete the remaining `## Progress` tasks, return `COLIN_OUTCOME: NEEDS_SPEC` and explain the blocker.",
-	}
-	if len(remaining) > 0 {
-		lines = append(lines, "Remaining `## Progress` tasks:")
-		for _, item := range remaining {
-			lines = append(lines, "- "+strings.TrimSpace(item))
+func (r *Runner) buildExecPlanTrackingInstructions(issue domain.Issue, path string, remaining []string) (string, error) {
+	return r.renderConfiguredPrompt(r.cfg.Prompts.ExecPlanTracking, issue, nil, func(payload map[string]any) error {
+		payload["exec_plan_working_copy_path"] = strings.TrimSpace(path)
+		payload["remaining_progress_tasks"] = cloneTrimmedStrings(remaining)
+		return nil
+	})
+}
+
+func (r *Runner) renderConfiguredPrompt(text string, issue domain.Issue, attempt *int, extend func(map[string]any) error) (string, error) {
+	payload := workflow.TemplatePayload(issue, attempt)
+	addPromptConstants(payload)
+	if extend != nil {
+		if err := extend(payload); err != nil {
+			return "", err
 		}
 	}
-	return strings.Join(lines, "\n")
+	return workflow.RenderTemplate(text, payload)
+}
+
+func addPromptConstants(payload map[string]any) {
+	payload["outcomes"] = map[string]string{
+		"ready_for_review":      outcomeReadyForReview,
+		"ready_for_merge_retry": outcomeReadyForMergeRetry,
+		"needs_spec":            outcomeNeedsSpec,
+	}
+	payload["exec_plan_decisions"] = map[string]string{
+		"one_shot_line":  execPlanDecisionOneShotLine,
+		"exec_plan_line": execPlanDecisionExecPlanLine,
+	}
+}
+
+func mergePayload(result repoops.Result, mergeErr error) map[string]any {
+	errorText := ""
+	if mergeErr != nil {
+		errorText = strings.TrimSpace(mergeErr.Error())
+	}
+	return map[string]any{
+		"pr_number": result.PRNumber,
+		"pr_url":    strings.TrimSpace(result.PRURL),
+		"branch":    strings.TrimSpace(result.Branch),
+		"base_ref":  strings.TrimSpace(result.BaseRef),
+		"error":     errorText,
+	}
+}
+
+func cloneTrimmedStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func (r *Runner) persistIssueMetadata(ctx context.Context, issue domain.Issue, metadata domain.ColinMetadata) (domain.Issue, error) {

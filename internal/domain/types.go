@@ -239,6 +239,7 @@ type WorkflowConfig struct {
 	Hooks     WorkflowHookConfig      `yaml:"hooks"`
 	Agent     WorkflowAgentConfig     `yaml:"agent"`
 	Codex     WorkflowCodexConfig     `yaml:"codex"`
+	Prompts   WorkflowPromptConfig    `yaml:"prompts"`
 	Server    WorkflowServerConfig    `yaml:"server"`
 	Slack     WorkflowSlackConfig     `yaml:"slack"`
 }
@@ -334,6 +335,17 @@ type WorkflowCodexConfig struct {
 	StallTimeoutMillis *int                   `yaml:"stall_timeout_ms"`
 }
 
+type WorkflowPromptConfig struct {
+	CodingFallback            *string `yaml:"coding_fallback"`
+	CodingContinuation        *string `yaml:"coding_continuation"`
+	ExecPlanDecision          *string `yaml:"exec_plan_decision"`
+	ExecPlanDecisionRetry     *string `yaml:"exec_plan_decision_retry"`
+	ExecPlanGeneration        *string `yaml:"exec_plan_generation"`
+	ExecPlanTracking          *string `yaml:"exec_plan_tracking"`
+	MergeRecovery             *string `yaml:"merge_recovery"`
+	MergeRecoveryContinuation *string `yaml:"merge_recovery_continuation"`
+}
+
 type WorkflowServerConfig struct {
 	Port             *int    `yaml:"port"`
 	WebhookPort      *int    `yaml:"webhook_port"`
@@ -361,6 +373,7 @@ type ServiceConfig struct {
 	Hooks        HookConfig
 	Agent        AgentConfig
 	Codex        CodexConfig
+	Prompts      PromptConfig
 	Server       ServerConfig
 	Slack        SlackConfig
 }
@@ -487,6 +500,18 @@ type CodexConfig struct {
 	TurnTimeout       time.Duration
 	ReadTimeout       time.Duration
 	StallTimeout      time.Duration
+}
+
+// PromptConfig contains the templates Colin sends to Codex around coding turns.
+type PromptConfig struct {
+	CodingFallback            string
+	CodingContinuation        string
+	ExecPlanDecision          string
+	ExecPlanDecisionRetry     string
+	ExecPlanGeneration        string
+	ExecPlanTracking          string
+	MergeRecovery             string
+	MergeRecoveryContinuation string
 }
 
 // CodexSecurityPolicy holds target-level Codex approval and sandbox overrides.
