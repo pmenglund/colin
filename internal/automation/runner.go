@@ -156,7 +156,6 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		})
 	}
 
-	client := codex.NewClient(r.cfg, r.logger, emit, current, ws.Path, runType)
 	if runType == RunTypeCoding && hasDuplicateExecPlans(current) {
 		return r.handleDuplicateExecPlans(ctx, current, ws.Path)
 	}
@@ -270,6 +269,13 @@ func (r *Runner) Run(ctx context.Context, issue domain.Issue, attempt *int, onEv
 		return r.buildMergedResult(ctx, issue, ws.Path, result, emit)
 	}
 
+	runCfg := r.cfg
+	effectiveCodex, err := domain.ResolveCodexConfigForIssue(r.cfg, current)
+	if err != nil {
+		return Result{Issue: current, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
+	}
+	runCfg.Codex = effectiveCodex
+	client := codex.NewClient(runCfg, r.logger, emit, current, ws.Path, runType)
 	if err := client.Start(ctx, ws.Path); err != nil {
 		return Result{Issue: issue, RunType: runType, WorkspacePath: ws.Path, Status: "failed", Err: err}
 	}
@@ -759,7 +765,13 @@ func (r *Runner) handleRecoverableMergeFailure(ctx context.Context, issue domain
 		Message:   "Merge conflict detected; asking Codex to repair the branch before retrying merge.",
 	})
 
-	client := codex.NewClient(r.cfg, r.logger, emit, issue, workspacePath, RunTypeMerge)
+	runCfg := r.cfg
+	effectiveCodex, err := domain.ResolveCodexConfigForIssue(r.cfg, issue)
+	if err != nil {
+		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
+	}
+	runCfg.Codex = effectiveCodex
+	client := codex.NewClient(runCfg, r.logger, emit, issue, workspacePath, RunTypeMerge)
 	if err := client.Start(ctx, workspacePath); err != nil {
 		return Result{Issue: issue, RunType: RunTypeMerge, WorkspacePath: workspacePath, Status: "failed", Err: err}
 	}

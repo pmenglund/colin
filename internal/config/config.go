@@ -289,6 +289,7 @@ func normalizeTargetConfig(cfg *domain.ServiceConfig, raw domain.WorkflowTargetC
 		BranchTemplate:        branchTemplate,
 		PRTemplate:            prTemplate,
 		CodexPRReviewsEnabled: codexPRReviewsEnabled,
+		CodexSecurity:         codexSecurityPolicyValue(raw.Codex),
 	}, nil
 }
 
@@ -550,12 +551,7 @@ func applyCodexConfig(cfg *domain.ServiceConfig, raw domain.WorkflowCodexConfig)
 		cfg.Codex.ThreadSandbox = value
 	}
 	if raw.TurnSandboxPolicy != nil {
-		cfg.Codex.TurnSandboxPolicy = domain.SandboxPolicy{
-			Type: stringValue(raw.TurnSandboxPolicy.Type),
-		}
-		if cfg.Codex.TurnSandboxPolicy.Type == "" {
-			cfg.Codex.TurnSandboxPolicy.Type = stringValue(raw.TurnSandboxPolicy.Mode)
-		}
+		cfg.Codex.TurnSandboxPolicy = workflowSandboxPolicyValue(raw.TurnSandboxPolicy)
 	}
 	if value, ok := durationMillisValue(raw.TurnTimeoutMillis); ok && value > 0 {
 		cfg.Codex.TurnTimeout = value
@@ -567,6 +563,33 @@ func applyCodexConfig(cfg *domain.ServiceConfig, raw domain.WorkflowCodexConfig)
 		cfg.Codex.StallTimeout = value
 	}
 	return nil
+}
+
+func codexSecurityPolicyValue(raw *domain.WorkflowCodexSecurityConfig) domain.CodexSecurityPolicy {
+	if raw == nil {
+		return domain.CodexSecurityPolicy{}
+	}
+	policy := domain.CodexSecurityPolicy{
+		ApprovalPolicy: stringValue(raw.ApprovalPolicy),
+		ThreadSandbox:  stringValue(raw.ThreadSandbox),
+	}
+	if raw.TurnSandboxPolicy != nil {
+		policy.TurnSandboxPolicy = workflowSandboxPolicyValue(raw.TurnSandboxPolicy)
+	}
+	return policy
+}
+
+func workflowSandboxPolicyValue(raw *domain.WorkflowSandboxPolicy) domain.SandboxPolicy {
+	if raw == nil {
+		return domain.SandboxPolicy{}
+	}
+	policy := domain.SandboxPolicy{
+		Type: stringValue(raw.Type),
+	}
+	if policy.Type == "" {
+		policy.Type = stringValue(raw.Mode)
+	}
+	return normalizeSandboxPolicy(policy)
 }
 
 func applyServerConfig(cfg *domain.ServiceConfig, raw domain.WorkflowServerConfig) error {

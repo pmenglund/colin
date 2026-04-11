@@ -163,7 +163,20 @@ At the review step Colin runs live checks when it has the required credentials:
 
 Once the review passes, the wizard writes `WORKFLOW.md`.
 
-For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, `base_ref`, and repository-specific options such as `remote_name`, `merge_method`, `branch_template`, `pr_template`, and `codex_pr_reviews_enabled`. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
+For multi-target workflows, keep shared credentials and shared state lists at the top level, then add a `targets:` list where each item provides `project_slug`, `repo_url`, `base_ref`, and repository-specific options such as `remote_name`, `merge_method`, `branch_template`, `pr_template`, and `codex_pr_reviews_enabled`. Each target can also override the Codex security policy for that repository with a nested `codex:` object containing `approval_policy`, `thread_sandbox`, and `turn_sandbox_policy`; unspecified fields inherit from the top-level `codex:` defaults. The interactive setup flow still writes a single-target workflow today, so multi-target workflows are edited directly in `WORKFLOW.md`.
+
+```yaml
+targets:
+  - name: api
+    project_slug: api-project
+    repo_url: git@github.com:bothnia/api.git
+    base_ref: main
+    codex:
+      approval_policy: on-request
+      thread_sandbox: workspace-write
+      turn_sandbox_policy:
+        type: workspaceWrite
+```
 
 Colin creates new issue workspaces as Git worktrees by default. It keeps one shared source checkout per target under `workspace.repo_cache_root` and reuses that checkout when preparing each per-issue worktree. If you already have a local checkout that should serve as the worktree source, set `checkout_path` on the matching target instead of letting Colin manage a checkout under the cache root. Colin never runs agent work in `checkout_path`; checkout-backed work happens in managed worktrees under `<workspace.root>/<target_name>/<issue_identifier>`, such as `.colin/workspaces/colin/COLIN-123`.
 

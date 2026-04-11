@@ -654,6 +654,95 @@ func TestBuildNormalizesTurnSandboxPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildReadsTargetCodexSecurityOverrides(t *testing.T) {
+	t.Parallel()
+
+	def := workflowDefinition(t, map[string]any{
+		"tracker": map[string]any{
+			"kind":    "linear",
+			"api_key": "token",
+		},
+		"codex": map[string]any{
+			"command":         "codex app-server",
+			"approval_policy": "never",
+			"thread_sandbox":  "danger-full-access",
+			"turn_sandbox_policy": map[string]any{
+				"type": "dangerFullAccess",
+			},
+		},
+		"targets": []map[string]any{
+			{
+				"project_slug": "api-project",
+				"repo_url":     "git@github.com:acme/api.git",
+				"base_ref":     "main",
+				"codex": map[string]any{
+					"approval_policy": "on-request",
+					"thread_sandbox":  "read-only",
+					"turn_sandbox_policy": map[string]any{
+						"mode": "workspace-write",
+					},
+				},
+			},
+			{
+				"project_slug": "web-project",
+				"repo_url":     "git@github.com:acme/web.git",
+				"base_ref":     "main",
+			},
+		},
+	})
+
+	cfg, err := Build(def, "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(cfg.Targets) != 2 {
+		t.Fatalf("len(cfg.Targets) = %d, want 2", len(cfg.Targets))
+	}
+	if got := cfg.Targets[0].CodexSecurity.ApprovalPolicy; got != "on-request" {
+		t.Fatalf("target approval policy = %q, want on-request", got)
+	}
+	if got := cfg.Targets[0].CodexSecurity.ThreadSandbox; got != "read-only" {
+		t.Fatalf("target thread sandbox = %q, want read-only", got)
+	}
+	if got := cfg.Targets[0].CodexSecurity.TurnSandboxPolicy.Type; got != "workspaceWrite" {
+		t.Fatalf("target turn sandbox type = %q, want workspaceWrite", got)
+	}
+	if got := cfg.Targets[1].CodexSecurity; got != (domain.CodexSecurityPolicy{}) {
+		t.Fatalf("second target CodexSecurity = %#v, want zero value", got)
+	}
+
+	apiCodex, err := domain.ResolveCodexConfigForIssue(cfg, domain.Issue{ProjectSlug: "api-project"})
+	if err != nil {
+		t.Fatalf("ResolveCodexConfigForIssue(api) error = %v", err)
+	}
+	if apiCodex.Command != "codex app-server" {
+		t.Fatalf("api Codex command = %q, want inherited command", apiCodex.Command)
+	}
+	if apiCodex.ApprovalPolicy != "on-request" {
+		t.Fatalf("api approval policy = %q, want on-request", apiCodex.ApprovalPolicy)
+	}
+	if apiCodex.ThreadSandbox != "read-only" {
+		t.Fatalf("api thread sandbox = %q, want read-only", apiCodex.ThreadSandbox)
+	}
+	if apiCodex.TurnSandboxPolicy.Type != "workspaceWrite" {
+		t.Fatalf("api turn sandbox type = %q, want workspaceWrite", apiCodex.TurnSandboxPolicy.Type)
+	}
+
+	webCodex, err := domain.ResolveCodexConfigForIssue(cfg, domain.Issue{ProjectSlug: "web-project"})
+	if err != nil {
+		t.Fatalf("ResolveCodexConfigForIssue(web) error = %v", err)
+	}
+	if webCodex.ApprovalPolicy != "never" {
+		t.Fatalf("web approval policy = %q, want inherited never", webCodex.ApprovalPolicy)
+	}
+	if webCodex.ThreadSandbox != "danger-full-access" {
+		t.Fatalf("web thread sandbox = %q, want inherited danger-full-access", webCodex.ThreadSandbox)
+	}
+	if webCodex.TurnSandboxPolicy.Type != "dangerFullAccess" {
+		t.Fatalf("web turn sandbox type = %q, want inherited dangerFullAccess", webCodex.TurnSandboxPolicy.Type)
+	}
+}
+
 func TestBuildReadsCodexCLICommand(t *testing.T) {
 	t.Parallel()
 

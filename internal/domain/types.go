@@ -269,16 +269,17 @@ type WorkflowWorkspaceConfig struct {
 }
 
 type WorkflowTargetConfig struct {
-	Name                  *string `yaml:"name"`
-	ProjectSlug           *string `yaml:"project_slug"`
-	RepoURL               *string `yaml:"repo_url"`
-	BaseRef               *string `yaml:"base_ref"`
-	CheckoutPath          *string `yaml:"checkout_path"`
-	RemoteName            *string `yaml:"remote_name"`
-	MergeMethod           *string `yaml:"merge_method"`
-	BranchTemplate        *string `yaml:"branch_template"`
-	PRTemplate            *string `yaml:"pr_template"`
-	CodexPRReviewsEnabled *bool   `yaml:"codex_pr_reviews_enabled"`
+	Name                  *string                      `yaml:"name"`
+	ProjectSlug           *string                      `yaml:"project_slug"`
+	RepoURL               *string                      `yaml:"repo_url"`
+	BaseRef               *string                      `yaml:"base_ref"`
+	CheckoutPath          *string                      `yaml:"checkout_path"`
+	RemoteName            *string                      `yaml:"remote_name"`
+	MergeMethod           *string                      `yaml:"merge_method"`
+	BranchTemplate        *string                      `yaml:"branch_template"`
+	PRTemplate            *string                      `yaml:"pr_template"`
+	CodexPRReviewsEnabled *bool                        `yaml:"codex_pr_reviews_enabled"`
+	Codex                 *WorkflowCodexSecurityConfig `yaml:"codex"`
 }
 
 type WorkflowRepoConfig struct {
@@ -314,6 +315,12 @@ type WorkflowAgentConfig struct {
 type WorkflowSandboxPolicy struct {
 	Type *string `yaml:"type"`
 	Mode *string `yaml:"mode"`
+}
+
+type WorkflowCodexSecurityConfig struct {
+	ApprovalPolicy    *string                `yaml:"approval_policy"`
+	ThreadSandbox     *string                `yaml:"thread_sandbox"`
+	TurnSandboxPolicy *WorkflowSandboxPolicy `yaml:"turn_sandbox_policy"`
 }
 
 type WorkflowCodexConfig struct {
@@ -399,6 +406,7 @@ type TargetConfig struct {
 	BranchTemplate        string
 	PRTemplate            string
 	CodexPRReviewsEnabled bool
+	CodexSecurity         CodexSecurityPolicy
 }
 
 // EffectiveRemoteName returns the target remote name with a config fallback.
@@ -481,6 +489,13 @@ type CodexConfig struct {
 	StallTimeout      time.Duration
 }
 
+// CodexSecurityPolicy holds target-level Codex approval and sandbox overrides.
+type CodexSecurityPolicy struct {
+	ApprovalPolicy    string
+	ThreadSandbox     string
+	TurnSandboxPolicy SandboxPolicy
+}
+
 // SandboxPolicy describes the per-turn Codex sandbox contract Colin supports.
 type SandboxPolicy struct {
 	Type string `json:"type"`
@@ -545,6 +560,28 @@ func ResolveTargetForIssue(cfg ServiceConfig, issue Issue) (TargetConfig, error)
 		return cfg.Targets[0], nil
 	}
 	return cfg.TargetByProjectSlug(issue.ProjectSlug)
+}
+
+// ResolveCodexConfigForIssue returns the effective Codex config for an issue's target.
+func ResolveCodexConfigForIssue(cfg ServiceConfig, issue Issue) (CodexConfig, error) {
+	effective := cfg.Codex
+	if len(cfg.Targets) == 0 {
+		return effective, nil
+	}
+	target, err := ResolveTargetForIssue(cfg, issue)
+	if err != nil {
+		return CodexConfig{}, err
+	}
+	if value := strings.TrimSpace(target.CodexSecurity.ApprovalPolicy); value != "" {
+		effective.ApprovalPolicy = value
+	}
+	if value := strings.TrimSpace(target.CodexSecurity.ThreadSandbox); value != "" {
+		effective.ThreadSandbox = value
+	}
+	if value := strings.TrimSpace(target.CodexSecurity.TurnSandboxPolicy.Type); value != "" {
+		effective.TurnSandboxPolicy = target.CodexSecurity.TurnSandboxPolicy
+	}
+	return effective, nil
 }
 
 // WatchedProjectSlugs returns the configured Linear project slugs in stable order.
