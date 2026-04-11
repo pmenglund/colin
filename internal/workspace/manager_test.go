@@ -116,6 +116,7 @@ func TestEnsureCreatesWorktreesFromManagedRepoCache(t *testing.T) {
 	}
 	cfg.Targets = []domain.TargetConfig{{
 		Key:         "project-repo",
+		Name:        "target-name",
 		ProjectSlug: "project",
 		RepoURL:     origin,
 		BaseRef:     "main",
@@ -129,6 +130,12 @@ func TestEnsureCreatesWorktreesFromManagedRepoCache(t *testing.T) {
 	second, err := manager.Ensure(context.Background(), domain.Issue{Identifier: "ABC-124", ProjectSlug: "project"})
 	if err != nil {
 		t.Fatalf("Ensure(second) error = %v", err)
+	}
+	if first.Path != filepath.Join(root, "target-name", "ABC-123") {
+		t.Fatalf("first.Path = %q, want target-name/ABC-123 layout", first.Path)
+	}
+	if second.Path != filepath.Join(root, "target-name", "ABC-124") {
+		t.Fatalf("second.Path = %q, want target-name/ABC-124 layout", second.Path)
 	}
 
 	cachePath := filepath.Join(repoCacheRoot, "project-repo")
@@ -177,6 +184,7 @@ func TestEnsureUsesConfiguredCheckoutPathForWorktrees(t *testing.T) {
 	}
 	cfg.Targets = []domain.TargetConfig{{
 		Key:          "project-repo",
+		Name:         "target-name",
 		ProjectSlug:  "project",
 		RepoURL:      origin,
 		BaseRef:      "main",
@@ -192,7 +200,7 @@ func TestEnsureUsesConfiguredCheckoutPathForWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure() error = %v", err)
 	}
-	wantPath := filepath.Join(root, "project", "issue-uuid")
+	wantPath := filepath.Join(root, "target-name", "ABC-123")
 	if ws.Path != wantPath {
 		t.Fatalf("ws.Path = %q, want %q", ws.Path, wantPath)
 	}
@@ -222,6 +230,55 @@ func TestEnsureUsesConfiguredCheckoutPathForWorktrees(t *testing.T) {
 	}
 }
 
+func TestEnsureUsesConfiguredCheckoutPathWhenWorkspaceRootIsInsideCheckout(t *testing.T) {
+	t.Parallel()
+
+	origin := newTestOrigin(t)
+	tempDir := t.TempDir()
+	checkoutPath := filepath.Join(tempDir, "checkout")
+	mustRun(t, "", "git", "clone", origin, checkoutPath)
+	root := filepath.Join(checkoutPath, ".colin", "workspaces")
+	cfg := domain.ServiceConfig{
+		Workspace: domain.WorkspaceConfig{
+			Root:         root,
+			RepoURL:      origin,
+			BaseRef:      "main",
+			CheckoutPath: checkoutPath,
+		},
+		Repo: domain.RepoConfig{
+			RemoteName:     "origin",
+			BranchTemplate: "colin/{{.issue.identifier}}",
+		},
+		Targets: []domain.TargetConfig{{
+			Key:          "project-repo",
+			Name:         "target-name",
+			ProjectSlug:  "project",
+			RepoURL:      origin,
+			BaseRef:      "main",
+			CheckoutPath: checkoutPath,
+		}},
+	}
+	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	ws, err := manager.Ensure(context.Background(), domain.Issue{
+		ID:          "issue-uuid",
+		Identifier:  "ABC-123",
+		ProjectSlug: "project",
+	})
+	if err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	wantPath := filepath.Join(root, "target-name", "ABC-123")
+	if ws.Path != wantPath {
+		t.Fatalf("ws.Path = %q, want %q", ws.Path, wantPath)
+	}
+	wsPath := realPath(t, ws.Path)
+	output := mustRunOutput(t, checkoutPath, "git", "worktree", "list", "--porcelain")
+	if got := strings.Count(output, "worktree "+wsPath); got != 1 {
+		t.Fatalf("worktree list contains workspace %d times, want 1\n%s", got, output)
+	}
+}
+
 func TestEnsureRejectsStandaloneCloneAtCheckoutPathWorkspace(t *testing.T) {
 	t.Parallel()
 
@@ -230,7 +287,7 @@ func TestEnsureRejectsStandaloneCloneAtCheckoutPathWorkspace(t *testing.T) {
 	checkoutPath := filepath.Join(tempDir, "checkout")
 	mustRun(t, "", "git", "clone", origin, checkoutPath)
 	root := filepath.Join(tempDir, "workspaces")
-	workspacePath := filepath.Join(root, "project", "issue-uuid")
+	workspacePath := filepath.Join(root, "target-name", "ABC-123")
 	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +300,7 @@ func TestEnsureRejectsStandaloneCloneAtCheckoutPathWorkspace(t *testing.T) {
 		},
 		Targets: []domain.TargetConfig{{
 			Key:          "project-repo",
+			Name:         "target-name",
 			ProjectSlug:  "project",
 			RepoURL:      origin,
 			BaseRef:      "main",
@@ -261,7 +319,7 @@ func TestEnsureRejectsStandaloneCloneAtCheckoutPathWorkspace(t *testing.T) {
 	}
 }
 
-func TestEnsureRequiresIssueIDForCheckoutPathWorkspace(t *testing.T) {
+func TestEnsureRequiresIssueIdentifierForCheckoutPathWorkspace(t *testing.T) {
 	t.Parallel()
 
 	cfg := domain.ServiceConfig{
@@ -277,7 +335,6 @@ func TestEnsureRequiresIssueIDForCheckoutPathWorkspace(t *testing.T) {
 	manager := NewManager(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	_, err := manager.Ensure(context.Background(), domain.Issue{
-		Identifier:  "ABC-123",
 		ProjectSlug: "project",
 	})
 	if !errors.Is(err, ErrMissingIssueID) {

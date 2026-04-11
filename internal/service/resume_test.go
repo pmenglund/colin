@@ -54,7 +54,7 @@ func TestLoadResumeSessionPreparesWorkspaceAndUsesDefaultCLICommand(t *testing.T
 	if _, err := os.Stat(session.WorkspacePath); err != nil {
 		t.Fatalf("workspace path %q was not created: %v", session.WorkspacePath, err)
 	}
-	if want := filepath.Join(filepath.Dir(workflowPath), ".colin", "workspaces", "COLIN-123"); session.WorkspacePath != want {
+	if want := filepath.Join(filepath.Dir(workflowPath), ".colin", "workspaces", "project-1", "COLIN-123"); session.WorkspacePath != want {
 		t.Fatalf("WorkspacePath = %q, want %q", session.WorkspacePath, want)
 	}
 }

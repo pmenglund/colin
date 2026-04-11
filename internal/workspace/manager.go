@@ -134,7 +134,7 @@ func (m *Manager) WorkspaceForIssue(issue domain.Issue) (domain.Workspace, domai
 	if err != nil {
 		return domain.Workspace{}, domain.TargetConfig{}, err
 	}
-	key, relative, err := workspaceKeyAndRelativePath(m.cfg, target, issue)
+	key, relative, err := workspaceKeyAndRelativePath(target, issue)
 	if err != nil {
 		return domain.Workspace{}, domain.TargetConfig{}, err
 	}
@@ -202,30 +202,30 @@ func (m *Manager) Remove(ctx context.Context, workspacePath string) error {
 	return os.RemoveAll(workspacePath)
 }
 
-func workspaceRelativePath(cfg domain.ServiceConfig, target domain.TargetConfig, issueKey string) string {
-	if !cfg.MultiTarget() {
+func workspaceRelativePath(target domain.TargetConfig, issueKey string) string {
+	targetKey := targetWorkspaceKey(target)
+	if strings.TrimSpace(targetKey) == "" {
 		return issueKey
 	}
-	return filepath.Join(SanitizeWorkspaceKey(target.Key), issueKey)
+	return filepath.Join(targetKey, issueKey)
 }
 
-func workspaceKeyAndRelativePath(cfg domain.ServiceConfig, target domain.TargetConfig, issue domain.Issue) (string, string, error) {
-	if strings.TrimSpace(target.CheckoutPath) != "" {
-		issueKey := SanitizeWorkspaceKey(issue.ID)
-		if strings.TrimSpace(issueKey) == "" {
-			return "", "", ErrMissingIssueID
+func targetWorkspaceKey(target domain.TargetConfig) string {
+	for _, value := range []string{target.Name, target.Key, target.ProjectSlug} {
+		key := SanitizeWorkspaceKey(value)
+		if strings.TrimSpace(key) != "" {
+			return key
 		}
-		projectKey := SanitizeWorkspaceKey(target.ProjectSlug)
-		if strings.TrimSpace(projectKey) == "" {
-			projectKey = SanitizeWorkspaceKey(target.Key)
-		}
-		if strings.TrimSpace(projectKey) == "" {
-			projectKey = "project"
-		}
-		return issueKey, filepath.Join(projectKey, issueKey), nil
 	}
+	return ""
+}
+
+func workspaceKeyAndRelativePath(target domain.TargetConfig, issue domain.Issue) (string, string, error) {
 	key := SanitizeWorkspaceKey(issue.Identifier)
-	return key, workspaceRelativePath(cfg, target, key), nil
+	if strings.TrimSpace(key) == "" {
+		return "", "", ErrMissingIssueID
+	}
+	return key, workspaceRelativePath(target, key), nil
 }
 
 func (m *Manager) populateGitWorkspace(ctx context.Context, workspace domain.Workspace, issue domain.Issue, target domain.TargetConfig) error {
@@ -509,8 +509,31 @@ func isGitCheckout(ctx context.Context, path string) bool {
 	if _, err := os.Stat(path); err != nil {
 		return false
 	}
-	output, err := runOutput(ctx, path, 15*time.Second, "git", "rev-parse", "--is-inside-work-tree")
-	return err == nil && strings.TrimSpace(output) == "true"
+	output, err := runOutput(ctx, path, 15*time.Second, "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false
+	}
+	topLevel, err := filepath.Abs(strings.TrimSpace(output))
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	return samePath(topLevel, pathAbs)
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if resolved, err := filepath.EvalSymlinks(left); err == nil {
+		left = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(right); err == nil {
+		right = resolved
+	}
+	return left == right
 }
 
 func isLinkedWorktree(path string) bool {

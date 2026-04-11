@@ -117,7 +117,7 @@ Work on {{ .issue.identifier }}.
 		t.Fatal("service did not stop after cancellation")
 	}
 
-	workspacePath := filepath.Join(workspaceRoot, "COLIN-93")
+	workspacePath := filepath.Join(workspaceRoot, "test-project", "COLIN-93")
 	gotCWD, err := os.ReadFile(cwdLogPath)
 	if err != nil {
 		t.Fatalf("read cwd log: %v", err)

@@ -287,7 +287,7 @@ func TestStartupTerminalCleanupUsesCheckoutPathWorkspaceLayout(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	newPath := filepath.Join(root, "project", "issue-uuid")
+	newPath := filepath.Join(root, "target-name", "ABC-123")
 	oldPath := filepath.Join(root, "ABC-123")
 	if err := os.MkdirAll(newPath, 0o755); err != nil {
 		t.Fatal(err)
@@ -301,6 +301,7 @@ func TestStartupTerminalCleanupUsesCheckoutPathWorkspaceLayout(t *testing.T) {
 		Tracker:   domain.TrackerConfig{TerminalStates: []string{"Done"}},
 		Targets: []domain.TargetConfig{{
 			Key:          "project-repo",
+			Name:         "target-name",
 			ProjectSlug:  "project",
 			RepoURL:      "git@example.com:acme/repo.git",
 			BaseRef:      "main",

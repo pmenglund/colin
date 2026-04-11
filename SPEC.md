@@ -802,7 +802,11 @@ Workspace root:
 
 Per-issue workspace path:
 
-- `<workspace.root>/<sanitized_issue_identifier>`
+- Targeted workflows: `<workspace.root>/<sanitized_target_name>/<sanitized_issue_identifier>`
+- Legacy workflows without a target mapping: `<workspace.root>/<sanitized_issue_identifier>`
+
+The target directory name is derived from the configured target `name`, falling back to the target
+key and then the target project slug.
 
 Workspace persistence:
 
@@ -816,11 +820,12 @@ Input: `issue.identifier`
 Algorithm summary:
 
 1. Sanitize identifier to `workspace_key`.
-2. Compute workspace path under workspace root.
-3. Ensure the workspace path exists as a directory.
-4. Mark `created_now=true` only if the directory was created during this call; otherwise
+2. Sanitize the target name when a target mapping is configured.
+3. Compute workspace path under workspace root.
+4. Ensure the workspace path exists as a directory.
+5. Mark `created_now=true` only if the directory was created during this call; otherwise
    `created_now=false`.
-5. If `created_now=true`, run `after_create` hook if configured.
+6. If `created_now=true`, run `after_create` hook if configured.
 
 Notes:
 
